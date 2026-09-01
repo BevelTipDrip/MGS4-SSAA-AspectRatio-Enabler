@@ -171,12 +171,16 @@ namespace AspectRatio
             std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
             if (strcode == uAspectTestStrcode)
             {
-                // Vertical, so the moved widget cannot collide with horizontal neighbours:
-                // the identification check is simply "did the widget's usual box empty out".
-                *field(kLayoutLogicalTop) += 100;
-                *field(kLayoutLogicalBottom) += 100;
-                spdlog::info("MGS4: UI Aspect: test bias applied to object {:X} (la2 {:08X}).",
-                    object, strcode);
+                // Vertical occurrence ladder: the Nth object of the file rises by N steps, so
+                // one run shows which occurrence hosts the visible widget - built for
+                // 0059FFD5, whose 562 objects hold the corner weapon box, the selectors and
+                // the bullseye-sensitive pieces all in one file.
+                static std::atomic<int> testOccurrence { 0 };
+                const int occurrence = testOccurrence.fetch_add(1);
+                *field(kLayoutLogicalTop) += occurrence * 30;
+                *field(kLayoutLogicalBottom) += occurrence * 30;
+                spdlog::info("MGS4: UI Aspect: test bias occurrence {} on object {:X} (la2 {:08X}).",
+                    occurrence, object, strcode);
             }
         }
 
@@ -899,6 +903,60 @@ namespace AspectRatio
         if (path)
         {
             const size_t length = std::strlen(path);
+
+            // Texture pixel data: most txn files are header-only shells whose image bytes
+            // live in sibling "<8-hex-fileid>_<index>.data" files. Same dump treatment, with
+            // the name pattern checked so unrelated .data files stay out.
+            if (bDumpLa2 && length >= 6 && _stricmp(path + length - 5, ".data") == 0
+                && destination && requestedSize > 0 && requestedSize < (32u << 20))
+            {
+                const char* name = std::strrchr(path, '/');
+                name = name ? name + 1 : path;
+                bool texturePattern = std::strlen(name) >= 12 && name[8] == '_';
+                for (int i = 0; texturePattern && i < 8; i++)
+                {
+                    texturePattern = std::isxdigit(static_cast<unsigned char>(name[i])) != 0;
+                }
+                if (texturePattern)
+                {
+                    char dumpPath[MAX_PATH];
+                    std::snprintf(dumpPath, sizeof(dumpPath), "C:/mgspf_tools/txn_dump/%s", name);
+                    CreateDirectoryA("C:/mgspf_tools/txn_dump", nullptr);
+                    HANDLE file = CreateFileA(dumpPath,
+                        (offset == 0) ? GENERIC_WRITE : (GENERIC_WRITE | FILE_APPEND_DATA),
+                        0, nullptr, (offset == 0) ? CREATE_ALWAYS : OPEN_ALWAYS, 0, nullptr);
+                    if (file != INVALID_HANDLE_VALUE)
+                    {
+                        SetFilePointer(file, 0, nullptr, FILE_END);
+                        DWORD written = 0;
+                        WriteFile(file, destination, static_cast<DWORD>(requestedSize), &written, nullptr);
+                        CloseHandle(file);
+                    }
+                }
+            }
+
+            // Textures ride along when dumping: the contact sheet needs the .txn files the
+            // la2s reference to show real icons instead of bare geometry.
+            if (bDumpLa2 && length >= 4 && _stricmp(path + length - 4, ".txn") == 0
+                && destination && requestedSize > 0 && requestedSize < (64u << 20))
+            {
+                const char* name = std::strrchr(path, '/');
+                name = name ? name + 1 : path;
+                char dumpPath[MAX_PATH];
+                std::snprintf(dumpPath, sizeof(dumpPath), "C:/mgspf_tools/txn_dump/%s", name);
+                CreateDirectoryA("C:/mgspf_tools/txn_dump", nullptr);
+                HANDLE file = CreateFileA(dumpPath,
+                    (offset == 0) ? GENERIC_WRITE : (GENERIC_WRITE | FILE_APPEND_DATA),
+                    0, nullptr, (offset == 0) ? CREATE_ALWAYS : OPEN_ALWAYS, 0, nullptr);
+                if (file != INVALID_HANDLE_VALUE)
+                {
+                    SetFilePointer(file, 0, nullptr, FILE_END);
+                    DWORD written = 0;
+                    WriteFile(file, destination, static_cast<DWORD>(requestedSize), &written, nullptr);
+                    CloseHandle(file);
+                }
+            }
+
             if (length >= 4 && _stricmp(path + length - 4, ".la2") == 0)
             {
                 spdlog::info("MGS4: LA2 load: {} ({} bytes at offset {}) -> {:X}.",
