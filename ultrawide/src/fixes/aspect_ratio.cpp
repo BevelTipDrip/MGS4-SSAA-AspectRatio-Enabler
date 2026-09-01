@@ -286,10 +286,26 @@ namespace AspectRatio
             float v8[2] {};
             std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
 
-            // Normalize x back to 16:9 NDC (the compression only touches x) and look the
-            // anchor up in the widget table. Everything not listed - world-tracked elements
-            // above all - stays exactly where the game put it.
+            // Normalize x back to 16:9 NDC (the compression only touches x). Three regimes:
+            //
+            // - Whitelisted widgets: constant shift, preserving 16:9 pixel margins and rigid
+            //   multi-anchor layout (ammo ticks, crosshair dots).
+            // - Beyond the canvas edge: output-authored fullscreen layers, untouched.
+            // - Everything else - the Solid Eye's world-tracked labels above all: the game
+            //   projects them through the full-width camera and converts through fixed
+            //   1280-canvas math, so the widened canvas compresses them toward centre by
+            //   1/factor and they drift off their targets. The correction is the exact
+            //   inverse: scale the anchor back out, which moves the label without stretching
+            //   it (shape lives in the basis vectors). A small centre dead zone keeps the
+            //   reticle's separate corner-dot anchors square, and a ramp between the two
+            //   keeps the transition continuous so nothing pops while the camera pans.
             const float normX = v8[0] * factor;
+            if (std::fabs(normX) > 1.001f)
+            {
+                offset += kAnchorBlockSize;
+                continue;
+            }
+
             bool isWidget = false;
             for (const auto& zone : kWidgetZones)
             {
@@ -300,15 +316,31 @@ namespace AspectRatio
                     break;
                 }
             }
-            if (!isWidget)
+
+            float spread = v8[0];
+            if (isWidget)
             {
-                offset += kAnchorBlockSize;
-                continue;
+                spread = v8[0] + (v8[0] > 0.0f ? shift : -shift);
+            }
+            else
+            {
+                constexpr float kDead = 0.06f;   // reticle dots live at |normX| ~0.03
+                constexpr float kRamp = 0.30f;   // fully world-accurate from here outward
+                const float n = std::fabs(normX);
+                if (n > kDead)
+                {
+                    const float target = (n >= kRamp)
+                        ? n
+                        : kDead / factor + (n - kDead) * (kRamp - kDead / factor) / (kRamp - kDead);
+                    spread = (normX > 0.0f) ? target : -target;
+                }
             }
 
-            const float spread = v8[0] + (v8[0] > 0.0f ? shift : -shift);
-            std::memcpy(pool + offset + kAnchorBlockV8, &spread, sizeof(spread));
-            touched++;
+            if (spread != v8[0])
+            {
+                std::memcpy(pool + offset + kAnchorBlockV8, &spread, sizeof(spread));
+                touched++;
+            }
             offset += kAnchorBlockSize;
         }
 
