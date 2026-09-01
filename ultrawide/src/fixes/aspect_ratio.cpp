@@ -5,6 +5,8 @@
 #include "common.hpp"
 #include "logging.hpp"
 
+#include <mutex>
+
 namespace AspectRatio
 {
     // The UI layout converter. Runs once per layout object at creation, always with the full
@@ -163,6 +165,30 @@ namespace AspectRatio
             && std::fabs(v8z - 1.0f) < 1e-4f;
     }
 
+    // Rotated quads - the compass's facing arrow, the diagonal weapon silhouette, the
+    // objective marker - carry a rotated basis, which the strict test above rejects by
+    // design. Left unspread they stay at their centered positions while their widgets move,
+    // which is exactly the defect the user reported. This relaxed form accepts any rotation
+    // but is only ever consulted *inside* an established 96-byte run, where the structural
+    // context does the work the axis test cannot: a random float block passing v8.z == 1 and
+    // four sane basis magnitudes AND sitting at exact pitch inside a verified anchor run is
+    // not something mesh data produces.
+    bool RelaxedAnchorBlock(const uint8_t* block)
+    {
+        float v6[2] {};
+        float v7[2] {};
+        float v8z = 0.0f;
+        std::memcpy(v6, block + kAnchorBlockV6, sizeof(v6));
+        std::memcpy(v7, block + kAnchorBlockV7, sizeof(v7));
+        std::memcpy(&v8z, block + kAnchorBlockV8 + 8, sizeof(v8z));
+        const float magnitude = std::fabs(v6[0]) + std::fabs(v6[1])
+            + std::fabs(v7[0]) + std::fabs(v7[1]);
+        return std::fabs(v8z - 1.0f) < 1e-4f
+            && magnitude > 0.0f && magnitude < 2.0f
+            && std::fabs(v6[0]) < 1.0f && std::fabs(v6[1]) < 1.0f
+            && std::fabs(v7[0]) < 1.0f && std::fabs(v7[1]) < 1.0f;
+    }
+
     // How much wider the output is than 16:9, or 1.0 when it is not. The same number the
     // layout fix compressed the anchors by, so scaling by it puts a widget at its 16:9
     // margins.
@@ -215,14 +241,18 @@ namespace AspectRatio
         uint32_t touched = 0;
 
         size_t offset = 0;
+        bool inRun = false;
         while (offset + kAnchorBlockSize <= usable)
         {
-            if (!PlausibleAnchorBlock(pool + offset))
+            const bool strict = PlausibleAnchorBlock(pool + offset);
+            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
             {
                 haveCluster = false;
+                inRun = false;
                 offset += 16;
                 continue;
             }
+            inRun = true;
 
             float v8[2] {};
             std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
@@ -264,23 +294,116 @@ namespace AspectRatio
         }
     }
 
+    // Temporary census of every anchor-bearing pool that flows through the helper. Three HUD
+    // elements sit at centered positions while their widgets spread - the compass's centre
+    // arrow, the weapon icon, the objective marker - which means they upload through calls
+    // the +7A583F gate does not cover. This logs each distinct source buffer once, with its
+    // caller, hit count and sample anchors, so the spread policy can be decided per pool
+    // rather than guessed: a world-tracking marker may need to stay unspread on purpose.
+    struct PoolVerdict
+    {
+        uintptr_t pointer;
+        bool spread;
+    };
+    std::mutex g_PoolCacheMutex;
+    std::vector<PoolVerdict> g_PoolCache;
+
+    uint32_t ScanForAnchors(const uint8_t* buffer, size_t bytes, size_t* firstOffset, float* sampleV8)
+    {
+        uint32_t hits = 0;
+        const size_t scanEnd = (std::min<size_t>)(bytes, 64u << 10);
+        if (scanEnd < kAnchorBlockSize)
+        {
+            return 0;
+        }
+        for (size_t offset = 0; offset + kAnchorBlockSize <= scanEnd; offset += 16)
+        {
+            if (PlausibleAnchorBlock(buffer + offset))
+            {
+                if (hits == 0)
+                {
+                    *firstOffset = offset;
+                    std::memcpy(sampleV8, buffer + offset + kAnchorBlockV8, 2 * sizeof(float));
+                }
+                hits++;
+            }
+        }
+        return hits;
+    }
+
     void UploadHelperProbe(SafetyHookContext& ctx)
     {
-        // Only the instance pool upload; every other upload through this helper - vertex
-        // data, textures, the constant records - passes untouched at the cost of one
-        // compare.
         uintptr_t returnAddress = 0;
         std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
-        if (returnAddress != reinterpret_cast<uintptr_t>(baseModule) + kRvaInstancePoolCaller)
-        {
-            return;
-        }
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const uintptr_t retRva = (returnAddress >= base) ? returnAddress - base : returnAddress;
 
         // The helper takes (wrapper, resource, destOffset, size) in registers; the source
         // is the fifth argument, on the stack.
         uintptr_t source = 0;
         std::memcpy(&source, reinterpret_cast<const void*>(ctx.rsp + 0x28), sizeof(source));
-        SpreadPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
+        if (!source || ctx.r9 < kAnchorBlockSize || ctx.r9 > (8u << 20))
+        {
+            return;
+        }
+
+        // One verdict per distinct source buffer; the pools are stable ping-pong pairs, so
+        // the cache stays tiny and every later call skips the scan.
+        bool known = false;
+        bool spread = false;
+        {
+            std::lock_guard lock(g_PoolCacheMutex);
+            for (const auto& entry : g_PoolCache)
+            {
+                if (entry.pointer == source)
+                {
+                    known = true;
+                    spread = entry.spread;
+                    break;
+                }
+            }
+        }
+
+        if (!known)
+        {
+            MEMORY_BASIC_INFORMATION info {};
+            if (!VirtualQuery(reinterpret_cast<void*>(source), &info, sizeof(info))
+                || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            {
+                return;
+            }
+
+            size_t firstOffset = 0;
+            float sampleV8[2] {};
+            const uint32_t hits = ScanForAnchors(reinterpret_cast<const uint8_t*>(source),
+                ctx.r9, &firstOffset, sampleV8);
+
+            // A buffer with no anchors right now is not a verdict - the pools appear at boot
+            // before any UI is in them, and caching that first empty look disabled the spread
+            // for the whole session. Only a buffer that has shown anchors gets cached.
+            if (hits < 3)
+            {
+                return;
+            }
+
+            // Policy for now: spread only the pool the working milestone used; log the rest.
+            spread = (retRva == kRvaInstancePoolCaller);
+
+            spdlog::info("MGS4: UI Aspect: pool {:X} size={} ret=+{:X} hits={} first=+{} v8=({:.4f},{:.4f}){}",
+                source, ctx.r9, retRva, hits, firstOffset, sampleV8[0], sampleV8[1],
+                spread ? "" : "   <== NOT SPREAD");
+
+            std::lock_guard lock(g_PoolCacheMutex);
+            if (g_PoolCache.size() < 64)
+            {
+                g_PoolCache.push_back({ source, spread });
+            }
+        }
+
+        if (spread)
+        {
+            SpreadPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
+        }
     }
 
     void ApplyCornerSpread()
