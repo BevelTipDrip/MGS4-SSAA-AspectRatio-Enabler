@@ -264,6 +264,46 @@ with a centre dead zone** — deliberately *not* a function of each anchor's pos
   consulted only inside an established 96-byte-pitch run, where structural context does the
   discriminating.
 
+## Retracted: the upload-time heuristic spread, in full
+
+A live 21:9 play session (2026-09-01, ~an hour, the user driving) falsified the whole
+upload-time approach — the whitelist zones, the world-element decompression, the dead zone and
+ramp. **Statically correct, dynamically incoherent**, in the user's words: "everything kind of
+floats around the screen... it looks correct statically, but it falls apart in game." Each
+class-specific rule fixed its screenshots and made another class worse in motion:
+
+- The expanded radar moved its anchors out of the compass whitelist zone mid-game, so its
+  parts fell into the world regime and the objective bullseye drifted off the ring (AR-004).
+- World-tracked labels crossed regime boundaries as the camera panned — first jumping at the
+  dead-zone threshold, then (after the edge-exemption fix) still subtly inconsistent.
+- Every classification was by *where an anchor happens to be this frame*, and elements walk
+  across positional boundaries constantly. No refinement of positional rules can converge.
+
+**The requirement the failures establish:** elements must be positioned by **identity**, not by
+anchor value, and identity lives in the code that produces each anchor — static widgets and
+world-tracked elements are positioned by different producer code paths, and within the static
+path each widget's authored logical position is a stable constant. The retained lesson stack:
+layer 1 (shapes) is correct and final; rigid translation is the only safe motion for a widget;
+world elements need aspect-aware source math, not post-hoc correction.
+
+The heuristic implementation stays in the tree behind `Fix UI Aspect Corners` (off by default,
+marked experimental) until the producer-based replacement lands, then gets deleted.
+
+## The next arc: producer-based positioning
+
+1. **Name the producers.** Hardware write-watch on two `v8.x` slots in the stable CPU pool —
+   one static widget (the ration box block is identifiable by value), one dynamic element (the
+   reticle block, present while aiming; it is the element the truncation bug wrapped, so it is
+   known to be dynamic-path). The watch machinery from the wrap-era research does this; each
+   fault names its writer RVA.
+2. **Read the producers.** In-process disassembly of both sites: what inputs they take, where
+   the 1280-canvas assumption lives in each.
+3. **Patch the dynamic producer** to be aspect-aware at the source — every world-tracked
+   element lands on target natively, no zones, no ramps.
+4. **Patch the static producer** keyed on authored logical inputs — per-widget placement with
+   real identity, replacing the whitelist.
+5. **Delete the upload-time spread.**
+
 ## Remaining work, in the order worth doing
 
 1. **Menus and cutscenes at 21:9** — walk the title menu, codec and a cutscene with both layers
@@ -322,6 +362,23 @@ with a centre dead zone** — deliberately *not* a function of each anchor's pos
 - **Cause:** the layout converter's linear map (`x * outputWidth / 1280`) assumes the output is
   the same aspect as its 1280x720 logical space. Mechanism section above
 - **Fix:** none yet — this bug *is* the feature
+
+### AR-004 — the objective bullseye leaves the radar in expanded mode
+
+- **Status:** Active
+- **Evidence:** Observed
+- **Affects:** `Fix UI Aspect Corners=1` (the retracted heuristic build) with the radar expanded
+- **Repro:** 21:9, corners enabled, expand the Solid Eye radar, watch the objective bullseye
+- **Evidence detail:** user screenshot 2026-09-01 — radar enlarged mid-screen, bullseye
+  floating well off the ring; in the user's words, "bullseye leaving the compass, going
+  wherever it likes"
+- **Screenshots:** user-provided in session; not yet in evidence/
+- **Popups:** none
+- **Cause:** the whitelist zones assume the compass sits small in the top-right. Expanded, its
+  anchors leave the zone and fall into the world-element regime, where parts with different
+  anchors scale by different amounts. An instance of the general failure that retired the
+  heuristic (see the retraction above)
+- **Fix:** subsumed by the producer-based rework; not worth patching in the heuristic
 
 ### AR-002 — the 3D camera appears to lose vertical FOV at 21:9 rather than gaining horizontal
 
