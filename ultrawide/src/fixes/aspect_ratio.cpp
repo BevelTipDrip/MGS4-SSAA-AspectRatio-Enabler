@@ -146,9 +146,11 @@ namespace AspectRatio
     constexpr uint32_t kAnchorBlockV8 = 80;
     constexpr uint32_t kAnchorBlockSize = 96;
 
-    // Satellites of one widget sit ~0.008 NDC apart, distinct widgets 0.15+, so anything
-    // below this chains into the same cluster.
-    constexpr float kClusterEpsilon = 0.05f;
+    // The dead zone: anchors within this fraction of the compressed canvas half-width stay
+    // put. The anchor census puts centre elements (reticle, its corner dots, the stress
+    // readout) below 0.11 of the canvas and every corner-side element above 0.55, so the
+    // threshold sits in the middle of a wide empty band.
+    constexpr float kDeadZoneCanvasFraction = 0.35f;
 
     SafetyHookMid UploadHelper_hook {};
 
@@ -213,10 +215,21 @@ namespace AspectRatio
     }
 
     // Walk the pool: slide in 16-byte steps until a block matches, then advance at the
-    // 96-byte pitch while blocks keep matching; a mismatch drops back to sliding and ends
-    // the current cluster. Clusters translate as one piece - the delta comes from the
-    // cluster's first anchor - so satellite anchors (the ammo ticks) keep their widget's
-    // exact relative layout, and a centre anchor, the reticle, moves by zero.
+    // 96-byte pitch while blocks keep matching; a mismatch drops back to sliding.
+    //
+    // The shift itself is a constant per side with a dead zone in the middle - deliberately
+    // NOT a function of each anchor's exact position. The first version scaled every anchor
+    // by the spread factor, grouped by a draw-order proximity heuristic, and the user's
+    // comparison shots showed what any position-dependent delta does inside a widget: the
+    // reticle's corner dots spread into a rectangle, the weapon silhouette slid out of its
+    // box, the compass lost its bullseye and its N drifted. A widget only survives if every
+    // one of its parts moves by exactly the same amount.
+    //
+    // The constant is 1 - 1/factor per side, and that number is not arbitrary: compressed
+    // NDC times full output width equals safe-canvas NDC times safe width, so this shift
+    // preserves each widget's *pixel* distance from the screen edge exactly as it is on a
+    // 16:9 output. Corners land at their 16:9 margins; everything inside a widget stays
+    // pixel-rigid; the reticle and its dots sit in the dead zone and never move.
     void SpreadPool(uint8_t* pool, size_t bytes)
     {
         const float factor = HorizontalSpreadFactor();
@@ -234,10 +247,9 @@ namespace AspectRatio
         const size_t usable = (std::min)(bytes,
             static_cast<size_t>(reinterpret_cast<const uint8_t*>(info.BaseAddress) + info.RegionSize - pool));
 
-        float previousX = 0.0f;
-        float previousY = 0.0f;
-        float delta = 0.0f;
-        bool haveCluster = false;
+        const float canvasEdge = 1.0f / factor;
+        const float deadZone = canvasEdge * kDeadZoneCanvasFraction;
+        const float shift = 1.0f - canvasEdge;
         uint32_t touched = 0;
 
         size_t offset = 0;
@@ -247,41 +259,27 @@ namespace AspectRatio
             const bool strict = PlausibleAnchorBlock(pool + offset);
             if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
             {
-                haveCluster = false;
                 inRun = false;
                 offset += 16;
                 continue;
             }
             inRun = true;
 
-            float v8[2] {};
-            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+            float v8x = 0.0f;
+            std::memcpy(&v8x, pool + offset + kAnchorBlockV8, sizeof(v8x));
 
-            // Only canvas-authored anchors are spread. Under the layout fix the 1280x720
-            // canvas occupies |x| <= 1/factor of NDC, so every widget anchor lands inside
-            // that; an anchor beyond it was authored against the full output through the
-            // expanded logical range - the fullscreen fades and vignettes pinned at exactly
-            // (+-1, +-1). Spreading one of those slides its coverage sideways and uncovers a
-            // strip of the frame: measured as an orange band over the right sixth of the
-            // screen, exactly the (factor-1)/2 fraction the arithmetic predicts.
-            if (std::fabs(v8[0]) > 1.0f / factor + 0.001f)
+            // Three bands, outermost first. Beyond the canvas edge: output-authored
+            // fullscreen layers (fades, vignettes at exactly +-1) - moving one slides its
+            // coverage and uncovers a strip of the frame, so they stay. Inside the dead
+            // zone: centre elements - they stay too. Between the two: HUD widgets, shifted
+            // outward by the constant.
+            if (std::fabs(v8x) > canvasEdge + 0.001f || std::fabs(v8x) <= deadZone)
             {
-                haveCluster = false;
                 offset += kAnchorBlockSize;
                 continue;
             }
 
-            if (!haveCluster
-                || std::fabs(v8[0] - previousX) > kClusterEpsilon
-                || std::fabs(v8[1] - previousY) > kClusterEpsilon)
-            {
-                delta = v8[0] * (factor - 1.0f);
-                haveCluster = true;
-            }
-            previousX = v8[0];
-            previousY = v8[1];
-
-            const float spread = v8[0] + delta;
+            const float spread = v8x + (v8x > 0.0f ? shift : -shift);
             std::memcpy(pool + offset + kAnchorBlockV8, &spread, sizeof(spread));
             touched++;
             offset += kAnchorBlockSize;
@@ -290,7 +288,8 @@ namespace AspectRatio
         static std::atomic<int> reported { 0 };
         if (touched > 0 && reported.fetch_add(1) < 3)
         {
-            spdlog::info("MGS4: UI Aspect: spread {} anchors (factor {:.4f}).", touched, factor);
+            spdlog::info("MGS4: UI Aspect: shifted {} anchors by {:.4f} per side (dead zone {:.3f}).",
+                touched, 1.0f - 1.0f / factor, deadZone);
         }
     }
 
