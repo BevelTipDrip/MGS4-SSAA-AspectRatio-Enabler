@@ -366,6 +366,24 @@ Remaining steps, converged:
    translation, no per-quad classification anywhere.
 3. **Delete the upload-time spread** once the above works.
 
+## Identification pipeline and current anchor state
+
+The corner anchoring now lives in the layout converter as a per-la2-strcode table (rigid
+whole-object translation; identity read from `obj+0x1C`). **Pinned and verified: the life bar
+(`00b66172`, its la2 says "OLD SNAKE") and the camo compass (`003e6492`, "CAMO %").** The
+weapon box and ration box await identification: the weapon box's labels live in the 562-object
+compound `0059ffd5` whose visible box moved under none of ten occurrence biases (needs
+draw-time attribution), and the ration box's file is unnamed.
+
+The identification tooling, built at the user's direction to replace bias-run archaeology:
+`Dump LA2` writes every la2 and txn at load; `C:\mgspf_tools\la2_preview.py` renders contact
+sheets (all files, or `--runtime` for the ~30 that get layout objects) with authored color
+fills and each file's own strings; `C:\mgspf_tools\txn_decode.py` converts txn textures to PNG
+(format per the MIT TxnFile.cs in otac0n's Codec, reimplemented with attribution). Gap: most
+txn pixel data lives in external `<fileid>_<n>.data` files that bypass ArchiveRead — they need
+a SlotResourceLoad hook (signature available from cipherxof's mod loader) before the sheets
+can show real widget artwork.
+
 ## Remaining work, in the order worth doing
 
 1. **Menus and cutscenes at 21:9** — walk the title menu, codec and a cutscene with both layers
