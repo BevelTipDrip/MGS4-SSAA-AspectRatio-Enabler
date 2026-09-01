@@ -4,6 +4,7 @@
 
 #include "common.hpp"
 #include "logging.hpp"
+#include "resolution_scaling_fixes.hpp"
 
 #include <mutex>
 
@@ -396,6 +397,69 @@ namespace AspectRatio
         return hits;
     }
 
+    // Finds the two reference anchors in the live pool and arms a write watch on each: the
+    // ration box (static widget, anchor a fixed layout constant) and the aiming reticle
+    // (dynamic, computed per frame from the aim - the element the truncation bug wrapped).
+    // Values are matched in normalized 16:9 NDC so the same targets work at any aspect;
+    // run with the corners spread off so the pool holds the game's own numbers.
+    void WatchProducersInPool(uint8_t* pool, size_t bytes)
+    {
+        static std::atomic<bool> staticArmed { false };
+        static std::atomic<bool> dynamicArmed { false };
+        if (staticArmed.load() && dynamicArmed.load())
+        {
+            return;
+        }
+
+        const float factor = HorizontalSpreadFactor();
+
+        MEMORY_BASIC_INFORMATION info {};
+        if (!VirtualQuery(pool, &info, sizeof(info)) || info.State != MEM_COMMIT
+            || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        {
+            return;
+        }
+        const size_t usable = (std::min)(bytes,
+            static_cast<size_t>(reinterpret_cast<const uint8_t*>(info.BaseAddress) + info.RegionSize - pool));
+
+        size_t offset = 0;
+        bool inRun = false;
+        while (offset + kAnchorBlockSize <= usable)
+        {
+            const bool strict = PlausibleAnchorBlock(pool + offset);
+            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
+            {
+                inRun = false;
+                offset += 16;
+                continue;
+            }
+            inRun = true;
+
+            float v8[2] {};
+            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+            const float normX = v8[0] * factor;
+            const uintptr_t slotAddress = reinterpret_cast<uintptr_t>(pool + offset + kAnchorBlockV8);
+
+            bool expected = false;
+            if (std::fabs(normX + 0.719f) < 0.04f && std::fabs(v8[1] + 0.769f) < 0.04f
+                && staticArmed.compare_exchange_strong(expected, true))
+            {
+                ResolutionScalingFixes::ArmProducerWatch(slotAddress,
+                    "the static producer (ration box anchor)");
+            }
+
+            expected = false;
+            if (std::fabs(normX) < 0.04f && v8[1] > 0.10f && v8[1] < 0.40f
+                && dynamicArmed.compare_exchange_strong(expected, true))
+            {
+                ResolutionScalingFixes::ArmProducerWatch(slotAddress,
+                    "the dynamic producer (reticle anchor)");
+            }
+
+            offset += kAnchorBlockSize;
+        }
+    }
+
     void UploadHelperProbe(SafetyHookContext& ctx)
     {
         uintptr_t returnAddress = 0;
@@ -463,6 +527,19 @@ namespace AspectRatio
             {
                 g_PoolCache.push_back({ source, spread });
             }
+        }
+
+        // Producer identification mode: locate the two reference blocks in the live pool and
+        // put hardware write watches on their v8.x slots, so the code that computes each kind
+        // of anchor names itself. The spread stays off in this mode - the watch must see the
+        // game's own values, not ours.
+        if (ResolutionScalingFixes::bWatchAnchorProducers)
+        {
+            if (spread)
+            {
+                WatchProducersInPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
+            }
+            return;
         }
 
         if (spread)

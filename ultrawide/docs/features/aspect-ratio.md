@@ -291,18 +291,43 @@ marked experimental) until the producer-based replacement lands, then gets delet
 
 ## The next arc: producer-based positioning
 
-1. **Name the producers.** Hardware write-watch on two `v8.x` slots in the stable CPU pool —
-   one static widget (the ration box block is identifiable by value), one dynamic element (the
-   reticle block, present while aiming; it is the element the truncation bug wrapped, so it is
-   known to be dynamic-path). The watch machinery from the wrap-era research does this; each
-   fault names its writer RVA.
-2. **Read the producers.** In-process disassembly of both sites: what inputs they take, where
-   the 1280-canvas assumption lives in each.
-3. **Patch the dynamic producer** to be aspect-aware at the source — every world-tracked
-   element lands on target natively, no zones, no ramps.
-4. **Patch the static producer** keyed on authored logical inputs — per-widget placement with
-   real identity, replacing the whitelist.
-5. **Delete the upload-time spread.**
+**The transport chain is now mapped end to end** (write-watch on a live pool slot, then
+in-process disassembly, 2026-09-01, logs in `C:\mgspf_tools\ar_prod*.log`):
+
+```
+producers -> per-channel record buffers        (channel bitmask at +23BA6710,
+                                                descriptor table at +23C74634)
+          -> +68A410 assembles the payload      (args (ecx, edx=byte size); builds in its
+             in its stack frame                 stack frame; element loop over channel bits)
+          -> appends to the 0x32000 pool        (memcpy at +68A933: dst = poolBase+cursor
+                                                from the descriptor cluster at +23C949xx,
+                                                src = rbp+0x24, size = arg edx; pool
+                                                allocated on first use at +68A8C4)
+          -> upload helper +7A8CD0 from +7A583A -> staging -> per-frame vertex ring
+```
+
+Assorted hard-won specifics: the pool watch fires via `VCRUNTIME140!memcpy <- +68A938
+<- +666485 <- +666729 <- +BAFDF <- +BE330`; `+666470` is a thin wrapper whose call at
+`+666480` targets `+68A410`; the `+BAFC0` frame reads a global at `+1B063F0`, in the known
+render-globals block. Pool slot offsets are **not stable per element** — the pool is an append
+stream — which is why upload-time slot identity was never possible.
+
+**The identity mechanism is the game's own channel structure.** The engine keeps UI elements in
+separate per-channel streams selected by bitmask; if static HUD and world-tracked overlays ride
+different channels, per-channel positioning *is* the comprehensive injection — identity from
+game data, no heuristics. Remaining steps:
+
+1. **Map channels to element classes.** Dump the channel descriptor table; hook `+68A410`'s
+   assembly loop (or the `+68A933` append with the loop registers) to log, per channel bit,
+   sample `v8` values during gameplay and aiming. One run each at idle and aim should label
+   most channels.
+2. **Patch per channel** — the dynamic channels get aspect-aware source math, the static
+   channels get the rigid shift, at assembly time where both the class and the pre-copy block
+   are in hand.
+3. If channels turn out mixed, fall back one level: the per-channel record buffers are the
+   producers' direct output, and a write-watch on one of *those* slots (stable within a
+   channel buffer, unlike the pool) names the true producer per class.
+4. **Delete the upload-time spread** once the above works.
 
 ## Remaining work, in the order worth doing
 
