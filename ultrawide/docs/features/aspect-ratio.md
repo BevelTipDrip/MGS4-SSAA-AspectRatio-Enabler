@@ -218,26 +218,48 @@ zero, and a floating marker is its own cluster, spread to its correct full-width
 
 ## Implementation state
 
-**Layer 1 ships and works** — `src/fixes/aspect_ratio.cpp`, behind `Fix UI Aspect` (undocumented
-while layer 2 is unfinished). Verified at 3840x1620 by screenshot: round reticle, 16:9-proportioned
-widgets, centered. Handles both axes, so it *should* fix the WR-001 4:3 squash — untested.
+**Both layers work at 21:9, user-confirmed 2026-09-01.** `src/fixes/aspect_ratio.cpp`, behind
+`Fix UI Aspect` (shapes) and `Fix UI Aspect Corners` (anchoring), both undocumented and off by
+default until the remaining items below are cleared. Verified at 3840x1620 by screenshot: corner
+widgets at the true screen edges at their 16:9 margins, every widget undistorted, the ammo tick
+row aligned inside its box, the reticle round and centred while aiming.
 
-**Layer 2 is built but inert: its interception point is wrong.** The clustered spread
-(`Fix UI Aspect Corners`) hooks the two instance-array uploads at `+7A582B` / `+7A57EA` that the
-earlier UI research recorded. Instrumenting them showed those arrays are **tiny constant
-uploads** — 2 and 3 records, every call, alternating between the same two heap buffers, the
-second site never firing at all — not the per-quad stream. (This also retroactively explains
-that research's own observation of "two records of ±2.0".) The hooks find no anchor signature
-and correctly refuse to touch anything, so the switch is currently a no-op.
+How layer 2 found its real interception point, since two research assumptions fell on the way:
 
-## Open questions, in the order worth answering
+- The two "instance array" sites the earlier UI research recorded (`+7A582B` / `+7A57EA`) carry
+  only **tiny constant uploads** — 2 and 3 records per call, forever. (That also retroactively
+  explains the old research's own note of "two records of ±2.0".)
+- The per-quad pool actually flows through the **generic upload helper at `+7A8CD0`** (Map,
+  memcpy, Unmap) from the call at `+7A583A` — with the source pointer as the helper's **fifth
+  argument, on the stack**, invisible to any register-based probe. The helper's register shape
+  is `(wrapper, resource, destOffset, size)`.
+- The pool is ~200KB, double-buffered across two heap allocations, with 96-byte anchor blocks
+  at a clean pitch from a non-zero start offset. Blocks are recognised by signature, never
+  offset arithmetic, so an unrecognised layout degrades to a no-op.
 
-1. **Find the real per-quad upload.** The flow the staging traces already map is
-   builder → CPU array → Map/memcpy/Unmap at `+7A8CD0` (called from `+7A583A`) → staging →
-   `CopyBufferRegion` → the per-frame vertex ring. A mid-hook at `+7A8CD0` sees the true source
-   pointer and size per call; alternatively a hardware write-watch on a live `v8` slot (the
-   `ANCHOR` sampler logs their addresses) names the producer directly. Then re-point
-   `SpreadAnchors` — the clustering logic itself should carry over unchanged.
+Two spread rules earned by visible defects, both now in the code and comments:
+
+- **Clusters translate as one piece** (delta from the cluster's first anchor), or satellite
+  anchors — the ammo ticks — outgrow their widget.
+- **Only canvas-authored anchors spread.** Under the centered mapping the canvas occupies
+  `|x| <= 1/factor` of NDC; anchors beyond that are output-authored fullscreen layers (fades,
+  vignettes, pinned at exactly ±1). Spreading one slides its coverage sideways and uncovers a
+  strip — seen as an orange band over the right sixth of the frame, width exactly
+  `(factor-1)/2`, before the exemption.
+
+## Remaining work, in the order worth doing
+
+1. **Menus and cutscenes at 21:9** — walk the title menu, codec and a cutscene with both layers
+   on. Menus are allowed to letterbox but must not break; cutscenes have their own camera
+   routes and are the classic breakage site.
+2. **The 3D camera** (AR-002) — the world is still Vert- at 21:9. Squash vs crop first, then
+   the projection.
+3. **4:3** — layer 1 already handles the axis swap (should fix WR-001; untested). The corner
+   spread is X-only; 4:3 wants the same rule rotated (spread `v8.y`, exempt `|y| > 1/factorY`).
+4. **A real play session at 21:9** — the harness sees one stage and one aim; an hour of play
+   sees codec, item switching, alerts, and everything else.
+5. **32:9** — nothing in the math is 21:9-specific, but factor 2.37 stretches the cluster
+   epsilon's assumptions; verify before claiming it.
 2. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
    projection is built and whether window dimensions reach it.
 3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The measured
