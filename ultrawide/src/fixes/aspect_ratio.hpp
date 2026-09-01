@@ -40,6 +40,11 @@ namespace AspectRatio
     // so a screenshot shows exactly which screen elements that file governs. 0 disables.
     inline uint32_t uAspectTestStrcode = 0;
 
+    // Runtime re-apply of the bottom-corner anchors. Off by default: it renders the HUD
+    // corners but drags the same content's menu and selector copies with it, and has
+    // crashed in play. A lab/experiment switch until context discrimination is solved.
+    inline bool bAspectRuntimeAnchoring = false;
+
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
     // maps every visible widget to its host object by measured shift.
     inline bool bAspectTestLadder = false;

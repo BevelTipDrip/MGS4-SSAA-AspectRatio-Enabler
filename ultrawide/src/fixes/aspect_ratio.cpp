@@ -1444,7 +1444,7 @@ namespace AspectRatio
         if (UiLayoutConverter_hook)
         {
             ApplyCornerSpread();
-            if (bFixUiAspectCorners)
+            if (bFixUiAspectCorners && bAspectRuntimeAnchoring)
             {
                 StartRuntimeAnchoring();
             }
