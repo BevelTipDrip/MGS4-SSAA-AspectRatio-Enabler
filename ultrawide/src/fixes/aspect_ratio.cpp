@@ -35,6 +35,18 @@ namespace AspectRatio
 
     SafetyHookInline UiLayoutConverter_hook {};
 
+    // Every layout object the converter touches, in creation order - the live lab's address
+    // book. Objects are engine-owned heap allocations; entries can go stale on stage
+    // transitions, so every live write re-validates readability first.
+    struct KnownObject
+    {
+        uintptr_t object;
+        uint32_t strcode;
+    };
+    std::mutex g_ObjectsMutex;
+    std::vector<KnownObject> g_Objects;
+    int32_t g_LiveExtraX = 0;   // layer-1 extraX, for reset commands
+
     // Widen the logical range instead of shrinking the physical viewport.
     //
     // Both produce undistorted widgets, but shrinking the viewport would also clip anything
@@ -93,6 +105,14 @@ namespace AspectRatio
         else
         {
             return result;
+        }
+
+        {
+            uint32_t strcodeForRegistry = 0;
+            std::memcpy(&strcodeForRegistry, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcodeForRegistry));
+            std::lock_guard lock(g_ObjectsMutex);
+            g_Objects.push_back({ object, strcodeForRegistry });
+            g_LiveExtraX = extraX;
         }
 
         const auto field = [object](uintptr_t offset) { return reinterpret_cast<int32_t*>(object + offset); };
@@ -655,6 +675,39 @@ namespace AspectRatio
             WatchProducersInPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
         }
 
+        // Ladder pool report: with the object ladder active, read the answer from the pool
+        // instead of the screen. The user identified why every screen-side sweep failed -
+        // the loaded asset set is dominated by latent UI that never renders - so this starts
+        // from the *rendered* values: log every anchor block in the bottom-widget y band,
+        // and offline arithmetic (x = rest + 0.02813 * index) names the host object's ladder
+        // index exactly, visibility and occlusion irrelevant.
+        if (bAspectTestLadder && spread)
+        {
+            static std::atomic<int> reportBudget { 400 };
+            uint8_t* pool = reinterpret_cast<uint8_t*>(source);
+            const size_t bytes = (std::min<uint64_t>)(ctx.r9, 1u << 20);
+            size_t offset = 0;
+            bool inRun = false;
+            while (offset + kAnchorBlockSize <= bytes)
+            {
+                const bool strict = PlausibleAnchorBlock(pool + offset);
+                if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
+                {
+                    inRun = false;
+                    offset += 16;
+                    continue;
+                }
+                inRun = true;
+                float v8[2] {};
+                std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+                if (v8[1] > -0.85f && v8[1] < -0.60f && reportBudget.fetch_sub(1) > 0)
+                {
+                    spdlog::info("MGS4: ladder pool: v8=({:.5f},{:.5f})", v8[0], v8[1]);
+                }
+                offset += kAnchorBlockSize;
+            }
+        }
+
         // The pool spread that used to live here is gone: corner anchoring now happens
         // per-object in the layout converter, keyed on each object's la2 strcode. This hook
         // remains solely as the mount point for the producer-watch diagnostic above.
@@ -1077,12 +1130,166 @@ namespace AspectRatio
         }
     }
 
+    // ---- native rect emitter logging ------------------------------------------------------
+    //
+    // The widget backing panels are native solid-rectangle nodes, not textured quads: they
+    // pass through the physical-rect emitter, not the layout-object pipeline - which is why
+    // no object bias in the live walks could move them. Byte pattern and function shape
+    // published by mgs4Ultra120 (MIT-adjacent research, attributed); the hook and use are
+    // ours. Shape: uint8_t* emit(uint8_t* dest, u16 x, u16 y, u16 w, u16 h), writing a
+    // 16-byte packet. Log-only; the live command "rectlog" re-arms the budget.
+    constexpr const char* kRectEmitterSignature =
+        "0F B7 44 24 28 66 89 41 0E 48 8D 41 10 C6 01 0A 66 89 51 08 66 44 89 41 0A 66 44 89 49 0C C3";
+
+    SafetyHookInline RectEmitter_hook {};
+    std::atomic<int> g_RectLogBudget { 0 };
+
+    uint8_t* LoggedRectEmit(uint8_t* dest, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+    {
+        if (g_RectLogBudget.fetch_sub(1) > 0)
+        {
+            uintptr_t returnAddress = 0;
+            std::memcpy(&returnAddress, _AddressOfReturnAddress(), sizeof(returnAddress));
+            const auto base = reinterpret_cast<uintptr_t>(baseModule);
+            spdlog::info("MGS4: rect emit: ({},{} {}x{}) from +{:X}",
+                x, y, w, h, (returnAddress >= base) ? returnAddress - base : returnAddress);
+        }
+        else
+        {
+            g_RectLogBudget.store(0);
+        }
+        return RectEmitter_hook.stdcall<uint8_t*>(dest, x, y, w, h);
+    }
+
+    void InstallRectEmitLogging()
+    {
+        if (uint8_t* at = Memory::PatternScan(baseModule, kRectEmitterSignature, "MGS4: rect emitter"))
+        {
+            RectEmitter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedRectEmit));
+            LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
+        }
+    }
+
+    // ---- live anchor lab ------------------------------------------------------------------
+    //
+    // The user's idea: stop boot-cycling. A thread polls a command file and rewrites layout
+    // object mappings on the running game, so experiments are captures seconds apart instead
+    // of runs minutes apart. Commands, one per line, executed then the file is cleared:
+    //   bias <index> <dx> <dy>   shift object #index's logical range (logical units)
+    //   biascode <hex> <dx> <dy> shift every object with that la2 strcode
+    //   reset                    restore every object to the layer-1 centered mapping
+    //   list                     log the registry (index, strcode, current range)
+    constexpr const char* kLiveCommandFile = "C:/mgspf_tools/live_anchor.txt";
+
+    void ApplyLiveBias(const KnownObject& known, int dx, int dy)
+    {
+        MEMORY_BASIC_INFORMATION info {};
+        if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        {
+            return;
+        }
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalLeft) -= dx;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalRight) -= dx;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalTop) -= dy;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalBottom) -= dy;
+        *reinterpret_cast<uint32_t*>(known.object + 0x18) |= 0x220000;
+    }
+
+    void ResetLiveObject(const KnownObject& known)
+    {
+        MEMORY_BASIC_INFORMATION info {};
+        if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        {
+            return;
+        }
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalLeft) = -g_LiveExtraX;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalTop) = 0;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalRight) = 1280 + g_LiveExtraX;
+        *reinterpret_cast<int32_t*>(known.object + kLayoutLogicalBottom) = 720;
+        *reinterpret_cast<uint32_t*>(known.object + 0x18) |= 0x220000;
+    }
+
+    void StartLiveAnchorLab()
+    {
+        spdlog::info("MGS4: live anchor lab: polling {}.", kLiveCommandFile);
+        std::thread([]
+            {
+                while (true)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    HANDLE file = CreateFileA(kLiveCommandFile, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+                    if (file == INVALID_HANDLE_VALUE)
+                    {
+                        continue;
+                    }
+                    char buffer[2048] {};
+                    DWORD bytesRead = 0;
+                    ReadFile(file, buffer, sizeof(buffer) - 1, &bytesRead, nullptr);
+                    CloseHandle(file);
+                    if (bytesRead == 0)
+                    {
+                        continue;
+                    }
+                    HANDLE clear = CreateFileA(kLiveCommandFile, GENERIC_WRITE, 0, nullptr,
+                        CREATE_ALWAYS, 0, nullptr);
+                    if (clear != INVALID_HANDLE_VALUE) { CloseHandle(clear); }
+
+                    std::lock_guard lock(g_ObjectsMutex);
+                    char* context = nullptr;
+                    for (char* line = strtok_s(buffer, "\r\n", &context); line;
+                         line = strtok_s(nullptr, "\r\n", &context))
+                    {
+                        int index = 0, dx = 0, dy = 0;
+                        unsigned int code = 0;
+                        if (sscanf_s(line, "bias %d %d %d", &index, &dx, &dy) == 3)
+                        {
+                            if (index >= 0 && index < static_cast<int>(g_Objects.size()))
+                            {
+                                ApplyLiveBias(g_Objects[index], dx, dy);
+                                spdlog::info("MGS4: live lab: bias #{} (la2 {:08X}) by ({},{}).",
+                                    index, g_Objects[index].strcode, dx, dy);
+                            }
+                        }
+                        else if (sscanf_s(line, "biascode %x %d %d", &code, &dx, &dy) == 3)
+                        {
+                            for (const auto& known : g_Objects)
+                            {
+                                if (known.strcode == code) { ApplyLiveBias(known, dx, dy); }
+                            }
+                            spdlog::info("MGS4: live lab: biascode {:08X} by ({},{}).", code, dx, dy);
+                        }
+                        else if (std::strncmp(line, "reset", 5) == 0)
+                        {
+                            for (const auto& known : g_Objects) { ResetLiveObject(known); }
+                            spdlog::info("MGS4: live lab: reset {} objects.", g_Objects.size());
+                        }
+                        else if (std::strncmp(line, "rectlog", 7) == 0)
+                        {
+                            g_RectLogBudget.store(400);
+                            spdlog::info("MGS4: live lab: rect logging armed.");
+                        }
+                        else if (std::strncmp(line, "list", 4) == 0)
+                        {
+                            for (size_t i = 0; i < g_Objects.size(); i++)
+                            {
+                                spdlog::info("MGS4: live lab: #{} la2 {:08X} obj {:X}",
+                                    i, g_Objects[i].strcode, g_Objects[i].object);
+                            }
+                        }
+                    }
+                }
+            }).detach();
+    }
+
     void ApplyCornerSpread()
     {
         // Corner anchoring itself needs no hook of its own any more - it rides the layout
-        // converter above. The upload-helper mid hook is only for the producer-watch
-        // diagnostic.
-        if (!ResolutionScalingFixes::bWatchAnchorProducers)
+        // converter above. The upload-helper mid hook serves the producer-watch and
+        // ladder-pool diagnostics.
+        if (!ResolutionScalingFixes::bWatchAnchorProducers && !bAspectTestLadder)
         {
             return;
         }
@@ -1130,6 +1337,8 @@ namespace AspectRatio
         if (UiLayoutConverter_hook)
         {
             ApplyCornerSpread();
+            StartLiveAnchorLab();
+            InstallRectEmitLogging();
         }
     }
 }
