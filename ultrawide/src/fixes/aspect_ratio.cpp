@@ -146,11 +146,30 @@ namespace AspectRatio
     constexpr uint32_t kAnchorBlockV8 = 80;
     constexpr uint32_t kAnchorBlockSize = 96;
 
-    // The dead zone: anchors within this fraction of the compressed canvas half-width stay
-    // put. The anchor census puts centre elements (reticle, its corner dots, the stress
-    // readout) below 0.11 of the canvas and every corner-side element above 0.55, so the
-    // threshold sits in the middle of a wide empty band.
-    constexpr float kDeadZoneCanvasFraction = 0.35f;
+    // Which anchors to shift, as zones in 16:9 NDC. A dead zone plus "shift everything
+    // outside it" had a fatal flaw the user caught in play: world-tracking elements - the
+    // pickup label hovering over a dropped weapon, enemy markers - share the anchor space
+    // with static widgets, and the moment one panned across the threshold it jumped 480px
+    // off its target. No position rule separates "widget" from "thing tracking the world",
+    // because the world can put an element anywhere.
+    //
+    // So the logic is inverted: only anchors inside these measured widget zones shift, and
+    // everything unknown stays centered. That fails safe in both directions - a world-tracked
+    // element never jumps, and a widget missing from this table sits at the centered position
+    // rather than anywhere wrong, which is cosmetic, easy to spot in play, and a one-line
+    // addition here. Zones come from the anchor census (16:9 values, generous margins);
+    // at runtime anchors are normalized by the compression factor before the lookup, so one
+    // table serves every output aspect.
+    struct WidgetZone
+    {
+        float minX, maxX, minY, maxY;
+    };
+    constexpr WidgetZone kWidgetZones[] = {
+        { -0.96f, -0.74f,  0.76f, 0.96f },   // life bar / stress cluster, top-left (-0.881, 0.883)
+        { -0.82f, -0.60f, -0.86f, -0.66f },  // ration box, bottom-left (-0.719, -0.769)
+        {  0.46f,  0.82f, -0.86f, -0.61f },  // weapon box, ammo ticks, item box, bottom-right
+        {  0.61f,  0.84f,  0.50f, 0.74f },   // camo meter / compass, top-right (0.733, 0.622)
+    };
 
     SafetyHookMid UploadHelper_hook {};
 
@@ -248,7 +267,6 @@ namespace AspectRatio
             static_cast<size_t>(reinterpret_cast<const uint8_t*>(info.BaseAddress) + info.RegionSize - pool));
 
         const float canvasEdge = 1.0f / factor;
-        const float deadZone = canvasEdge * kDeadZoneCanvasFraction;
         const float shift = 1.0f - canvasEdge;
         uint32_t touched = 0;
 
@@ -265,21 +283,30 @@ namespace AspectRatio
             }
             inRun = true;
 
-            float v8x = 0.0f;
-            std::memcpy(&v8x, pool + offset + kAnchorBlockV8, sizeof(v8x));
+            float v8[2] {};
+            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
 
-            // Three bands, outermost first. Beyond the canvas edge: output-authored
-            // fullscreen layers (fades, vignettes at exactly +-1) - moving one slides its
-            // coverage and uncovers a strip of the frame, so they stay. Inside the dead
-            // zone: centre elements - they stay too. Between the two: HUD widgets, shifted
-            // outward by the constant.
-            if (std::fabs(v8x) > canvasEdge + 0.001f || std::fabs(v8x) <= deadZone)
+            // Normalize x back to 16:9 NDC (the compression only touches x) and look the
+            // anchor up in the widget table. Everything not listed - world-tracked elements
+            // above all - stays exactly where the game put it.
+            const float normX = v8[0] * factor;
+            bool isWidget = false;
+            for (const auto& zone : kWidgetZones)
+            {
+                if (normX >= zone.minX && normX <= zone.maxX
+                    && v8[1] >= zone.minY && v8[1] <= zone.maxY)
+                {
+                    isWidget = true;
+                    break;
+                }
+            }
+            if (!isWidget)
             {
                 offset += kAnchorBlockSize;
                 continue;
             }
 
-            const float spread = v8x + (v8x > 0.0f ? shift : -shift);
+            const float spread = v8[0] + (v8[0] > 0.0f ? shift : -shift);
             std::memcpy(pool + offset + kAnchorBlockV8, &spread, sizeof(spread));
             touched++;
             offset += kAnchorBlockSize;
@@ -288,8 +315,8 @@ namespace AspectRatio
         static std::atomic<int> reported { 0 };
         if (touched > 0 && reported.fetch_add(1) < 3)
         {
-            spdlog::info("MGS4: UI Aspect: shifted {} anchors by {:.4f} per side (dead zone {:.3f}).",
-                touched, 1.0f - 1.0f / factor, deadZone);
+            spdlog::info("MGS4: UI Aspect: shifted {} widget anchors by {:.4f} per side.",
+                touched, 1.0f - 1.0f / factor);
         }
     }
 
