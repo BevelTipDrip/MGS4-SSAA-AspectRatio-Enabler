@@ -42,6 +42,7 @@ namespace AspectRatio
     {
         uintptr_t object;
         uint32_t strcode;
+        bool pairedAfterRationPanel;   // a 0059FFD5 created right after a 0029FC73
     };
     std::mutex g_ObjectsMutex;
     std::vector<KnownObject> g_Objects;
@@ -111,7 +112,9 @@ namespace AspectRatio
             uint32_t strcodeForRegistry = 0;
             std::memcpy(&strcodeForRegistry, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcodeForRegistry));
             std::lock_guard lock(g_ObjectsMutex);
-            g_Objects.push_back({ object, strcodeForRegistry });
+            const bool paired = strcodeForRegistry == 0x0059FFD5
+                && !g_Objects.empty() && g_Objects.back().strcode == 0x0029FC73;
+            g_Objects.push_back({ object, strcodeForRegistry, paired });
             g_LiveExtraX = extraX;
         }
 
@@ -1284,6 +1287,78 @@ namespace AspectRatio
             }).detach();
     }
 
+    // ---- runtime corner anchoring ---------------------------------------------------------
+    //
+    // The bottom widgets' host objects have their mappings rewritten after creation and are
+    // recreated whenever the weapon/item selector is used (both measured live), so their
+    // anchoring is a periodic absolute re-apply rather than a one-shot conversion write.
+    // Rules, each earned by an experiment:
+    //   - 002506A9 (ration content), 0029FC73 (ration panel): every instance, left-pinned.
+    //     Their latent instances are invisible menus; anchoring them is harmless.
+    //   - 00CD1BC3 (weapon content): every instance, right-pinned.
+    //   - 0059FFD5 (weapon panel): ONLY instances created immediately after a 0029FC73 -
+    //     the file also owns the selector system and the bullseye-adjacent pieces, and
+    //     anchoring those broke both.
+    // Writes are absolute (idempotent), validated with VirtualQuery, every 400ms.
+    void AnchorObjectRange(const KnownObject& known, int align)
+    {
+        MEMORY_BASIC_INFORMATION info {};
+        if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        {
+            return;
+        }
+        const int32_t extraX = g_LiveExtraX;
+        if (extraX <= 0)
+        {
+            return;
+        }
+        auto* left = reinterpret_cast<int32_t*>(known.object + kLayoutLogicalLeft);
+        auto* right = reinterpret_cast<int32_t*>(known.object + kLayoutLogicalRight);
+        const int32_t wantLeft = -extraX * (1 + align);
+        const int32_t wantRight = 1280 + extraX * (1 - align);
+        if (*left != wantLeft || *right != wantRight)
+        {
+            *left = wantLeft;
+            *right = wantRight;
+            *reinterpret_cast<uint32_t*>(known.object + 0x18) |= 0x220000;
+        }
+    }
+
+    void StartRuntimeAnchoring()
+    {
+        std::thread([]
+            {
+                while (true)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                    std::lock_guard lock(g_ObjectsMutex);
+                    for (const auto& known : g_Objects)
+                    {
+                        switch (known.strcode)
+                        {
+                            case 0x002506A9:
+                            case 0x0029FC73:
+                                AnchorObjectRange(known, -1);
+                                break;
+                            case 0x00CD1BC3:
+                                AnchorObjectRange(known, +1);
+                                break;
+                            case 0x0059FFD5:
+                                if (known.pairedAfterRationPanel)
+                                {
+                                    AnchorObjectRange(known, +1);
+                                }
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                }
+            }).detach();
+        spdlog::info("MGS4: runtime corner anchoring active.");
+    }
+
     void ApplyCornerSpread()
     {
         // Corner anchoring itself needs no hook of its own any more - it rides the layout
@@ -1337,6 +1412,10 @@ namespace AspectRatio
         if (UiLayoutConverter_hook)
         {
             ApplyCornerSpread();
+            if (bFixUiAspectCorners)
+            {
+                StartRuntimeAnchoring();
+            }
             StartLiveAnchorLab();
             InstallRectEmitLogging();
         }
