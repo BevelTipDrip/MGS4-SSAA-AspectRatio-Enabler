@@ -337,17 +337,25 @@ separate per-channel streams selected by bitmask; if static HUD and world-tracke
 different channels, per-channel positioning *is* the comprehensive injection — identity from
 game data, no heuristics. Remaining steps:
 
-1. **Map channels to element classes.** Dump the channel descriptor table; hook `+68A410`'s
-   assembly loop (or the `+68A933` append with the loop registers) to log, per channel bit,
-   sample `v8` values during gameplay and aiming. One run each at idle and aim should label
-   most channels.
-2. **Patch per channel** — the dynamic channels get aspect-aware source math, the static
-   channels get the rigid shift, at assembly time where both the class and the pre-copy block
-   are in hand.
-3. If channels turn out mixed, fall back one level: the per-channel record buffers are the
-   producers' direct output, and a write-watch on one of *those* slots (stable within a
-   channel buffer, unlike the pool) names the true producer per class.
-4. **Delete the upload-time spread** once the above works.
+**Census results** (`Log UI Channels`, three probe placements, logs in
+`C:\mgspf_tools\ar_chan*\run.log`): `+68A410`'s arguments are a **vertex range** —
+`(startVertex, count)` — not a channel id. A frame submits one bulk batch (660 vertices, the
+batched static UI mesh) followed by small 6-vertex batches, one quad each: the per-draw-anchor
+elements, matching the aim-time draw taxonomy. Its internal loop at `+68A9C8` emits per-GPU-
+stream chunks (slots 1/2/4/5, strides 0xC vertex / 0x10 float4). So `+68A410` is the
+**draw-batch builder**, one level below identity: element names live above it, in the la2
+object/layer evaluation that fills the vertex arrays and the `+23C7xxxx` tables it reads.
+
+Remaining steps, revised with the LA2 knowledge:
+
+1. **Find the la2 evaluator.** Two independent entry routes: the contact's mod-loader asset
+   log names which `.la2` files load per screen (file-level identity for free), and the
+   engine's handlers for `LA_SetXY` / `LA_DispOnLayer` (searchable by the status-packet
+   opcodes, or by write-watching one of the `+23C7xxxx` element tables the batch builder
+   reads) are the true static producer with object/layer/strcode identity in hand.
+2. **Patch there, with names** — per-object or per-layer placement for static widgets;
+   aspect-aware projection math for the dynamic path.
+3. **Delete the upload-time spread** once the above works.
 
 ## Remaining work, in the order worth doing
 

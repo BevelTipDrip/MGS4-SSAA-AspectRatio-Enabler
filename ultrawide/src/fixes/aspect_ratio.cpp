@@ -556,10 +556,12 @@ namespace AspectRatio
     // records, which only exist while aiming (the reticle - the dynamic class), which are
     // always present (the static widgets). This is the identity data the whole
     // producer-based positioning plan keys on.
-    // Not the emit call at +68A9F1 - that instruction guards a rare channel type and never
-    // fired in a full run. +68A9C8 is the loop body after the descriptor-table loads, hit
-    // for every channel: ebx = channel index, eax = entry dword0, r10 = dword1, r9 = dword2.
-    constexpr uintptr_t kRvaChannelEmitCall = 0x68A9C8;
+    // Third placement. +68A9F1 guards a rare type and never fired; +68A9C8 turned out to be
+    // the per-stream emission loop (eax = GPU stream slot 1/2/4/5, r9 = stride 0xC vertex /
+    // 0x10 float4, r10 = running cursor) with the channel not in ebx there. The channel is
+    // the function's own first argument, so the probe sits at entry: rcx = channel selector,
+    // rdx = payload byte size, and the return address names the submitting caller.
+    constexpr uintptr_t kRvaChannelEmitCall = 0x68A410;
     SafetyHookMid ChannelEmit_hook {};
     std::atomic<int> g_ChannelLogBudget { 1500 };
 
@@ -570,11 +572,12 @@ namespace AspectRatio
             g_ChannelLogBudget.store(0);
             return;
         }
-        spdlog::info("MGS4: UI channel: idx={} ecx={:X} edx={:X} eax={:X} r9={:X} r10={:X}",
-            static_cast<uint32_t>(ctx.rbx) & 0xFFFF,
+        uintptr_t returnAddress = 0;
+        std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        spdlog::info("MGS4: UI channel: sel={:X} size={:X} ret=+{:X}",
             static_cast<uint32_t>(ctx.rcx), static_cast<uint32_t>(ctx.rdx),
-            static_cast<uint32_t>(ctx.rax),
-            static_cast<uint32_t>(ctx.r9), static_cast<uint32_t>(ctx.r10));
+            (returnAddress >= base) ? returnAddress - base : returnAddress);
     }
 
     void InstallChannelCensus()
