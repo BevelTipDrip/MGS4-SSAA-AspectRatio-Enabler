@@ -731,6 +731,14 @@ namespace AspectRatio
     constexpr const char* kArchiveReadSignature =
         "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 49 8B D9 49 8B F8 48 8B F2 E8 D3 F7 FF FF 48 8B D0";
 
+    // ArchiveFileInfo(path, &size): the game's own file-size query, for reads that request
+    // "the whole file" with size -1 (the read's return value is a status, not a count).
+    // Signature from cipherxof's MGS4-ModLoader (MIT).
+    constexpr const char* kArchiveFileInfoSignature =
+        "40 53 48 83 EC 20 48 8B DA E8 ? ? ? ? 48 85 C0 74 12 48 8B 08 48 85 C0 48 89 0B 0F 95 C0";
+    using ArchiveFileInfoFn = bool(__fastcall*)(const char* path, uint64_t* size);
+    ArchiveFileInfoFn g_ArchiveFileInfo = nullptr;
+
     SafetyHookInline ArchiveRead_hook {};
 
     uint32_t La2Word(const uint8_t* at, bool bigEndian)
@@ -904,11 +912,34 @@ namespace AspectRatio
         {
             const size_t length = std::strlen(path);
 
+            // Where do texture .data files actually flow? Log every .data path seen here,
+            // gate-free, so the acquisition route stops being a guess.
+            if (bDumpLa2 && length >= 5 && _stricmp(path + length - 5, ".data") == 0)
+            {
+                static std::atomic<int> dataSeen { 0 };
+                if (dataSeen.fetch_add(1) < 300)
+                {
+                    spdlog::info("MGS4: data via ArchiveRead: {} ({} bytes at {}).", path, requestedSize, offset);
+                }
+            }
+
             // Texture pixel data: most txn files are header-only shells whose image bytes
             // live in sibling "<8-hex-fileid>_<index>.data" files. Same dump treatment, with
             // the name pattern checked so unrelated .data files stay out.
+            // The texture cache reads request "the whole file" with requestedSize = -1, so
+            // the real byte count is this call's own result; a fixed size guard rejected
+            // every one of them the first time around.
+            uint64_t dataBytes = (requestedSize < (32u << 20)) ? requestedSize : 0;
+            if (dataBytes == 0 && g_ArchiveFileInfo)
+            {
+                uint64_t querySize = 0;
+                if (g_ArchiveFileInfo(path, &querySize) && querySize > 0 && querySize < (32u << 20))
+                {
+                    dataBytes = querySize;
+                }
+            }
             if (bDumpLa2 && length >= 6 && _stricmp(path + length - 5, ".data") == 0
-                && destination && requestedSize > 0 && requestedSize < (32u << 20))
+                && destination && dataBytes > 0 && dataBytes < (32u << 20))
             {
                 const char* name = std::strrchr(path, '/');
                 name = name ? name + 1 : path;
@@ -929,7 +960,7 @@ namespace AspectRatio
                     {
                         SetFilePointer(file, 0, nullptr, FILE_END);
                         DWORD written = 0;
-                        WriteFile(file, destination, static_cast<DWORD>(requestedSize), &written, nullptr);
+                        WriteFile(file, destination, static_cast<DWORD>(dataBytes), &written, nullptr);
                         CloseHandle(file);
                     }
                 }
@@ -1000,9 +1031,45 @@ namespace AspectRatio
         return result;
     }
 
+    // The game's slot-resource loader: (data, resourceId, flags, size, destination,
+    // slotNameHash, pageId), data pointing at the resource bytes. Signature published by
+    // cipherxof's MGS4-ModLoader (MIT); hook ours, log-only for now.
+    constexpr const char* kSlotResourceLoadSignature =
+        "48 83 EC 48 8B 84 24 ? ? ? ? C6 44 24 38 00 89 44 24 30 8B 44 24 78 89 44 24 28 8B 44 24 70 89 44 24 20 E8 ? ? ? ? 48 83 C4 48 C3";
+
+    SafetyHookInline SlotResourceLoad_hook {};
+
+    int32_t LoggedSlotResourceLoad(void* data, uint32_t resourceId, uint32_t flags,
+        uint32_t size, uint32_t destination, uint32_t slotNameHash, uint32_t pageId)
+    {
+        static std::atomic<int> seen { 0 };
+        if (seen.fetch_add(1) < 400)
+        {
+            spdlog::info("MGS4: slot resource: id={:08X} slot={:08X} page={} size={} flags={:X}",
+                resourceId, slotNameHash, pageId, size, flags);
+        }
+        return SlotResourceLoad_hook.stdcall<int32_t>(data, resourceId, flags, size,
+            destination, slotNameHash, pageId);
+    }
+
     void InstallLa2Logging()
     {
         spdlog::info("MGS4: LA2 logging: dump {}.", bDumpLa2 ? "ON" : "off");
+
+        if (bDumpLa2)
+        {
+            if (uint8_t* info = Memory::PatternScan(baseModule, kArchiveFileInfoSignature, "MGS4: archive file info"))
+            {
+                g_ArchiveFileInfo = reinterpret_cast<ArchiveFileInfoFn>(info);
+            }
+
+            if (uint8_t* at = Memory::PatternScan(baseModule, kSlotResourceLoadSignature, "MGS4: slot resource logging"))
+            {
+                SlotResourceLoad_hook = safetyhook::create_inline(at,
+                    reinterpret_cast<void*>(&LoggedSlotResourceLoad));
+                LOG_HOOK(SlotResourceLoad_hook, "MGS4: slot resource logging")
+            }
+        }
         if (uint8_t* at = Memory::PatternScan(baseModule, kArchiveReadSignature, "MGS4: LA2 logging"))
         {
             ArchiveRead_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedArchiveRead));
