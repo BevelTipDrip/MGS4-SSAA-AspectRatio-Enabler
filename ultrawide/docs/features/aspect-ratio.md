@@ -183,19 +183,33 @@ The design the measurements point to, in two layers:
    position derives from the full-width world, the spread is the inverse of the centering
    compression, i.e. it ends up back where it points.
 
-**The blocking unknown has moved down a level: anchor sharing.** The six per-draw float4s ride
-at stride 0, so `v8` is per draw. If each quad of a multi-quad widget (the life gauge, the ammo
-block) carries its own anchor at its own centre, spreading anchors tears the widget apart by
-`(factor - 1) x` the distance between its anchors. If a widget's quads share one anchor, with
-the geometry carried by the int16 vertex offsets, the spread is safe. One measurement answers
-it: log `v8` across consecutive HUD draws while aiming and see whether a known multi-quad
-widget repeats the same anchor.
+**The blocking unknown has moved down a level: anchor sharing.** Measured on an aim-time draw
+sample (`Log Viewports` + `Watch Staging Writes`, 16000 sampled draws, log in
+`C:\mgspf_tools\ar_anchor3\`):
+
+- The UI shader (`c0f6fdb2`) draws through **both** quad paths during gameplay — 3698 draws via
+  `+7A70BE` and 255 via `+7A5DA3` in the sample — so `+7A70BE` is not menu-only, and a
+  HUD-only patch cannot key on the call site alone.
+- **3902 of 3953 UI quads carry their position in the int16 vertex data, offset from their
+  anchor** — including symmetric pairs (`mid=(-1680,0)` / `mid=(1664,0)`) that are two halves
+  of one widget sharing a centre. Static widgets are vertex-positioned around a shared anchor.
+- Floating elements are the opposite: the reticle positions through `v8` — that is the value
+  the truncation bug wrapped, which is how we know.
+
+So a pure `v8.x` spread moves floating elements correctly but may leave vertex-positioned
+widgets where the canvas mapping put them, if their shared anchors are canvas-level rather than
+widget-level. **The distinct-`v8` count per frame is now the load-bearing unknown** — a few
+canvas anchors would mean the spread needs to act on vertex offsets or per-quad screen centres
+instead, with its own tearing hazards; widget-level anchors would keep the two-layer design
+intact. The `ANCHOR` sampler that reads `v8` per draw logged nothing in this run despite its
+hooks installing (a plumbing gap in the diagnostic, not an answer), so fixing that sampler is
+the next tooling task.
 
 ## Open questions, in the order worth answering
 
-1. **Anchor sharing** — do the quads of one widget share a `v8`, or carry their own? Log
-   per-draw anchors on the HUD path while aiming. Decides whether the two-layer design above
-   survives contact.
+1. **Distinct `v8` anchors per frame** — a few canvas-level anchors, or one per widget? Fix the
+   `ANCHOR` sampler (it logged nothing despite its hooks installing) and count. Decides whether
+   the two-layer design above survives contact.
 2. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
    projection is built and whether window dimensions reach it.
 3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The measured
