@@ -49,6 +49,8 @@ namespace AspectRatio
     std::vector<KnownObject> g_Objects;
     int32_t g_LiveExtraX = 0;   // layer-1 extraX, for reset commands
 
+    bool KnownObjectStillValid(const KnownObject& known);
+
     // Widen the logical range instead of shrinking the physical viewport.
     //
     // Both produce undistorted widgets, but shrinking the viewport would also clip anything
@@ -136,21 +138,27 @@ namespace AspectRatio
         // absent means centered. The table is measured, not guessed - see the feature doc.
         if (bFixUiAspectCorners && extraX > 0)
         {
-            // occurrence -1 anchors every object with the strcode; 0 or 1 anchors only the
-            // Nth one, for files that own several objects with different roles - the weapon
-            // box's strcode appears twice, and pinning both stretched its frame.
-            struct WidgetAnchor { uint32_t strcode; int align; int occurrence; };
+            // firstInstance entries anchor only the first live object of the strcode: the
+            // bottom-corner widgets' la2 files are instantiated many times - one gameplay
+            // HUD copy plus a copy per weapon/item-selector slot and menu screen (measured
+            // live: ten 0029FC73/0059FFD5 pairs at once, and per-instance bias probes moved
+            // the visible panels only from the first pair) - and the gameplay copy is always
+            // created first. Anchoring every copy dragged the selectors to the corners
+            // (AR-005). "Live" matters for stage reloads: dead earlier instances must not
+            // veto the new HUD copy, so earlier instances are identity-checked, not counted.
+            struct WidgetAnchor { uint32_t strcode; int align; bool firstInstance; };
             static constexpr WidgetAnchor kWidgetAnchors[] = {
-                { 0x00B66172, -1, -1 },   // life bar / stress, top-left ("OLD SNAKE" in its la2)
-                { 0x00DE6517, +1, -1 },   // weapon box, bottom-right ("WEAPON, 30, LOCKED" in its la2)
-                { 0x003E6492, +1, -1 },   // camo meter / compass, top-right ("CAMO %")
+                { 0x00B66172, -1, false },   // life bar / stress, top-left ("OLD SNAKE" in its la2)
+                { 0x003E6492, +1, false },   // camo meter / compass, top-right ("CAMO %")
+                { 0x0029FC73, -1, true },    // ration panel, bottom-left backing plate
+                { 0x002506A9, -1, true },    // ration content: icon, count, name
+                { 0x0059FFD5, +1, true },    // weapon panel, bottom-right backing plate
+                { 0x00CD1BC3, +1, true },    // weapon content: silhouette, ammo, name
             };
 
             uint32_t strcode = 0;
             std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
 
-            static std::mutex occurrenceMutex;
-            static std::vector<std::pair<uint32_t, int>> occurrenceCounts;
             for (const auto& anchor : kWidgetAnchors)
             {
                 if (anchor.strcode != strcode)
@@ -158,28 +166,34 @@ namespace AspectRatio
                     continue;
                 }
 
-                int occurrence = 0;
+                if (anchor.firstInstance)
                 {
-                    std::lock_guard lock(occurrenceMutex);
-                    bool found = false;
-                    for (auto& entry : occurrenceCounts)
+                    bool earlierLiveInstance = false;
                     {
-                        if (entry.first == strcode) { occurrence = entry.second++; found = true; break; }
+                        std::lock_guard lock(g_ObjectsMutex);
+                        for (const auto& known : g_Objects)
+                        {
+                            if (known.object != object && known.strcode == strcode
+                                && KnownObjectStillValid(known))
+                            {
+                                earlierLiveInstance = true;
+                                break;
+                            }
+                        }
                     }
-                    if (!found) { occurrenceCounts.emplace_back(strcode, 1); }
-                }
-                if (anchor.occurrence >= 0 && occurrence != anchor.occurrence)
-                {
-                    spdlog::info("MGS4: UI Aspect: la2 {:08X} occurrence {} left centered.", strcode, occurrence);
-                    break;
+                    if (earlierLiveInstance)
+                    {
+                        spdlog::info("MGS4: UI Aspect: la2 {:08X} later instance left centered.", strcode);
+                        break;
+                    }
                 }
 
                 // Same scale, shifted window: left-pinned means logical 0 lands on screen
                 // x 0, right-pinned means logical 1280 lands on the right edge.
                 *field(kLayoutLogicalLeft) = -extraX * (1 + anchor.align);
                 *field(kLayoutLogicalRight) = 1280 + extraX * (1 - anchor.align);
-                spdlog::info("MGS4: UI Aspect: la2 {:08X} occurrence {} anchored {}.",
-                    strcode, occurrence, anchor.align < 0 ? "left" : "right");
+                spdlog::info("MGS4: UI Aspect: la2 {:08X} anchored {}.",
+                    strcode, anchor.align < 0 ? "left" : "right");
                 break;
             }
         }
