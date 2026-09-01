@@ -6,6 +6,7 @@
 #include "logging.hpp"
 #include "resolution_scaling_fixes.hpp"
 
+#include <algorithm>
 #include <mutex>
 
 namespace AspectRatio
@@ -1184,11 +1185,42 @@ namespace AspectRatio
     //   list                     log the registry (index, strcode, current range)
     constexpr const char* kLiveCommandFile = "C:/mgspf_tools/live_anchor.txt";
 
-    void ApplyLiveBias(const KnownObject& known, int dx, int dy)
+    // Whether a registered object is still the object we recorded. VirtualQuery alone caused
+    // a crash in play: a freed-and-reused heap page passes it, and writing 16 bytes into
+    // whatever lives there now corrupts the game (EXCEPTION_ACCESS_VIOLATION in engine code,
+    // dump 260901_191512). Identity is the recorded strcode at +0x1C plus the two engine
+    // pointers every layout object carries at +0x20/+0x28 (module RVAs +437150/+437110,
+    // measured from live header dumps). A build change fails the check and degrades to
+    // "no anchoring" rather than to corruption.
+    bool KnownObjectStillValid(const KnownObject& known)
     {
         MEMORY_BASIC_INFORMATION info {};
         if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
-            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+            || !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+        {
+            return false;
+        }
+        const auto base = reinterpret_cast<const uint8_t*>(info.BaseAddress);
+        if (known.object + 0x30 > reinterpret_cast<uintptr_t>(base) + info.RegionSize)
+        {
+            return false;
+        }
+        uint32_t strcode = 0;
+        uintptr_t engineA = 0;
+        uintptr_t engineB = 0;
+        std::memcpy(&strcode, reinterpret_cast<const void*>(known.object + 0x1C), sizeof(strcode));
+        std::memcpy(&engineA, reinterpret_cast<const void*>(known.object + 0x20), sizeof(engineA));
+        std::memcpy(&engineB, reinterpret_cast<const void*>(known.object + 0x28), sizeof(engineB));
+        const auto moduleBase = reinterpret_cast<uintptr_t>(baseModule);
+        return strcode == known.strcode
+            && engineA == moduleBase + 0x437150
+            && engineB == moduleBase + 0x437110;
+    }
+
+    void ApplyLiveBias(const KnownObject& known, int dx, int dy)
+    {
+        if (!KnownObjectStillValid(known))
         {
             return;
         }
@@ -1201,9 +1233,7 @@ namespace AspectRatio
 
     void ResetLiveObject(const KnownObject& known)
     {
-        MEMORY_BASIC_INFORMATION info {};
-        if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
-            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        if (!KnownObjectStillValid(known))
         {
             return;
         }
@@ -1302,9 +1332,7 @@ namespace AspectRatio
     // Writes are absolute (idempotent), validated with VirtualQuery, every 400ms.
     void AnchorObjectRange(const KnownObject& known, int align)
     {
-        MEMORY_BASIC_INFORMATION info {};
-        if (!VirtualQuery(reinterpret_cast<void*>(known.object), &info, sizeof(info))
-            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        if (!KnownObjectStillValid(known))
         {
             return;
         }
@@ -1333,6 +1361,10 @@ namespace AspectRatio
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(400));
                     std::lock_guard lock(g_ObjectsMutex);
+                    g_Objects.erase(
+                        std::remove_if(g_Objects.begin(), g_Objects.end(),
+                            [](const KnownObject& known) { return !KnownObjectStillValid(known); }),
+                        g_Objects.end());
                     for (const auto& known : g_Objects)
                     {
                         switch (known.strcode)
