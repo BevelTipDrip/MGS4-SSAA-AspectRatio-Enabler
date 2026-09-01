@@ -110,11 +110,34 @@ Control: the same stage at 3840x2160 from the AA-001 runs.
 
 The game converts UI layout from logical **1280x720** space to output pixels in one CPU-side
 function, at RVA **`+0x439810`** (identified by the mgs4Ultra120 project — see attribution
-below; not yet verified in-process by us). It takes `(object, x, y, width, height)` in logical
-units and writes a physical layout. Its native math is a plain linear stretch:
-`outX = x * outputWidth / 1280`, `outY = y * outputHeight / 720` — which distorts whenever the
-output is not 16:9, and is the direct cause of baseline finding 1 (and, at 4:3, of the WR-001
-squash if that reproduces).
+below; **verified in-process 2026-08-31**: the prologue matches, and the `Log UI Layout` probe
+below hooked it live). It takes `(object, x, y, width, height)` in logical units and writes a
+mapping into the layout object.
+
+**Measured with the probe** (runs at 3840x2160 and 3840x1620, logs in `C:\mgspf_tools\ar_probe3\`):
+
+- The converter runs **once per layout object, at creation**. Every call in the whole
+  boot → menu → stage load → aiming flow — 86 calls, 86 distinct objects, one caller
+  (`+435D42`) — passed the full canvas `(0,0 1280x720)`. Per-widget rectangles never go
+  through it, and aiming (the reticle appearing) triggered no call at all: widget placement
+  happens downstream, in the per-quad constants the GPU research documented.
+- What it writes, dumped before/after around the original: a **physical viewport** at
+  `obj+0x200..0x20C` — `(0,0,3840,2160)` at 16:9 and `(0,0,3840,1620)` at 21:9 — the
+  **logical range** at `obj+0x210..0x21C` — always `(0,0,1280,720)` — and a dirty flag
+  `|= 0x220000` at `obj+0x18`. (Field meanings from mgs4Ultra120's reimplementation;
+  values measured by us.)
+
+So the model is: each layout object carries an affine map "logical range → physical rect",
+widgets position themselves in logical units, and the stretch at non-16:9 is precisely
+"0..1280 x 0..720 onto the full output". Two consequences:
+
+- **Fixing shapes is one write per object.** Change the mapping and every widget in the object
+  inherits it. mgs4Ultra120's root-canvas trick is to keep the physical viewport full-size and
+  *widen the logical range* instead, so logical 0..1280 lands centered while output-covering
+  layers can still draw beyond it.
+- **An affine per-object map cannot do anchored spread.** Spreading positions more than sizes
+  is not affine, so "corners at corners, shapes undistorted" cannot come from the converter
+  alone — it needs per-draw anchor adjustment downstream.
 
 This is the same 1280x720 logical space the UI research documented from the GPU side, and the
 converter sits **upstream** of the vertex pipeline the reticle truncation fix patches: converter
@@ -147,31 +170,43 @@ We want the in-game HUD **anchored, not centered**: corner widgets at the real c
 output, each element undistorted, floating elements (reticle, markers) keeping their world
 positions. Menus may letterbox; the user has said so explicitly.
 
-The candidate mechanism is the same converter hook with different math — scale sizes by the
-16:9-safe factor, map each rect's *position* across the full output. For a floating element
-whose logical position was derived from the full-width frame, that mapping is the identity, which
-is exactly what "keep the reticle where it points" requires.
+The design the measurements point to, in two layers:
 
-**The blocking unknown: converter call granularity.** If it runs once per widget, anchored
-spread works. If it runs per sub-quad, a multi-part widget (the life gauge, the ammo block)
-would be torn apart, each piece anchoring differently. This is measurable with a logging-only
-hook: dump one frame of `(x, y, w, h)` plus caller and see whether rects arrive widget-sized or
-quad-sized.
+1. **Shapes, at the converter.** Our own hook on `+0x439810` giving each object the
+   expanded-logical-range mapping — full-output viewport, logical 0..1280 landing on a centered
+   16:9 area. Every widget everywhere becomes undistorted; menus simply inherit centering,
+   which the user has accepted.
+2. **Corners, at the draw path.** On the in-game HUD path only (`+7A5DA3`, not the menu path
+   `+7A70BE`): scale each draw's `v8.x` NDC anchor by `outputWidth / safeWidth`. Centered-canvas
+   edges then land on real screen edges, shapes stay untouched (`v3`/`v6`/`v7` alone carry
+   size), and a center anchor — the reticle — maps to itself. For a floating element whose
+   position derives from the full-width world, the spread is the inverse of the centering
+   compression, i.e. it ends up back where it points.
+
+**The blocking unknown has moved down a level: anchor sharing.** The six per-draw float4s ride
+at stride 0, so `v8` is per draw. If each quad of a multi-quad widget (the life gauge, the ammo
+block) carries its own anchor at its own centre, spreading anchors tears the widget apart by
+`(factor - 1) x` the distance between its anchors. If a widget's quads share one anchor, with
+the geometry carried by the int16 vertex offsets, the spread is safe. One measurement answers
+it: log `v8` across consecutive HUD draws while aiming and see whether a known multi-quad
+widget repeats the same anchor.
 
 ## Open questions, in the order worth answering
 
-1. **Converter call granularity** — per widget or per quad? Logging-only hook, one frame.
-   Decides whether anchored spread is viable at the converter at all.
-2. **Verify `+0x439810` in-process** — prologue bytes and behavior, via the `Disassemble RVA`
-   diagnostic. Their RVA, our verification; also guards against binary updates.
-3. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
+1. **Anchor sharing** — do the quads of one widget share a `v8`, or carry their own? Log
+   per-draw anchors on the HUD path while aiming. Decides whether the two-layer design above
+   survives contact.
+2. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
    projection is built and whether window dimensions reach it.
-4. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The converter math
-   predicts a horizontal squash; promoting WR-001 to Observed would confirm mechanism and bug in
-   one run.
+3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The measured
+   converter mapping predicts a horizontal squash; promoting WR-001 to Observed would confirm
+   mechanism and bug in one run.
+4. **Where do non-full-canvas converter calls happen?** mgs4Ultra120 handles them, so they
+   exist — but 86 of 86 observed calls were full-canvas. Codec and letterboxed sequences are
+   the likely sources; find one before assuming the hook's non-root branch is dead code.
 5. **Do cutscenes differ from gameplay?** Expected yes (separate camera rebuild routes).
-6. **What does the menu do?** Draws through `+7A70BE`; letterboxing it is acceptable per the
-   user, but it must not break.
+6. **What does the menu do at the new mapping?** Draws through `+7A70BE`; letterboxing is
+   acceptable per the user, but it must not break.
 
 ## Design constraints to respect
 
