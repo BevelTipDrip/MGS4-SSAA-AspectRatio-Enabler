@@ -22,4 +22,8 @@ namespace AspectRatio
     // instead of huddling in the centered area. Separate switch so the layers can be tested
     // independently; does nothing without bFixUiAspect.
     inline bool bFixUiAspectCorners = false;
+
+    // Diagnostic: logs each UI channel's descriptor-table entry as the payload assembler
+    // emits it, labeling the channels for the producer-based positioning plan. F6 re-arms.
+    inline bool bLogUiChannels = false;
 }

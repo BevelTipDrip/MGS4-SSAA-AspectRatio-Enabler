@@ -548,6 +548,59 @@ namespace AspectRatio
         }
     }
 
+    // ---- channel census -------------------------------------------------------------------
+    //
+    // The payload assembler at +68A410 iterates the UI's channel bitmask and emits each
+    // channel through the call at +68A9F1, with the channel's descriptor-table entry staged
+    // in registers. Logging those per call labels the channels: which carry 96-byte anchor
+    // records, which only exist while aiming (the reticle - the dynamic class), which are
+    // always present (the static widgets). This is the identity data the whole
+    // producer-based positioning plan keys on.
+    // Not the emit call at +68A9F1 - that instruction guards a rare channel type and never
+    // fired in a full run. +68A9C8 is the loop body after the descriptor-table loads, hit
+    // for every channel: ebx = channel index, eax = entry dword0, r10 = dword1, r9 = dword2.
+    constexpr uintptr_t kRvaChannelEmitCall = 0x68A9C8;
+    SafetyHookMid ChannelEmit_hook {};
+    std::atomic<int> g_ChannelLogBudget { 1500 };
+
+    void ChannelEmitProbe(SafetyHookContext& ctx)
+    {
+        if (g_ChannelLogBudget.fetch_sub(1) <= 0)
+        {
+            g_ChannelLogBudget.store(0);
+            return;
+        }
+        spdlog::info("MGS4: UI channel: idx={} ecx={:X} edx={:X} eax={:X} r9={:X} r10={:X}",
+            static_cast<uint32_t>(ctx.rbx) & 0xFFFF,
+            static_cast<uint32_t>(ctx.rcx), static_cast<uint32_t>(ctx.rdx),
+            static_cast<uint32_t>(ctx.rax),
+            static_cast<uint32_t>(ctx.r9), static_cast<uint32_t>(ctx.r10));
+    }
+
+    void InstallChannelCensus()
+    {
+        ChannelEmit_hook = safetyhook::create_mid(
+            reinterpret_cast<uint8_t*>(baseModule) + kRvaChannelEmitCall, ChannelEmitProbe);
+        LOG_HOOK(ChannelEmit_hook, "MGS4: UI channel census")
+
+        // F6 re-arms the budget, so a specific moment (aiming, a menu) can be sampled.
+        std::thread([]
+            {
+                bool wasDown = false;
+                while (true)
+                {
+                    const bool isDown = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+                    if (isDown && !wasDown)
+                    {
+                        g_ChannelLogBudget.store(1500);
+                        spdlog::info("MGS4: UI channel census: re-armed.");
+                    }
+                    wasDown = isDown;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                }
+            }).detach();
+    }
+
     void ApplyCornerSpread()
     {
         if (!bFixUiAspectCorners)
@@ -562,6 +615,11 @@ namespace AspectRatio
 
     void ApplyFixes()
     {
+        if (bLogUiChannels)
+        {
+            InstallChannelCensus();
+        }
+
         if (!bFixUiAspect)
         {
             return;

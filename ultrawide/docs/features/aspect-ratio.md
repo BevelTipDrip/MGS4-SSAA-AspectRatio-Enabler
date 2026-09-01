@@ -289,6 +289,26 @@ world elements need aspect-aware source math, not post-hoc correction.
 The heuristic implementation stays in the tree behind `Fix UI Aspect Corners` (off by default,
 marked experimental) until the producer-based replacement lands, then gets deleted.
 
+## The LA2 format — the UI's authoring system, from the community
+
+An 010 Editor template for the game's `.la2` UI layout format (author "eol", provided to the
+user by a contact, 2026-09-01; local copy in `CypherofX\LA2_MGS_PS3.bt` beside the repo)
+connects the runtime measurements to the authoring format:
+
+- **`LA2_PACKET_VERTEX` is `short x, y` in 12.4 fixed-point** — int16 at 1/16-pixel units.
+  This is the format whose 2047.94px ceiling caused the reticle truncation bug, and the int16
+  positions at offset 8 of the 12-byte runtime vertex are these authored values in flight.
+- **LA2 has a Layer table** (strcode + status + object count; `LA_DispOnLayer` /
+  `LA_DispOffLayer` script commands), and objects carry `usLayerIndex`. The channel bitmask
+  the payload assembler iterates is almost certainly these layers.
+- **Identity is authored, by name:** objects, actions, and layers all carry `strcode` hashed
+  names, plus object IDs and parent IDs. The endgame injection can key on named elements.
+- Authored positions live in the status packet system (`LA_SetXY`, `LA_SetWH`, `LA_SetScale`,
+  `LA_SetRotate`, morph animation at a 300fps timebase) — the "static producer" is the
+  engine's evaluator for these packets.
+- The contact also notes the community mod loader can log every asset the game reads — a
+  per-file map of which `.la2` loads for which screen, i.e. file-level identity for free.
+
 ## The next arc: producer-based positioning
 
 **The transport chain is now mapped end to end** (write-watch on a live pool slot, then
