@@ -31,4 +31,16 @@ namespace AspectRatio
     // layer table (strcodes, status, object counts) - the identity map for the
     // producer-based positioning.
     inline bool bLogLa2Loads = false;
+
+    // Diagnostic: with bLogLa2Loads, also write each la2's bytes to C:\mgspf_tools\la2_dump
+    // so the files can be parsed and previewed outside the game.
+    inline bool bDumpLa2 = false;
+
+    // Diagnostic: bias the logical range of the one layout object whose la2 strcode matches,
+    // so a screenshot shows exactly which screen elements that file governs. 0 disables.
+    inline uint32_t uAspectTestStrcode = 0;
+
+    // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
+    // maps every visible widget to its host object by measured shift.
+    inline bool bAspectTestLadder = false;
 }

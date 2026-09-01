@@ -101,6 +101,120 @@ namespace AspectRatio
         *field(kLayoutLogicalRight) = 1280 + extraX;
         *field(kLayoutLogicalBottom) = 720 + extraY;
 
+        // Layer 2, in its final form: per-widget corner anchoring through the object's own
+        // mapping. Each layout object carries its la2 file's strcode at +0x1C, each HUD
+        // widget turned out to live in its own la2 (measured with the ladder experiment -
+        // every widget shifted by its own object's bias), and translating the logical range
+        // moves the whole widget rigidly: no quad ever inspected, nothing unintended ever
+        // touched, world-tracked elements in other objects untouched by construction.
+        //
+        // align -1 pins the object's canvas to the left screen edge, +1 to the right,
+        // absent means centered. The table is measured, not guessed - see the feature doc.
+        if (bFixUiAspectCorners && extraX > 0)
+        {
+            // occurrence -1 anchors every object with the strcode; 0 or 1 anchors only the
+            // Nth one, for files that own several objects with different roles - the weapon
+            // box's strcode appears twice, and pinning both stretched its frame.
+            struct WidgetAnchor { uint32_t strcode; int align; int occurrence; };
+            static constexpr WidgetAnchor kWidgetAnchors[] = {
+                { 0x00B66172, -1, -1 },   // life bar / stress, top-left ("OLD SNAKE" in its la2)
+                { 0x00DE6517, +1, -1 },   // weapon box, bottom-right ("WEAPON, 30, LOCKED" in its la2)
+                { 0x003E6492, +1, -1 },   // camo meter / compass, top-right ("CAMO %")
+            };
+
+            uint32_t strcode = 0;
+            std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
+
+            static std::mutex occurrenceMutex;
+            static std::vector<std::pair<uint32_t, int>> occurrenceCounts;
+            for (const auto& anchor : kWidgetAnchors)
+            {
+                if (anchor.strcode != strcode)
+                {
+                    continue;
+                }
+
+                int occurrence = 0;
+                {
+                    std::lock_guard lock(occurrenceMutex);
+                    bool found = false;
+                    for (auto& entry : occurrenceCounts)
+                    {
+                        if (entry.first == strcode) { occurrence = entry.second++; found = true; break; }
+                    }
+                    if (!found) { occurrenceCounts.emplace_back(strcode, 1); }
+                }
+                if (anchor.occurrence >= 0 && occurrence != anchor.occurrence)
+                {
+                    spdlog::info("MGS4: UI Aspect: la2 {:08X} occurrence {} left centered.", strcode, occurrence);
+                    break;
+                }
+
+                // Same scale, shifted window: left-pinned means logical 0 lands on screen
+                // x 0, right-pinned means logical 1280 lands on the right edge.
+                *field(kLayoutLogicalLeft) = -extraX * (1 + anchor.align);
+                *field(kLayoutLogicalRight) = 1280 + extraX * (1 - anchor.align);
+                spdlog::info("MGS4: UI Aspect: la2 {:08X} occurrence {} anchored {}.",
+                    strcode, occurrence, anchor.align < 0 ? "left" : "right");
+                break;
+            }
+        }
+
+        // Identity experiments: each layout object carries its la2 file's strcode at +0x1C
+        // (measured; independently corroborated by mgs4Ultra120 naming 0x3D7604 the title
+        // menu resource).
+        //
+        // Single mode: bias the one matching object hard and see what moves.
+        if (uAspectTestStrcode != 0)
+        {
+            uint32_t strcode = 0;
+            std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
+            if (strcode == uAspectTestStrcode)
+            {
+                // Vertical, so the moved widget cannot collide with horizontal neighbours:
+                // the identification check is simply "did the widget's usual box empty out".
+                *field(kLayoutLogicalTop) += 100;
+                *field(kLayoutLogicalBottom) += 100;
+                spdlog::info("MGS4: UI Aspect: test bias applied to object {:X} (la2 {:08X}).",
+                    object, strcode);
+            }
+        }
+
+        // Ladder mode: every distinct strcode gets its own bias, index x 12 logical units, so
+        // one run maps every visible widget to its host object - measure a widget's pixel
+        // shift against an unbiased baseline, divide by the per-step shift, and the index
+        // names the strcode from this log. Built after two single-file guesses both missed:
+        // only 31 of 176 loaded la2 files get layout objects at all, and the gameplay HUD's
+        // own file is not among them, so it renders through some host object here.
+        if (bAspectTestLadder)
+        {
+            uint32_t strcode = 0;
+            std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
+
+            static std::mutex ladderMutex;
+            static std::vector<uint32_t> ladder;
+            int index = -1;
+            {
+                std::lock_guard lock(ladderMutex);
+                for (size_t i = 0; i < ladder.size(); i++)
+                {
+                    if (ladder[i] == strcode) { index = static_cast<int>(i); break; }
+                }
+                if (index < 0 && ladder.size() < 64)
+                {
+                    ladder.push_back(strcode);
+                    index = static_cast<int>(ladder.size()) - 1;
+                }
+            }
+            if (index >= 0)
+            {
+                *field(kLayoutLogicalLeft) -= index * 24;
+                *field(kLayoutLogicalRight) -= index * 24;
+                spdlog::info("MGS4: UI Aspect ladder: object {:X} la2 {:08X} index {} bias {}.",
+                    object, strcode, index, index * 24);
+            }
+        }
+
         static std::atomic<int> reported { 0 };
         if (reported.fetch_add(1) < 2)
         {
@@ -531,21 +645,15 @@ namespace AspectRatio
 
         // Producer identification mode: locate the two reference blocks in the live pool and
         // put hardware write watches on their v8.x slots, so the code that computes each kind
-        // of anchor names itself. The spread stays off in this mode - the watch must see the
-        // game's own values, not ours.
-        if (ResolutionScalingFixes::bWatchAnchorProducers)
+        // of anchor names itself.
+        if (ResolutionScalingFixes::bWatchAnchorProducers && spread)
         {
-            if (spread)
-            {
-                WatchProducersInPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
-            }
-            return;
+            WatchProducersInPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
         }
 
-        if (spread)
-        {
-            SpreadPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
-        }
+        // The pool spread that used to live here is gone: corner anchoring now happens
+        // per-object in the layout converter, keyed on each object's la2 strcode. This hook
+        // remains solely as the mount point for the producer-watch diagnostic above.
     }
 
     // ---- channel census -------------------------------------------------------------------
@@ -694,6 +802,92 @@ namespace AspectRatio
             spdlog::info("MGS4: LA2 {}:   layer {} strcode={:08X} status={} objects={}",
                 path, i, strcode, status, objects);
         }
+
+        // The authored bounding box, from the Status section's vertex packets. This is what
+        // decides whether per-object translation can place a file's content: a single-widget
+        // file has a tight box whose position names its screen corner; a composite spanning
+        // the whole canvas cannot be moved as one piece.
+        //
+        // Status stream per the template: a count, then per status a packet list; packets are
+        // (u16 type, u16 size) with LA_SCMD_VERTEX = 3 / LA_SCMD_ADDVERT = 4 carrying
+        // 12.4 fixed-point x,y pairs in per-unit groups.
+        const uint32_t ofStat = La2Word(data + 2 * 4, bigEndian);
+        if (ofStat == 0 || ofStat + 4 > bytes)
+        {
+            return;
+        }
+
+        int32_t minX = INT32_MAX, minY = INT32_MAX, maxX = INT32_MIN, maxY = INT32_MIN;
+        uint32_t vertices = 0;
+
+        const uint32_t statusCount = La2Word(data + ofStat, bigEndian);
+        uint64_t cursor = ofStat + 4;
+        for (uint32_t s = 0; s < statusCount && s < 512 && cursor + 4 <= bytes; s++)
+        {
+            uint16_t packetCount = 0;
+            uint16_t statusSize = 0;
+            std::memcpy(&packetCount, data + cursor, 2);
+            std::memcpy(&statusSize, data + cursor + 2, 2);
+            if (bigEndian)
+            {
+                packetCount = _byteswap_ushort(packetCount);
+                statusSize = _byteswap_ushort(statusSize);
+            }
+            const uint64_t statusEnd = (std::min<uint64_t>)(cursor + statusSize, bytes);
+            uint64_t packet = cursor + 4;
+            for (uint16_t p = 0; p < packetCount && packet + 4 <= statusEnd; p++)
+            {
+                uint16_t type = 0;
+                uint16_t size = 0;
+                std::memcpy(&type, data + packet, 2);
+                std::memcpy(&size, data + packet + 2, 2);
+                if (bigEndian)
+                {
+                    type = _byteswap_ushort(type);
+                    size = _byteswap_ushort(size);
+                }
+                if (size < 4 || packet + size > statusEnd)
+                {
+                    break;
+                }
+                if ((type == 3 || type == 4) && size >= 12)
+                {
+                    // unit count, then (vertexCount, unitNumber) groups of 12.4 pairs.
+                    uint64_t at = packet + 8;
+                    while (at + 4 <= packet + size)
+                    {
+                        uint16_t vertexCount = 0;
+                        std::memcpy(&vertexCount, data + at, 2);
+                        if (bigEndian) { vertexCount = _byteswap_ushort(vertexCount); }
+                        if (vertexCount == 0 || vertexCount > 256) { break; }
+                        at += 4;
+                        for (uint16_t v = 0; v < vertexCount && at + 4 <= packet + size; v++, at += 4)
+                        {
+                            int16_t fx = 0, fy = 0;
+                            std::memcpy(&fx, data + at, 2);
+                            std::memcpy(&fy, data + at + 2, 2);
+                            if (bigEndian)
+                            {
+                                fx = static_cast<int16_t>(_byteswap_ushort(static_cast<uint16_t>(fx)));
+                                fy = static_cast<int16_t>(_byteswap_ushort(static_cast<uint16_t>(fy)));
+                            }
+                            const int32_t px = fx / 16, py = fy / 16;
+                            minX = (std::min)(minX, px); maxX = (std::max)(maxX, px);
+                            minY = (std::min)(minY, py); maxY = (std::max)(maxY, py);
+                            vertices++;
+                        }
+                    }
+                }
+                packet += size;
+            }
+            cursor += (statusSize >= 4) ? statusSize : 4;
+        }
+
+        if (vertices > 0)
+        {
+            spdlog::info("MGS4: LA2 {}:   authored bbox ({},{})..({},{})  {} vertices",
+                path, minX, minY, maxX, maxY, vertices);
+        }
     }
 
     int32_t LoggedArchiveRead(const char* path, void* destination, uint64_t destinationSize,
@@ -707,7 +901,38 @@ namespace AspectRatio
             const size_t length = std::strlen(path);
             if (length >= 4 && _stricmp(path + length - 4, ".la2") == 0)
             {
-                spdlog::info("MGS4: LA2 load: {} ({} bytes at offset {}).", path, requestedSize, offset);
+                spdlog::info("MGS4: LA2 load: {} ({} bytes at offset {}) -> {:X}.",
+                    path, requestedSize, offset, reinterpret_cast<uintptr_t>(destination));
+
+                // Optional dump to disk, so the files can be parsed and previewed outside the
+                // game - identification by eye beats identification by bias runs.
+                if (bDumpLa2 && destination && requestedSize > 0 && requestedSize < (16u << 20))
+                {
+                    const char* name = std::strrchr(path, '/');
+                    name = name ? name + 1 : path;
+                    char dumpPath[MAX_PATH];
+                    std::snprintf(dumpPath, sizeof(dumpPath), "C:/mgspf_tools/la2_dump/%s", name);
+                    CreateDirectoryA("C:/mgspf_tools/la2_dump", nullptr);
+                    HANDLE file = CreateFileA(dumpPath,
+                        (offset == 0) ? GENERIC_WRITE : (GENERIC_WRITE | FILE_APPEND_DATA),
+                        0, nullptr, (offset == 0) ? CREATE_ALWAYS : OPEN_ALWAYS, 0, nullptr);
+                    if (file != INVALID_HANDLE_VALUE)
+                    {
+                        SetFilePointer(file, 0, nullptr, FILE_END);
+                        DWORD written = 0;
+                        WriteFile(file, destination, static_cast<DWORD>(requestedSize), &written, nullptr);
+                        CloseHandle(file);
+                    }
+                    else
+                    {
+                        static std::atomic<int> reported { 0 };
+                        if (reported.fetch_add(1) < 3)
+                        {
+                            spdlog::error("MGS4: LA2 dump: CreateFileA('{}') failed, error {}.",
+                                dumpPath, GetLastError());
+                        }
+                    }
+                }
                 if (offset == 0 && destination && requestedSize >= 13 * 4)
                 {
                     LogLa2Header(path, static_cast<const uint8_t*>(destination), requestedSize);
@@ -719,6 +944,7 @@ namespace AspectRatio
 
     void InstallLa2Logging()
     {
+        spdlog::info("MGS4: LA2 logging: dump {}.", bDumpLa2 ? "ON" : "off");
         if (uint8_t* at = Memory::PatternScan(baseModule, kArchiveReadSignature, "MGS4: LA2 logging"))
         {
             ArchiveRead_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedArchiveRead));
@@ -728,14 +954,17 @@ namespace AspectRatio
 
     void ApplyCornerSpread()
     {
-        if (!bFixUiAspectCorners)
+        // Corner anchoring itself needs no hook of its own any more - it rides the layout
+        // converter above. The upload-helper mid hook is only for the producer-watch
+        // diagnostic.
+        if (!ResolutionScalingFixes::bWatchAnchorProducers)
         {
             return;
         }
 
         UploadHelper_hook = safetyhook::create_mid(
             reinterpret_cast<uint8_t*>(baseModule) + kRvaUploadHelper, UploadHelperProbe);
-        LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect corners")
+        LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect producer watch")
     }
 
     void ApplyFixes()
