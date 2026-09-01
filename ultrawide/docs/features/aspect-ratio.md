@@ -209,12 +209,17 @@ with the removed shader workaround — then 800 aim-time anchors sampled, 0 wrap
 
 The satellite finding rules out a *pure linear* `v8.x` spread: it scales the tick row's span by
 the spread factor while the box keeps its unstretched width — misalignment inside a single
-widget, ~120px at 21:9. The design that survives is a **clustered spread**: derive the spread
-delta once per anchor cluster and *translate* satellites by their cluster's delta instead of
-scaling each anchor independently. Draw order makes clustering cheap — satellites arrive as
-consecutive draws ~0.008 apart while distinct widgets sit 0.2+ apart, so an epsilon-chain over
-consecutive `v8` values groups them. The reticle is a one-quad cluster at centre with delta
-zero, and a floating marker is its own cluster, spread to its correct full-width position.
+widget, ~120px at 21:9.
+
+**Retracted: the clustered spread** (delta per draw-order anchor cluster, satellites translated
+with their cluster). It was built and it tears widgets, just more subtly than linear scaling.
+The user's comparison PDF (2026-09-01) documented four cases from full builds of it: the
+reticle's corner dots spread from a square into a rectangle, the weapon silhouette slid out of
+its containment box, the compass lost its bullseye with the N drifting off the ring, the ration
+icon left its label. The lesson generalises: **any delta that varies with fine anchor position
+tears a widget whose parts carry different anchors**, and draw-order proximity cannot guarantee
+grouping — parts arrive non-consecutively, and rotated variants sit at odd anchors. Kept here
+per the retraction rule; the working design is below.
 
 ## Implementation state
 
@@ -237,15 +242,27 @@ How layer 2 found its real interception point, since two research assumptions fe
   at a clean pitch from a non-zero start offset. Blocks are recognised by signature, never
   offset arithmetic, so an unrecognised layout degrades to a no-op.
 
-Two spread rules earned by visible defects, both now in the code and comments:
+The spread itself, after one full design retraction (above), is a **constant per-side shift
+with a centre dead zone** — deliberately *not* a function of each anchor's position:
 
-- **Clusters translate as one piece** (delta from the cluster's first anchor), or satellite
-  anchors — the ammo ticks — outgrow their widget.
-- **Only canvas-authored anchors spread.** Under the centered mapping the canvas occupies
-  `|x| <= 1/factor` of NDC; anchors beyond that are output-authored fullscreen layers (fades,
-  vignettes, pinned at exactly ±1). Spreading one slides its coverage sideways and uncovers a
-  strip — seen as an orange band over the right sixth of the frame, width exactly
-  `(factor-1)/2`, before the exemption.
+- `delta = ±(1 - 1/factor)`, zero inside the dead zone. The constant is exact, not a tuning
+  knob: compressed NDC x full width equals safe NDC x safe width, so it preserves each
+  widget's **pixel distance from the screen edge** exactly as on 16:9, and every widget
+  translates pixel-rigidly. Verified against all four PDF defect cases in full-4K crops,
+  user-confirmed 2026-09-01: dots square (104x107 px), silhouette contained, bullseye at the
+  arrow tip, icon centred on its label.
+- **The dead zone** (inner 35% of the canvas half-width) holds the reticle, its corner dots
+  and the stress readout still. The census supports the placement: centre elements sit below
+  0.11 of the canvas, corner elements above 0.55.
+- **Only canvas-authored anchors shift.** Anchors beyond `|x| = 1/factor` are output-authored
+  fullscreen layers (fades, vignettes, pinned at exactly ±1); shifting one slides its coverage
+  and uncovers a strip — seen as an orange band over the right sixth of the frame, width
+  exactly `(factor-1)/2`, before the exemption.
+- **Rotated quads shift with their widgets.** The compass's facing arrow, the diagonal weapon
+  silhouette and the objective marker carry rotated bases, which the strict axis-aligned block
+  signature rejects; a relaxed signature (v8.z == 1, sane magnitudes, any rotation) is
+  consulted only inside an established 96-byte-pitch run, where structural context does the
+  discriminating.
 
 ## Remaining work, in the order worth doing
 
@@ -325,7 +342,32 @@ Two spread rules earned by visible defects, both now in the code and comments:
 
 ## Fixed
 
-None recorded.
+### AR-003 — the corner spread tore widgets apart internally
+
+- **Status:** Fixed, 2026-09-01 (pre-release; never shipped)
+- **Evidence:** Observed — user comparison PDF against `ar_fix1` (layer 1 only) and `ar_fix13`
+  (clustered spread), then full-4K crops of the fix, user-confirmed
+- **Affects:** development builds with `Fix UI Aspect Corners=1` before the constant-shift
+  rewrite
+- **Evidence detail:** four documented cases, in the user's words: the crosshair's four corner
+  dots "in a rectangular pattern relative to each other" instead of square; the gun icon
+  "moving out of the containment area"; the compass with "the red bullseye missing, the
+  compass arrow not centered in the larger circle, the N indicator offset"; the ration icon
+  "not centered over the word ration"
+- **Screenshots:** fixed state: [compass](evidence/AR-003-compass-fixed.jpg) /
+  [crosshair](evidence/AR-003-crosshair-square-fixed.jpg) /
+  [weapon](evidence/AR-003-weapon-contained-fixed.jpg) /
+  [ration](evidence/AR-003-ration-centered-fixed.jpg)
+- **Popups:** none
+- **Cause:** the spread delta was a function of each anchor's position (scaled per draw-order
+  cluster). Widget parts carry different anchors — satellites, rotated variants,
+  non-consecutive draws — so parts moved by different amounts. Any position-dependent delta
+  has this failure; grouping heuristics only change where it shows
+- **Fix:** constant per-side shift with a centre dead zone (`delta = ±(1 - 1/factor)`), which
+  translates every widget pixel-rigidly and preserves 16:9 edge margins exactly. Design
+  section above
+- **Verified:** all four cases re-checked in full-4K crops of the same stage; confirmed by the
+  user 2026-09-01
 
 ---
 
