@@ -216,11 +216,28 @@ consecutive draws ~0.008 apart while distinct widgets sit 0.2+ apart, so an epsi
 consecutive `v8` values groups them. The reticle is a one-quad cluster at centre with delta
 zero, and a floating marker is its own cluster, spread to its correct full-width position.
 
+## Implementation state
+
+**Layer 1 ships and works** — `src/fixes/aspect_ratio.cpp`, behind `Fix UI Aspect` (undocumented
+while layer 2 is unfinished). Verified at 3840x1620 by screenshot: round reticle, 16:9-proportioned
+widgets, centered. Handles both axes, so it *should* fix the WR-001 4:3 squash — untested.
+
+**Layer 2 is built but inert: its interception point is wrong.** The clustered spread
+(`Fix UI Aspect Corners`) hooks the two instance-array uploads at `+7A582B` / `+7A57EA` that the
+earlier UI research recorded. Instrumenting them showed those arrays are **tiny constant
+uploads** — 2 and 3 records, every call, alternating between the same two heap buffers, the
+second site never firing at all — not the per-quad stream. (This also retroactively explains
+that research's own observation of "two records of ±2.0".) The hooks find no anchor signature
+and correctly refuse to touch anything, so the switch is currently a no-op.
+
 ## Open questions, in the order worth answering
 
-1. **Prototype the two layers** — the converter hook (centered logical range) first, verified at
-   21:9 by screenshot; then the clustered `v8` spread on the UI draw paths. Each layer is
-   independently testable, and layer 1 alone should reproduce mgs4Ultra120's visual result.
+1. **Find the real per-quad upload.** The flow the staging traces already map is
+   builder → CPU array → Map/memcpy/Unmap at `+7A8CD0` (called from `+7A583A`) → staging →
+   `CopyBufferRegion` → the per-frame vertex ring. A mid-hook at `+7A8CD0` sees the true source
+   pointer and size per call; alternatively a hardware write-watch on a live `v8` slot (the
+   `ANCHOR` sampler logs their addresses) names the producer directly. Then re-point
+   `SpreadAnchors` — the clustering logic itself should carry over unchanged.
 2. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
    projection is built and whether window dimensions reach it.
 3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The measured

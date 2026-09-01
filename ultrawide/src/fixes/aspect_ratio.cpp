@@ -108,6 +108,245 @@ namespace AspectRatio
         return result;
     }
 
+    // ======================= Layer 2: anchors to the corners =======================
+    //
+    // With the layout fix above, every widget is undistorted but the whole interface huddles
+    // in a centered 16:9 area. This layer spreads the widgets back out: each one's NDC anchor
+    // is scaled by outputWidth / safeWidth, which lands corner widgets at exactly the margins
+    // they have on a 16:9 screen, keeps a centre anchor - the aiming reticle - where it
+    // points, and leaves shapes alone because size lives in the basis vectors, not the anchor.
+    //
+    // The one subtlety is measured, not guessed (see docs/features/aspect-ratio.md): most
+    // widgets share one anchor across all their quads, but some carry satellite anchors -
+    // the ammo tick row is one anchor per tick, 0.008 NDC apart. Scaling each satellite
+    // independently would grow the tick row past the box it sits in. So anchors are clustered
+    // by draw order - consecutive records within a small epsilon belong to one widget - and
+    // every record in a cluster gets the *same* translation, derived from the cluster's first
+    // anchor. Within a widget everything keeps its exact relative layout.
+    //
+    // Applied where the game uploads its per-quad instance arrays: two mid hooks immediately
+    // before the upload memcpy, on instructions our earlier UI research identified (a stable
+    // CPU-side allocation, rebuilt every frame, holding the whole frame's records in draw
+    // order). The records are located by signature rather than assumed offsets: a real anchor
+    // block has an axis-aligned basis - v6 = (2/W, 0), v7 = (0, -2/H) - and v8.z exactly 1.
+    constexpr uintptr_t kRvaUiInstanceUploadA = 0x7A582B;   // 0x78-byte records, source in RAX, count at [RDX+0x12]
+    constexpr uintptr_t kRvaUiInstanceUploadB = 0x7A57EA;   // 0x70-byte records, source in RDX, count at [R8+0x10]
+
+    constexpr uint32_t kAnchorBlockV6 = 48;
+    constexpr uint32_t kAnchorBlockV7 = 64;
+    constexpr uint32_t kAnchorBlockV8 = 80;
+    constexpr uint32_t kAnchorBlockSize = 96;
+
+    // Satellites of one widget sit ~0.008 NDC apart, distinct widgets 0.15+, so anything
+    // below this chains into the same cluster.
+    constexpr float kClusterEpsilon = 0.05f;
+
+    SafetyHookMid UiInstanceUploadA_hook {};
+    SafetyHookMid UiInstanceUploadB_hook {};
+
+    struct AnchorBlockRef
+    {
+        bool found = false;
+        uint32_t offset = 0;    // of the six-float4 block within a record
+        bool dumped = false;    // one diagnostic dump per array, not one global
+    };
+
+    bool PlausibleAnchorBlock(const uint8_t* block)
+    {
+        float v6[2] {};
+        float v7[2] {};
+        float v8z = 0.0f;
+        std::memcpy(v6, block + kAnchorBlockV6, sizeof(v6));
+        std::memcpy(v7, block + kAnchorBlockV7, sizeof(v7));
+        std::memcpy(&v8z, block + kAnchorBlockV8 + 8, sizeof(v8z));
+        return std::fabs(v6[1]) < 1e-6f && std::fabs(v7[0]) < 1e-6f
+            && v6[0] > 0.0f && v6[0] < 1.0f && v7[1] < 0.0f && v7[1] > -1.0f
+            && std::fabs(v8z - 1.0f) < 1e-4f;
+    }
+
+    // How much wider the output is than 16:9, or 1.0 when it is not. The same number layer 1
+    // compressed the anchors by, so scaling by it puts a widget at its 16:9 margins.
+    float HorizontalSpreadFactor()
+    {
+        int32_t outputWidth = 0;
+        int32_t outputHeight = 0;
+        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
+        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+
+        if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
+        {
+            return 1.0f;
+        }
+
+        const int64_t safeWidth = static_cast<int64_t>(outputHeight) * 16 / 9;
+        if (safeWidth <= 0 || safeWidth >= outputWidth)
+        {
+            return 1.0f;
+        }
+        return static_cast<float>(outputWidth) / static_cast<float>(safeWidth);
+    }
+
+    void SpreadAnchors(uint8_t* source, uint32_t count, size_t stride, AnchorBlockRef& blockRef)
+    {
+        // What actually arrives here decides everything downstream, so the first calls log
+        // their raw shape: whole-frame arrays or small per-batch chunks are different designs.
+        static std::atomic<int> shapeLogged { 0 };
+        if (shapeLogged.fetch_add(1) < 40)
+        {
+            spdlog::info("MGS4: UI Aspect: upload stride=0x{:X} count={} source={}",
+                stride, count, static_cast<const void*>(source));
+        }
+
+        if (!source || count == 0 || count > 4096)
+        {
+            return;
+        }
+
+        const float factor = HorizontalSpreadFactor();
+        if (factor == 1.0f)
+        {
+            return;
+        }
+
+        // Locate the anchor block within this array's records once, by signature over the
+        // whole array. Requiring the *first* records to match was wrong twice over: uploads
+        // during boot are two degenerate constant records, and even in-game the array leads
+        // with full-screen overlay records whose shape differs. A third of a real frame's
+        // records matching at one offset - and no other offset coming close - is the actual
+        // fingerprint.
+        if (!blockRef.found)
+        {
+            if (count < 16)
+            {
+                return;     // boot-time degenerate upload; wait for a real UI frame
+            }
+
+            uint32_t bestOffset = 0;
+            uint32_t bestMatches = 0;
+            for (uint32_t offset = 0; offset + kAnchorBlockSize <= stride; offset += 8)
+            {
+                uint32_t matched = 0;
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    if (PlausibleAnchorBlock(source + i * stride + offset))
+                    {
+                        matched++;
+                    }
+                }
+                if (matched > bestMatches)
+                {
+                    bestMatches = matched;
+                    bestOffset = offset;
+                }
+            }
+
+            if (bestMatches * 3 >= count)
+            {
+                blockRef.found = true;
+                blockRef.offset = bestOffset;
+                spdlog::info("MGS4: UI Aspect: anchor block at record offset {} (stride 0x{:X}, {}/{} records match).",
+                    bestOffset, stride, bestMatches, count);
+            }
+            else
+            {
+                // Still nothing: dump a few records from the middle of the array - the first
+                // ones are the degenerate constants - so the next attempt reads what is
+                // actually there rather than guessing again.
+                if (!blockRef.dumped)
+                {
+                    blockRef.dumped = true;
+                    spdlog::info("MGS4: UI Aspect: no anchor signature (stride 0x{:X}, {} records, best {} at +{}).",
+                        stride, count, bestMatches, bestOffset);
+                    for (uint32_t r = count / 2; r < (std::min)(count / 2 + 3, count); r++)
+                    {
+                        for (size_t base = 0; base + 16 <= stride; base += 16)
+                        {
+                            float f[4] {};
+                            std::memcpy(f, source + r * stride + base, sizeof(f));
+                            spdlog::info("MGS4: UI Aspect: record{} (stride 0x{:X}) +{:02X}: {} {} {} {}",
+                                r, stride, base, f[0], f[1], f[2], f[3]);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
+        float previousX = 0.0f;
+        float previousY = 0.0f;
+        float delta = 0.0f;
+        bool haveCluster = false;
+
+        for (uint32_t i = 0; i < count; i++)
+        {
+            uint8_t* const block = source + i * stride + blockRef.offset;
+            if (!PlausibleAnchorBlock(block))
+            {
+                haveCluster = false;
+                continue;
+            }
+
+            float v8[2] {};
+            std::memcpy(v8, block + kAnchorBlockV8, sizeof(v8));
+
+            // A new cluster starts wherever the anchor jumps; its translation comes from its
+            // first record so every satellite moves as one piece.
+            if (!haveCluster
+                || std::fabs(v8[0] - previousX) > kClusterEpsilon
+                || std::fabs(v8[1] - previousY) > kClusterEpsilon)
+            {
+                delta = v8[0] * (factor - 1.0f);
+                haveCluster = true;
+            }
+            previousX = v8[0];
+            previousY = v8[1];
+
+            const float spread = v8[0] + delta;
+            std::memcpy(block + kAnchorBlockV8, &spread, sizeof(spread));
+        }
+    }
+
+    AnchorBlockRef g_BlockRefA {};
+    AnchorBlockRef g_BlockRefB {};
+
+    void UploadProbeA(SafetyHookContext& ctx)
+    {
+        uint16_t count = 0;
+        const auto descriptor = reinterpret_cast<const uint8_t*>(ctx.rdx);
+        if (descriptor)
+        {
+            std::memcpy(&count, descriptor + 0x12, sizeof(count));
+        }
+        SpreadAnchors(reinterpret_cast<uint8_t*>(ctx.rax), count, 0x78, g_BlockRefA);
+    }
+
+    void UploadProbeB(SafetyHookContext& ctx)
+    {
+        uint16_t count = 0;
+        const auto descriptor = reinterpret_cast<const uint8_t*>(ctx.r8);
+        if (descriptor)
+        {
+            std::memcpy(&count, descriptor + 0x10, sizeof(count));
+        }
+        SpreadAnchors(reinterpret_cast<uint8_t*>(ctx.rdx), count, 0x70, g_BlockRefB);
+    }
+
+    void ApplyCornerSpread()
+    {
+        if (!bFixUiAspectCorners)
+        {
+            return;
+        }
+
+        UiInstanceUploadA_hook = safetyhook::create_mid(
+            reinterpret_cast<uint8_t*>(baseModule) + kRvaUiInstanceUploadA, UploadProbeA);
+        LOG_HOOK(UiInstanceUploadA_hook, "MGS4: UI Aspect corners (A)")
+
+        UiInstanceUploadB_hook = safetyhook::create_mid(
+            reinterpret_cast<uint8_t*>(baseModule) + kRvaUiInstanceUploadB, UploadProbeB);
+        LOG_HOOK(UiInstanceUploadB_hook, "MGS4: UI Aspect corners (B)")
+    }
+
     void ApplyFixes()
     {
         if (!bFixUiAspect)
@@ -130,5 +369,12 @@ namespace AspectRatio
 
         UiLayoutConverter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&ConvertLayout));
         LOG_HOOK(UiLayoutConverter_hook, "MGS4: UI Aspect")
+
+        // Layer 2 rides on layer 1: without the undistorted centered base, spreading anchors
+        // would just rearrange stretched widgets.
+        if (UiLayoutConverter_hook)
+        {
+            ApplyCornerSpread();
+        }
     }
 }

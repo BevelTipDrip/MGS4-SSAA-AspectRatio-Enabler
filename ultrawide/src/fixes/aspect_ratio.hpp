@@ -17,4 +17,9 @@ namespace AspectRatio
     // Experimental, off by default and absent from the Config Tool while the second layer
     // (anchoring corner widgets to the real corners) is still being built.
     inline bool bFixUiAspect = false;
+
+    // Layer 2: spread widget anchors so corner widgets sit at the margins they have on 16:9
+    // instead of huddling in the centered area. Separate switch so the layers can be tested
+    // independently; does nothing without bFixUiAspect.
+    inline bool bFixUiAspectCorners = false;
 }
