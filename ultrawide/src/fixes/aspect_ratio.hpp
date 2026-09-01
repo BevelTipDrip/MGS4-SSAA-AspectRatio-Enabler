@@ -26,4 +26,9 @@ namespace AspectRatio
     // Diagnostic: logs each UI channel's descriptor-table entry as the payload assembler
     // emits it, labeling the channels for the producer-based positioning plan. F6 re-arms.
     inline bool bLogUiChannels = false;
+
+    // Diagnostic: logs every .la2 UI layout file the game reads, with each file's parsed
+    // layer table (strcodes, status, object counts) - the identity map for the
+    // producer-based positioning.
+    inline bool bLogLa2Loads = false;
 }

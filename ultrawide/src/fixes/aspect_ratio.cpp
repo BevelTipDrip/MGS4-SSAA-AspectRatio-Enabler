@@ -604,6 +604,128 @@ namespace AspectRatio
             }).detach();
     }
 
+    // ---- LA2 load logging -----------------------------------------------------------------
+    //
+    // Hooks the game's archive read to log every .la2 UI layout file as it loads, and parses
+    // each file's header in memory - version, section offsets, and the layer table with its
+    // strcode names - using the structure from the community's 010 template (author "eol").
+    // This is the file-and-layer identity map the producer-based positioning keys on.
+    //
+    // The byte signature for the archive read function is published by cipherxof's
+    // MGS4-ModLoader (MIT, github.com/cipherxof/MGS4-ModLoader); the hook and the parsing
+    // here are ours. Function shape per the same source:
+    //   int32 ArchiveRead(const char* path, void* dest, uint64 destSize, uint64 offset,
+    //                     uint64 requestedSize)
+    constexpr const char* kArchiveReadSignature =
+        "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 49 8B D9 49 8B F8 48 8B F2 E8 D3 F7 FF FF 48 8B D0";
+
+    SafetyHookInline ArchiveRead_hook {};
+
+    uint32_t La2Word(const uint8_t* at, bool bigEndian)
+    {
+        uint32_t value = 0;
+        std::memcpy(&value, at, sizeof(value));
+        return bigEndian ? _byteswap_ulong(value) : value;
+    }
+
+    void LogLa2Header(const char* path, const uint8_t* data, uint64_t bytes)
+    {
+        // One header log per file; the game reads large files in chunks.
+        static std::mutex seenMutex;
+        static std::vector<std::string> seen;
+        {
+            std::lock_guard lock(seenMutex);
+            for (const auto& entry : seen)
+            {
+                if (entry == path)
+                {
+                    return;
+                }
+            }
+            if (seen.size() < 256)
+            {
+                seen.emplace_back(path);
+            }
+        }
+
+        // The template auto-detects endianness; PS3-era data is big-endian and the port may
+        // keep it. Versions run 0x10007..0x10009.
+        uint32_t version = La2Word(data, false);
+        bool bigEndian = false;
+        if (version < 0x10007 || version > 0x10009)
+        {
+            version = La2Word(data, true);
+            bigEndian = true;
+        }
+        if (version < 0x10007 || version > 0x10009)
+        {
+            spdlog::info("MGS4: LA2 {}: unrecognised version word {:08X}.", path, La2Word(data, false));
+            return;
+        }
+
+        const uint32_t ofLayer = (version > 0x10007 && bytes >= 13 * 4)
+            ? La2Word(data + 12 * 4, bigEndian) : 0;
+        spdlog::info("MGS4: LA2 {}: version {:X}{}, layer table at {:X}.",
+            path, version, bigEndian ? " (big-endian)" : "", ofLayer);
+
+        if (ofLayer == 0 || ofLayer + 4 > bytes)
+        {
+            return;
+        }
+
+        const uint32_t layerCount = La2Word(data + ofLayer, bigEndian);
+        if (layerCount > 256)
+        {
+            return;
+        }
+        for (uint32_t i = 0; i < layerCount && ofLayer + 4 + (i + 1) * 8 <= bytes; i++)
+        {
+            const uint8_t* entry = data + ofLayer + 4 + i * 8;
+            const uint32_t strcode = La2Word(entry, bigEndian);
+            uint16_t status = 0;
+            uint16_t objects = 0;
+            std::memcpy(&status, entry + 4, sizeof(status));
+            std::memcpy(&objects, entry + 6, sizeof(objects));
+            if (bigEndian)
+            {
+                status = _byteswap_ushort(status);
+                objects = _byteswap_ushort(objects);
+            }
+            spdlog::info("MGS4: LA2 {}:   layer {} strcode={:08X} status={} objects={}",
+                path, i, strcode, status, objects);
+        }
+    }
+
+    int32_t LoggedArchiveRead(const char* path, void* destination, uint64_t destinationSize,
+        uint64_t offset, uint64_t requestedSize)
+    {
+        const int32_t result = ArchiveRead_hook.stdcall<int32_t>(
+            path, destination, destinationSize, offset, requestedSize);
+
+        if (path)
+        {
+            const size_t length = std::strlen(path);
+            if (length >= 4 && _stricmp(path + length - 4, ".la2") == 0)
+            {
+                spdlog::info("MGS4: LA2 load: {} ({} bytes at offset {}).", path, requestedSize, offset);
+                if (offset == 0 && destination && requestedSize >= 13 * 4)
+                {
+                    LogLa2Header(path, static_cast<const uint8_t*>(destination), requestedSize);
+                }
+            }
+        }
+        return result;
+    }
+
+    void InstallLa2Logging()
+    {
+        if (uint8_t* at = Memory::PatternScan(baseModule, kArchiveReadSignature, "MGS4: LA2 logging"))
+        {
+            ArchiveRead_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedArchiveRead));
+            LOG_HOOK(ArchiveRead_hook, "MGS4: LA2 logging")
+        }
+    }
+
     void ApplyCornerSpread()
     {
         if (!bFixUiAspectCorners)
@@ -621,6 +743,11 @@ namespace AspectRatio
         if (bLogUiChannels)
         {
             InstallChannelCensus();
+        }
+
+        if (bLogLa2Loads)
+        {
+            InstallLa2Logging();
         }
 
         if (!bFixUiAspect)
