@@ -443,6 +443,46 @@ can show real widget artwork.
   the same aspect as its 1280x720 logical space. Mechanism section above
 - **Fix:** none yet — this bug *is* the feature
 
+### AR-005 — runtime anchoring drags menu and selector copies of the same content
+
+- **Status:** Active (mechanism confirmed); the runtime anchoring is disabled by default
+  pending a fix
+- **Evidence:** Observed — eight user screenshots, 2026-09-01, in
+  `C:\mgspf_tools\Live Playtest bugs\`
+- **Affects:** the lab switch `Aspect Runtime Anchoring=1` (with both aspect keys on)
+- **Repro:** enable it at 21:9, open the Weapons menu or the quick selector
+- **Evidence detail:** in the user's words — in the weapons menu "the AK icon (and some
+  graphical elements associated with it) are offset to the right" while its row text stays
+  put; in the quick selector "you can see the AK is offset, along with that brighter
+  transparent box, but every other element of the weapon widget is in the original 16:9
+  location"; a different selected weapon "is not offset, but other elements in that area
+  are"; "the item widget behaves in the same way the weapon widget does"; the same glitch
+  "applies to the rations in the items menu". Confirmed correct in the same session: both
+  top corners, and the weapon box itself at the bottom-right in gameplay
+- **Popups:** none (but see the crash records below)
+- **Cause:** the runtime rule anchors *every instance* of the weapon/ration content
+  strcodes (00CD1BC3 / 002506A9). The same content renders in the full menu, the quick
+  selector, and the selector highlight; those copies get dragged to the HUD corner. The
+  strcode names the asset, not the context
+- **Fix:** none yet. Requires instance-context discrimination — identifying which copy is
+  the HUD's — before the runtime anchoring can ship
+
+### AR-006 — the runtime anchoring build crashed twice in play
+
+- **Status:** Active; mitigated by disabling the runtime anchoring by default
+- **Evidence:** Measured — the game's own dumps, `mgs4_crash_260901_191512` and
+  `mgs4_crash_260901_192459`
+- **Evidence detail:** both EXCEPTION_ACCESS_VIOLATION; the first in engine code
+  (consistent with a stale-pointer heap write from the re-apply thread — VirtualQuery
+  passes on a freed-and-reused page), the second unwinding through VCRUNTIME140 *after*
+  identity validation (strcode + engine pointers at +0x20/+0x28) was added, so the
+  hardened check is not sufficient either
+- **Cause:** writing engine-owned heap objects from a foreign thread on a timer is
+  fundamentally racy with the engine's own lifetime management
+- **Fix:** none at this approach's level. The eventual fix likely moves the write into an
+  engine-driven callsite (the converter re-run, or whatever rewrites these objects'
+  mappings post-creation) instead of an asynchronous thread
+
 ### AR-004 — the objective bullseye leaves the radar in expanded mode
 
 - **Status:** Active
