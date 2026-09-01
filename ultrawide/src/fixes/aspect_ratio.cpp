@@ -227,6 +227,20 @@ namespace AspectRatio
             float v8[2] {};
             std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
 
+            // Only canvas-authored anchors are spread. Under the layout fix the 1280x720
+            // canvas occupies |x| <= 1/factor of NDC, so every widget anchor lands inside
+            // that; an anchor beyond it was authored against the full output through the
+            // expanded logical range - the fullscreen fades and vignettes pinned at exactly
+            // (+-1, +-1). Spreading one of those slides its coverage sideways and uncovers a
+            // strip of the frame: measured as an orange band over the right sixth of the
+            // screen, exactly the (factor-1)/2 fraction the arithmetic predicts.
+            if (std::fabs(v8[0]) > 1.0f / factor + 0.001f)
+            {
+                haveCluster = false;
+                offset += kAnchorBlockSize;
+                continue;
+            }
+
             if (!haveCluster
                 || std::fabs(v8[0] - previousX) > kClusterEpsilon
                 || std::fabs(v8[1] - previousY) > kClusterEpsilon)
