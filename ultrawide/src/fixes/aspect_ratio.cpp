@@ -299,8 +299,15 @@ namespace AspectRatio
             //   it (shape lives in the basis vectors). A small centre dead zone keeps the
             //   reticle's separate corner-dot anchors square, and a ramp between the two
             //   keeps the transition continuous so nothing pops while the camera pans.
+            // The fullscreen exemption keys on the *compressed* coordinate, not the
+            // normalized one: output-authored layers are pinned at exactly +-1 as written,
+            // while a world-tracked label part near the screen edge sits at a compressed
+            // |x| around 0.75..0.9 - normalized past 1.0. An earlier version skipped
+            // anything with |normX| > 1, and a label straddling that line had some parts
+            // decompressed outward and some left inboard: its text visibly swapped sides
+            // near the screen edge.
             const float normX = v8[0] * factor;
-            if (std::fabs(normX) > 1.001f)
+            if (std::fabs(v8[0]) > 0.999f)
             {
                 offset += kAnchorBlockSize;
                 continue;
