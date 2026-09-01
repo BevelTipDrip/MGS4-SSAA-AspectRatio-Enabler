@@ -15,7 +15,9 @@ established.
 
 ## Status
 
-**Not started.** No patch, no setting, no measurement of how the game behaves off 16:9.
+**Research started 2026-08-31.** No patch yet. The baseline observation below replaces the old
+"no measurement" state, and the reference project's architecture has been studied (none of its
+code is used here).
 
 The one existing claim in this area is [WR-001](window-resolution.md#active-bugs) — that a 4:3
 window squashes the interface horizontally. It is at **Reported**, from the shipped README, and
@@ -84,23 +86,92 @@ what a given element is doing. See [tooling.md](tooling.md).
 
 ---
 
+## Baseline: what the game does at 21:9 today
+
+Measured 2026-08-31 on the current build with **no aspect patches**: `Window Resolution
+(16:9)="3840x1620"` (the parser takes any `WxH` from 320 to 16384; the key's aspect suffix is a
+label, not validation), stage `s01a10l_1` via the harness, screenshots reviewed by the user.
+Control: the same stage at 3840x2160 from the AA-001 runs.
+
+1. **The HUD stretches to the full output width.** Widgets keep their full-width span while the
+   frame is shorter, so everything goes flat; the aiming reticle is visibly an oval. This is
+   exactly what the layout converter's native math produces (see below), so it is both observed
+   and explained.
+2. **The 3D looks Vert-** — the 16:9 horizontal framing with top and bottom lost, not more world
+   at the sides. *Provisional: this reading has not been separately confirmed and squash has not
+   been fully excluded.* The reference project's need to rewrite projection matrices for Hor+
+   supports it.
+3. **Presentation quirks in the captures are this machine, not the engine.** The frame sits
+   anchored top-left with black fill because the user's GPU is set to no-scaling, and any mode
+   smaller than native displays that way. A corrupted block in the bottom-right of one capture
+   was a Steam popup glitching, nothing else. Do not read either as engine behavior.
+
+## The layout converter — the key mechanism
+
+The game converts UI layout from logical **1280x720** space to output pixels in one CPU-side
+function, at RVA **`+0x439810`** (identified by the mgs4Ultra120 project — see attribution
+below; not yet verified in-process by us). It takes `(object, x, y, width, height)` in logical
+units and writes a physical layout. Its native math is a plain linear stretch:
+`outX = x * outputWidth / 1280`, `outY = y * outputHeight / 720` — which distorts whenever the
+output is not 16:9, and is the direct cause of baseline finding 1 (and, at 4:3, of the WR-001
+squash if that reproduces).
+
+This is the same 1280x720 logical space the UI research documented from the GPU side, and the
+converter sits **upstream** of the vertex pipeline the reticle truncation fix patches: converter
+output feeds the coordinate scaling whose `cvttss2si`/`movsx` narrowing we widened.
+
+**The truncation fix and a layout hook are expected to compose, not conflict.** The fix widens
+registers; a layout hook changes the values flowing through them. mgs4Ultra120 ships both
+together, which is working evidence. (The removed wrap-around patch *would* have conflicted —
+one more reason it stays gone.)
+
+## What mgs4Ultra120 does (studied, not copied)
+
+Their `MGS4NativeCenteredHUD.asi` hooks the layout converter and remaps into a **centered 16:9
+safe canvas** — a pure affine squeeze, no per-element anchoring. That is the
+centering/stretching the user observed. Native surfaces that bypass the converter get separate
+guarded hooks: subtitles, movies, TV movies (a physical-rect emitter at `+0xbe090`
+discriminated by caller return address), inventory previews, and two byte-verified fullscreen
+modal backgrounds. Their 3D side rewrites `m00` on structurally-identified projection matrices
+(Hor+), with an optional FOV multiplier because stock vertical framing reads tight at 21:9, and
+cutscene camera rebuild routes handled separately by return address — corroborating that
+cutscenes need their own handling.
+
+**Attribution:** the layout converter RVA and the native-surface catalogue above are their
+research. If any of it ends up used in our implementation it gets credited in the source and
+README, as with the reticle-fix attribution. No code has been taken.
+
+## Where our goal differs
+
+We want the in-game HUD **anchored, not centered**: corner widgets at the real corners of the
+output, each element undistorted, floating elements (reticle, markers) keeping their world
+positions. Menus may letterbox; the user has said so explicitly.
+
+The candidate mechanism is the same converter hook with different math — scale sizes by the
+16:9-safe factor, map each rect's *position* across the full output. For a floating element
+whose logical position was derived from the full-width frame, that mapping is the identity, which
+is exactly what "keep the reticle where it points" requires.
+
+**The blocking unknown: converter call granularity.** If it runs once per widget, anchored
+spread works. If it runs per sub-quad, a multi-part widget (the life gauge, the ammo block)
+would be torn apart, each piece anchoring differently. This is measurable with a logging-only
+hook: dump one frame of `(x, y, w, h)` plus caller and see whether rects arrive widget-sized or
+quad-sized.
+
 ## Open questions, in the order worth answering
 
-Everything below is unmeasured. The first three are cheap and should come before any patching,
-because they determine whether this is a UI problem, a camera problem, or both.
-
-1. **What does the game actually do at 21:9 right now?** Set an ultrawide window resolution and
-   look. Is it Hor+ (more visible at the sides), Vert- (the 16:9 image cropped top and bottom), or
-   stretched? This single observation decides most of the design.
-2. **Does the projection matrix respond to the window size at all**, or is the FOV fixed? Find
-   where the projection is built and whether window dimensions reach it.
-3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. It is at Reported
-   and needs promoting to Observed or retracting before anything is built on it.
-4. **Are the black bars, if any, drawn or letterboxed by the swapchain?** Different fix entirely.
-5. **Do cutscenes differ from gameplay?** They frequently use their own camera and framing, and
-   are the usual place an aspect fix breaks.
-6. **What does the menu do?** It draws through a different path (`+7A70BE`) and may well need
-   separate handling from the in-game HUD.
+1. **Converter call granularity** — per widget or per quad? Logging-only hook, one frame.
+   Decides whether anchored spread is viable at the converter at all.
+2. **Verify `+0x439810` in-process** — prologue bytes and behavior, via the `Disassemble RVA`
+   diagnostic. Their RVA, our verification; also guards against binary updates.
+3. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
+   projection is built and whether window dimensions reach it.
+4. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The converter math
+   predicts a horizontal squash; promoting WR-001 to Observed would confirm mechanism and bug in
+   one run.
+5. **Do cutscenes differ from gameplay?** Expected yes (separate camera rebuild routes).
+6. **What does the menu do?** Draws through `+7A70BE`; letterboxing it is acceptable per the
+   user, but it must not break.
 
 ## Design constraints to respect
 
@@ -117,7 +188,39 @@ because they determine whether this is a UI problem, a camera problem, or both.
 
 ## Active bugs
 
-None recorded — nothing is implemented yet.
+### AR-001 — the HUD stretches to the full output width at non-16:9 output
+
+- **Status:** Active
+- **Evidence:** Observed
+- **Affects:** any output aspect other than 16:9. Observed at 3840x1620 (21:9); the same
+  mechanism predicts the 4:3 squash described by WR-001
+- **Repro:** `Window Aspect Ratio="16:9"`, `Window Resolution (16:9)="3840x1620"`, load any
+  stage, look at the HUD; aim to see the reticle become an oval
+- **Evidence detail:** harness run 2026-08-31, stage `s01a10l_1`, screenshots reviewed by the
+  user. Widgets hold their full-width span while the frame shortens; reticle visibly oval
+- **Screenshots:** [`AR-001-hud-stretched-3840x1620.jpg`](evidence/AR-001-hud-stretched-3840x1620.jpg)
+  vs control [`AR-001-hud-control-3840x2160.jpg`](evidence/AR-001-hud-control-3840x2160.jpg).
+  Ignore the top-left anchoring, bottom black fill and the corrupted block bottom-right — the
+  first two are the user's GPU no-scaling setting, the last a glitched Steam popup
+- **Popups:** none
+- **Cause:** the layout converter's linear map (`x * outputWidth / 1280`) assumes the output is
+  the same aspect as its 1280x720 logical space. Mechanism section above
+- **Fix:** none yet — this bug *is* the feature
+
+### AR-002 — the 3D camera appears to lose vertical FOV at 21:9 rather than gaining horizontal
+
+- **Status:** Active
+- **Evidence:** Inferred
+- **Affects:** any output wider than 16:9
+- **Repro:** as AR-001; compare visible world extent against a 16:9 control of the same scene
+- **Evidence detail:** same captures as AR-001. The framing reads as the 16:9 image with top and
+  bottom lost, but **vertical squash has not been excluded**, and the user has not separately
+  confirmed this reading — hence Inferred, not Observed
+- **Screenshots:** same pair as AR-001
+- **Popups:** none
+- **Cause:** unknown. Consistent with a projection built for 16:9 regardless of output;
+  mgs4Ultra120 rewriting `m00` for Hor+ supports that, but that is their finding, not ours
+- **Fix:** none. Needs question 3 answered first
 
 ---
 
