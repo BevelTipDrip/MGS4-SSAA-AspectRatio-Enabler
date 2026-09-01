@@ -196,20 +196,31 @@ sample (`Log Viewports` + `Watch Staging Writes`, 16000 sampled draws, log in
 - Floating elements are the opposite: the reticle positions through `v8` — that is the value
   the truncation bug wrapped, which is how we know.
 
-So a pure `v8.x` spread moves floating elements correctly but may leave vertex-positioned
-widgets where the canvas mapping put them, if their shared anchors are canvas-level rather than
-widget-level. **The distinct-`v8` count per frame is now the load-bearing unknown** — a few
-canvas anchors would mean the spread needs to act on vertex offsets or per-quad screen centres
-instead, with its own tearing hazards; widget-level anchors would keep the two-layer design
-intact. The `ANCHOR` sampler that reads `v8` per draw logged nothing in this run despite its
-hooks installing (a plumbing gap in the diagnostic, not an answer), so fixing that sampler is
-the next tooling task.
+**The anchor census answers it** (sampler repaired — its pipeline-analysis half had been lost
+with the removed shader workaround — then 800 aim-time anchors sampled, 0 wrapped, log in
+`C:\mgspf_tools\ar_anchor4\`):
+
+- **Anchors are widget-level, and heavily shared.** The ration box is 86 draws on one
+  `v8=(-0.719,-0.769)`, the weapon box 53 on `(0.719,-0.769)`, the top-left cluster 123 on
+  `(-0.881,0.883)`, the camo meter on `(0.733,0.622)` — all matching the visible HUD layout.
+  So the spread does move static widgets: their shared anchor is the widget's, not the canvas's.
+- **But satellite anchors exist inside widgets.** The ammo tick row is a run of individual
+  anchors at `(0.551..0.736, -0.778)` in ~0.0084 NDC steps, marching across the weapon box.
+
+The satellite finding rules out a *pure linear* `v8.x` spread: it scales the tick row's span by
+the spread factor while the box keeps its unstretched width — misalignment inside a single
+widget, ~120px at 21:9. The design that survives is a **clustered spread**: derive the spread
+delta once per anchor cluster and *translate* satellites by their cluster's delta instead of
+scaling each anchor independently. Draw order makes clustering cheap — satellites arrive as
+consecutive draws ~0.008 apart while distinct widgets sit 0.2+ apart, so an epsilon-chain over
+consecutive `v8` values groups them. The reticle is a one-quad cluster at centre with delta
+zero, and a floating marker is its own cluster, spread to its correct full-width position.
 
 ## Open questions, in the order worth answering
 
-1. **Distinct `v8` anchors per frame** — a few canvas-level anchors, or one per widget? Fix the
-   `ANCHOR` sampler (it logged nothing despite its hooks installing) and count. Decides whether
-   the two-layer design above survives contact.
+1. **Prototype the two layers** — the converter hook (centered logical range) first, verified at
+   21:9 by screenshot; then the clustered `v8` spread on the UI draw paths. Each layer is
+   independently testable, and layer 1 alone should reproduce mgs4Ultra120's visual result.
 2. **Confirm or exclude squash vs Vert- for the 3D** (baseline finding 2), then find where the
    projection is built and whether window dimensions reach it.
 3. **Does WR-001 reproduce?** Set 4:3, capture the HUD, compare against 16:9. The measured
