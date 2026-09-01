@@ -346,15 +346,24 @@ stream chunks (slots 1/2/4/5, strides 0xC vertex / 0x10 float4). So `+68A410` is
 **draw-batch builder**, one level below identity: element names live above it, in the la2
 object/layer evaluation that fills the vertex arrays and the `+23C7xxxx` tables it reads.
 
-Remaining steps, revised with the LA2 knowledge:
+**The la2 census ran** (`Log LA2 Loads` — our own hook on the game's archive read, byte
+signature from cipherxof's MGS4-ModLoader (MIT), header parsing per the 010 template; log in
+`C:\mgspf_tools\ar_la2\run.log`): **176 distinct `.la2` files** in one boot-to-aim, all
+version 1.9 **big-endian** (the PS3 data verbatim — the template applies unchanged), each
+header parsed live with its layer table. Most files carry **4 objects — single-widget files**
+— with a few large composites (117 and 42 objects, the main HUD assemblies). **File identity
+is approximately widget identity.**
 
-1. **Find the la2 evaluator.** Two independent entry routes: the contact's mod-loader asset
-   log names which `.la2` files load per screen (file-level identity for free), and the
-   engine's handlers for `LA_SetXY` / `LA_DispOnLayer` (searchable by the status-packet
-   opcodes, or by write-watching one of the `+23C7xxxx` element tables the batch builder
-   reads) are the true static producer with object/layer/strcode identity in hand.
-2. **Patch there, with names** — per-object or per-layer placement for static widgets;
-   aspect-aware projection math for the dynamic path.
+Remaining steps, converged:
+
+1. **Map layout objects to la2 files.** Both events happen at load and both are hooked — the
+   archive read (path + buffer) and the converter (`+439810`, object pointer, one call per
+   object at creation). Correlate by order/timing, or trace the buffer pointer into object
+   creation. Result: every runtime layout object labeled with its file strcode.
+2. **Per-object placement in the converter hook** — bias each object's logical range by its
+   file's assigned treatment: corner-shift for widget files, centered for menus, untouched
+   (or aspect-corrected projection) for the world-tracking files. Rigid whole-widget
+   translation, no per-quad classification anywhere.
 3. **Delete the upload-time spread** once the above works.
 
 ## Remaining work, in the order worth doing
