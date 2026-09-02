@@ -553,15 +553,29 @@ can show real widget artwork.
   - *rect emitter* (`rectlog`) — carries only fullscreen scissor/viewport rects
     (`0,0 3840x1620` and the 2× internal-res `7680x3240`), no widget rects. Not the
     box chrome.
-- **Fix:** none yet. Two candidate designs remain: (a) draw-time — shift the box's quads
-  in the per-quad anchor path (the upload-helper pool, where wheel state is implicit in
-  which anchor value is present that frame); the retracted zone-gated `SpreadPool` is
-  most of this code and its whitelist would naturally exclude a box whose anchor has
-  moved to the wheel junction. Next experiment to validate it: a lab command that dumps
-  the live pool's 96-byte anchor blocks with a state label, to confirm the box's pool
-  anchor leaves the corner zone when the wheel opens. (b) find the engine's wheel-open
-  flag plus an engine-driven write moment — also what AR-006 wanted. The equipped-content
-  problem is unsolved under both and may need reading the equipped-weapon id.
+- **Fix: design (a), built and verified live the same night — the wheel-aware draw-time
+  spread (`Aspect Pool Spread=1` with `Fix UI Aspect Corners=0`).** The pooldump
+  experiment measured the wheel's own signature in the instance pool: a column of slot
+  anchors at exactly the box x (|normX| = 0.719) above the box band and a row at the box
+  y (-0.769) stepping across at pitch 0.3595, present only while the wheel is held; the
+  box's cluster (ammo ticks at -0.7785) present only while it is closed. `SpreadPool`
+  now reads that state per frame (`DetectPoolState`) and moves an open wheel's whole
+  cross with its box, so the wheel arrives at the corner rigid — verified at 3840x1620
+  on the Act 4 save: weapon wheel rigid at the right corner (`ps3_wpn.png`), item wheel
+  rigid at the left (`ps2_itm.png`, after widening the bands: a full-inventory row runs
+  from the junction past centre to the far side, safe to claim wholesale because the
+  game hides the opposite box while a wheel is up), pause menu whole and centered
+  (`ps3_menu.png`, via the near-edge menu signature standing the spread down), and the
+  gameplay HUD's four corners pinned (`ps2_closed.png`).
+  What the draw-time form solves by construction, that conversion-time could not:
+  - **equipped content** — the pool carries whichever weapon/item is equipped at the box
+    anchor, so the zone shift moves panel and content wholesale; no per-weapon file
+    table exists at this level
+  - **AR-007** — stateless per frame, nothing to veto across a reload
+  - **world decompression** — the Solid Eye ramp rides along again
+  - possibly **AR-004** — the expanded radar captured at the corner with the bullseye on
+    the ring; needs the user's eyes
+  All four captures pending the user's confirmation, per protocol.
 
 ### AR-004 — the objective bullseye leaves the radar in expanded mode
 
