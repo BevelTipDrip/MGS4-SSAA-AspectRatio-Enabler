@@ -417,16 +417,18 @@ namespace AspectRatio
     constexpr float kWheelAxisX = 0.719f;
     constexpr float kWheelRowY = -0.769f;
 
-    struct WheelState
+    struct PoolState
     {
         bool weaponOpen;   // right-side wheel (column at +0.719)
         bool itemOpen;     // left-side wheel (column at -0.719)
+        bool menuOpen;     // fullscreen menu (rails and sidebars carpeting the near-edge band)
     };
 
-    WheelState DetectWheels(const uint8_t* pool, size_t usable, float factor)
+    PoolState DetectPoolState(const uint8_t* pool, size_t usable, float factor)
     {
         int right = 0;
         int left = 0;
+        int nearEdge = 0;
         size_t offset = 0;
         bool inRun = false;
         while (offset + kAnchorBlockSize <= usable)
@@ -447,9 +449,16 @@ namespace AspectRatio
                 if (std::fabs(normX - kWheelAxisX) < 0.02f) { right++; }
                 if (std::fabs(normX + kWheelAxisX) < 0.02f) { left++; }
             }
+            // The near-edge band: normalized past every gameplay widget but short of the
+            // raw +-1 fullscreen layers. Gameplay produces the odd world label here; the
+            // pause menu's frame rails, side text and borders carpet it.
+            if (std::fabs(v8[0]) < 0.999f && std::fabs(normX) > 0.90f)
+            {
+                nearEdge++;
+            }
             offset += kAnchorBlockSize;
         }
-        return { right >= 3, left >= 3 };
+        return { right >= 3, left >= 3, nearEdge >= 4 };
     }
 
     // Whether an anchor belongs to the open wheel's cross (side +1 = weapon wheel bottom-
@@ -491,7 +500,18 @@ namespace AspectRatio
         const float shift = 1.0f - canvasEdge;
         uint32_t touched = 0;
 
-        const WheelState wheels = DetectWheels(pool, usable, factor);
+        const PoolState wheels = DetectPoolState(pool, usable, factor);
+
+        // A fullscreen menu is screen-space UI through and through - the user's stated
+        // preference is centered ("letterboxed") menus - and the game draws no world
+        // labels beneath it, so the right treatment for a menu frame is no treatment:
+        // the layer-1 centered canvas, untouched. Without this the world-decompression
+        // ramp spreads the menu's own panels back out to full width and tears its frame
+        // (ps2_menu.png).
+        if (wheels.menuOpen)
+        {
+            return;
+        }
 
         size_t offset = 0;
         bool inRun = false;
