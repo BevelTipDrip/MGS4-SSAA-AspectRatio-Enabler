@@ -454,16 +454,19 @@ namespace AspectRatio
 
     // Whether an anchor belongs to the open wheel's cross (side +1 = weapon wheel bottom-
     // right, -1 = item wheel bottom-left), in normalized 16:9 coordinates. Deliberately
-    // generous: the row band reaches past centre because the far slot sits at x=0 with a
-    // satellite label slightly beyond it, and the column band is widened for the slot
-    // adornments (SUP/light icons, CQC tags) hanging off the column slots. Wheel-open
-    // frames are transient, so a world element passing through these bands is displaced
-    // only while the player is actively holding the selector.
+    // generous, and measured the hard way: with a full inventory the row runs from the
+    // junction *past centre to the far side* (a five-item row reaches x = +0.72 on the
+    // item wheel), so while a wheel is open the whole bottom band is the wheel's - safe
+    // because the game hides the opposite corner box while either selector is up
+    // (ps_itm.png). The column likewise climbs to +0.8 with a tall inventory, and slot
+    // adornments (SUP/light icons, CQC tags, mode labels) hang off it. Wheel-open frames
+    // are transient, so a world element passing through these bands is displaced only
+    // while the player is actively holding the selector.
     bool WheelMember(float normX, float y, int side)
     {
         const float x = normX * side;
-        const bool row = y > -0.87f && y < -0.58f && x > -0.21f && x < 0.86f;
-        const bool column = y >= -0.58f && y < 0.35f && x > 0.48f && x < 0.86f;
+        const bool row = y > -0.87f && y < -0.58f && x > -0.88f && x < 0.88f;
+        const bool column = y >= -0.58f && y < 0.88f && x > 0.48f && x < 0.88f;
         return row || column;
     }
 
