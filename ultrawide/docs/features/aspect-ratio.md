@@ -476,7 +476,16 @@ can show real widget artwork.
   four corners pinned, and a weapon-selector capture in the same boot shows the
   selector untouched. The 00DE6517 all-occurrence entry (whose ten anchored copies
   were themselves dragging selector slots) is dropped: the whole bottom-right widget
-  measurably moves with 0059FFD5 + 00CD1BC3 alone
+  measurably moves with 0059FFD5 + 00CD1BC3 alone.
+  **Amended same day, after testing on a real save (Act 4, full loadout): only the
+  panel half of this fix survives.** 00CD1BC3 and 002506A9 are not generic "weapon/
+  ration content" files - every weapon and item has its own la2, created lazily on
+  first display (a dozen new strcodes appeared in the registry the first time the item
+  wheel opened), and those two are merely the AK-102's and the ration's, which happened
+  to be the loadout on the test stage. On the real save the 002506A9 entry anchored the
+  RATION label at its wheel-born first conversion and dragged it onto the CIGS slot
+  (AR-008). The content entries must come out of the table; context discrimination for
+  box content is unsolved
 
 ### AR-006 — the runtime anchoring build crashed twice in play
 
@@ -495,6 +504,46 @@ can show real widget artwork.
   mappings post-creation) instead of an asynchronous thread. Moot for the corner feature
   since the AR-005 fix landed at conversion time — on the converter's own thread, inside
   the hook — so the runtime path stays a lab switch with no shipping role
+
+### AR-007 — a death/continue reload leaves the bottom boxes unanchored
+
+- **Status:** Active
+- **Evidence:** Measured — anchor log 2026-09-01 20:31:21 plus a post-respawn capture
+  (`respawn_poll.png`): tops anchored, Solid Eye box at the centered position
+- **Affects:** `Fix UI Aspect Corners=1`, after Mission Failed -> Continue
+- **Repro:** die, Continue; the reconverted panel pair logs "later instance left centered"
+- **Cause:** the pre-death pair still passes `KnownObjectStillValid` when the new pair
+  converts (its page intact, strcode and engine pointers unchanged), so the dead first
+  instance vetoes the live one. Identity-checking earlier instances is not enough across
+  a reload where the old heap is not yet reused
+- **Fix:** none yet. Needs real lifetime tracking — hooking object destruction, or
+  invalidating the registry on stage transition
+
+### AR-008 — the selector wheel is torn by corner anchoring; content is per-weapon files
+
+- **Status:** Active — this is the corner feature's real remaining problem
+- **Evidence:** Measured + Observed, lab session on the user's Act 4 save, 2026-09-01
+  (`fixon_wpn.png`, `fixon_itm.png`, unfixed references `ref_wpn_*.png`/`ref_itm_*.png`)
+- **Evidence detail, in order of discovery:**
+  - the quick-select wheel is a rigid cross that *grows out of the corner box*: the
+    selected slot IS the HUD weapon/ration box (same panel pair). On 16:9 they coincide;
+    with the box anchored at the true corner the cross stays centered and the selected
+    slot tears out of it
+  - every weapon and item has its own content la2 (icon+name+count), created lazily at
+    first display; a dozen new strcodes appeared the first time the item wheel opened.
+    "00CD1BC3 = weapon content, 002506A9 = ration content" was a loadout artifact
+  - the wheel's slot backings and icons follow **no** la2 logical range: biasing every
+    multi-instance strcode in the registry (14 files, ±213 and vertical) moved labels
+    like NONE/RATION but never the cross chrome — the wheel positions its quads
+    programmatically at draw time (the per-quad NDC anchor path in the transport map)
+  - wheel objects are created on *first* open and persist across opens (one conversion
+    burst across five opens), so conversion-time logic cannot track open/close state
+- **Cause:** conversion-time anchoring is static; the box's correct position is dynamic
+  (corner in gameplay, wheel junction while the wheel is open)
+- **Fix:** none yet. Two candidate designs: (a) draw-time — shift the box's quads in the
+  per-quad anchor path, where wheel state is implicit in what is being drawn; (b) find
+  the engine's wheel-open flag plus an engine-driven write moment and re-aim the
+  conversion writes from there. (b) is also what AR-006 wanted
 
 ### AR-004 — the objective bullseye leaves the radar in expanded mode
 
