@@ -539,11 +539,29 @@ can show real widget artwork.
   - wheel objects are created on *first* open and persist across opens (one conversion
     burst across five opens), so conversion-time logic cannot track open/close state
 - **Cause:** conversion-time anchoring is static; the box's correct position is dynamic
-  (corner in gameplay, wheel junction while the wheel is open)
-- **Fix:** none yet. Two candidate designs: (a) draw-time — shift the box's quads in the
-  per-quad anchor path, where wheel state is implicit in what is being drawn; (b) find
-  the engine's wheel-open flag plus an engine-driven write moment and re-aim the
-  conversion writes from there. (b) is also what AR-006 wanted
+  in *two* independent ways — corner in gameplay vs wheel-junction while selecting, AND
+  the content is the currently-equipped weapon/item's own la2, which changes as you
+  cycle. Both the panel and its content have to move together and only in gameplay.
+- **Control-point search (2026-09-01, barrel save), all negative so far:**
+  - *engine per-state anchor* — a memory diff of the descriptor region across closed/
+    weapon-open/item-open states (tools `memsnap.ps1`/`snapdiff.ps1`) found exactly one
+    state-correlated float pair at `+23C74930`: NDC `(-0.539,-0.911)` closed →
+    `(0.270,-0.769)` on weapon-wheel-open, item-wheel leaves it. But writing it with
+    `memwrite.ps1` moved nothing — the engine recomputes it every frame, so it is a
+    **state indicator, not a control input**; and its closed value is bottom-*left*, so
+    it tracks the selection cursor, not the bottom-right box.
+  - *rect emitter* (`rectlog`) — carries only fullscreen scissor/viewport rects
+    (`0,0 3840x1620` and the 2× internal-res `7680x3240`), no widget rects. Not the
+    box chrome.
+- **Fix:** none yet. Two candidate designs remain: (a) draw-time — shift the box's quads
+  in the per-quad anchor path (the upload-helper pool, where wheel state is implicit in
+  which anchor value is present that frame); the retracted zone-gated `SpreadPool` is
+  most of this code and its whitelist would naturally exclude a box whose anchor has
+  moved to the wheel junction. Next experiment to validate it: a lab command that dumps
+  the live pool's 96-byte anchor blocks with a state label, to confirm the box's pool
+  anchor leaves the corner zone when the wheel opens. (b) find the engine's wheel-open
+  flag plus an engine-driven write moment — also what AR-006 wanted. The equipped-content
+  problem is unsolved under both and may need reading the equipped-weapon id.
 
 ### AR-004 — the objective bullseye leaves the radar in expanded mode
 
