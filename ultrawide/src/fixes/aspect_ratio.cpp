@@ -900,7 +900,10 @@ namespace AspectRatio
     constexpr uintptr_t kRvaProducerOuter = 0xBAFC0;
     SafetyHookMid ProducerWrapper_hook {};
     SafetyHookMid ProducerOuter_hook {};
-    std::atomic<int> g_ProducerProbeBudget { 0 };
+    // Per-site budgets: the wrapper fires far more often than the outer frame, and a
+    // shared budget drained entirely at the wrapper before the outer ever logged.
+    std::atomic<int> g_ProbeBudgetWrapper { 0 };
+    std::atomic<int> g_ProbeBudgetOuter { 0 };
 
     // Whether an arbitrary pointer is a live layout object. The engine-pointer pair is
     // the discriminator; the strcode is payload. Reads are guarded the same way the
@@ -936,14 +939,14 @@ namespace AspectRatio
         return true;
     }
 
+    // Whether a value is plausibly a heap pointer worth dereferencing.
+    bool PlausibleHeapPointer(uintptr_t value)
+    {
+        return value > 0x10000 && value < 0x7FFFFFFFFFFF && (value & 0x7) == 0;
+    }
+
     void ProbeProducerSite(const char* site, const SafetyHookContext& ctx)
     {
-        if (g_ProducerProbeBudget.fetch_sub(1) <= 0)
-        {
-            g_ProducerProbeBudget.store(0);
-            return;
-        }
-
         struct Candidate { const char* name; uintptr_t value; };
         const Candidate registers[] = {
             { "rcx", ctx.rcx }, { "rdx", ctx.rdx }, { "r8", ctx.r8 }, { "r9", ctx.r9 },
@@ -952,15 +955,45 @@ namespace AspectRatio
             { "r14", ctx.r14 }, { "r15", ctx.r15 },
         };
 
+        uintptr_t returnAddress = 0;
+        std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const uintptr_t retRva = (returnAddress >= base) ? returnAddress - base : returnAddress;
+
         bool found = false;
         for (const auto& reg : registers)
         {
             uint32_t strcode = 0;
             if (LooksLikeLayoutObject(reg.value, &strcode))
             {
-                spdlog::info("MGS4: producer probe [{}]: {} = obj {:X} la2 {:08X} (args rcx={:X} rdx={:X})",
-                    site, reg.name, reg.value, strcode, ctx.rcx, ctx.rdx);
+                spdlog::info("MGS4: producer probe [{}]: {} = obj {:X} la2 {:08X} ret=+{:X}",
+                    site, reg.name, reg.value, strcode, retRva);
                 found = true;
+                continue;
+            }
+            // One level of indirection: a register may hold the element record whose
+            // fields include the owning object (the wrapper's r9 carries such a pointer).
+            if (!PlausibleHeapPointer(reg.value))
+            {
+                continue;
+            }
+            MEMORY_BASIC_INFORMATION info {};
+            if (!VirtualQuery(reinterpret_cast<void*>(reg.value), &info, sizeof(info))
+                || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            {
+                continue;
+            }
+            const auto regionEnd = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+            for (int field = 0; field < 12 && reg.value + field * 8 + 8 <= regionEnd; field++)
+            {
+                uintptr_t inner = 0;
+                std::memcpy(&inner, reinterpret_cast<const void*>(reg.value + field * 8), sizeof(inner));
+                if (LooksLikeLayoutObject(inner, &strcode))
+                {
+                    spdlog::info("MGS4: producer probe [{}]: [{}+{:X}] = obj {:X} la2 {:08X} ret=+{:X}",
+                        site, reg.name, field * 8, inner, strcode, retRva);
+                    found = true;
+                }
             }
         }
 
@@ -974,28 +1007,30 @@ namespace AspectRatio
             uint32_t strcode = 0;
             if (LooksLikeLayoutObject(value, &strcode))
             {
-                spdlog::info("MGS4: producer probe [{}]: rsp+{:X} = obj {:X} la2 {:08X}",
-                    site, slot * 8, value, strcode);
+                spdlog::info("MGS4: producer probe [{}]: rsp+{:X} = obj {:X} la2 {:08X} ret=+{:X}",
+                    site, slot * 8, value, strcode, retRva);
                 found = true;
             }
         }
 
         if (!found)
         {
-            spdlog::info("MGS4: producer probe [{}]: no object in frame (rcx={:X} rdx={:X} r8={:X} r9={:X})",
-                site, ctx.rcx, ctx.rdx, ctx.r8, ctx.r9);
+            spdlog::info("MGS4: producer probe [{}]: no object (rcx={:X} rdx={:X} r8={:X} r9={:X} ret=+{:X})",
+                site, ctx.rcx, ctx.rdx, ctx.r8, ctx.r9, retRva);
         }
     }
 
     void ProducerWrapperProbe(SafetyHookContext& ctx)
     {
-        if (g_ProducerProbeBudget.load(std::memory_order_relaxed) <= 0) { return; }
+        if (g_ProbeBudgetWrapper.load(std::memory_order_relaxed) <= 0) { return; }
+        if (g_ProbeBudgetWrapper.fetch_sub(1) <= 0) { g_ProbeBudgetWrapper.store(0); return; }
         ProbeProducerSite("wrapper+666470", ctx);
     }
 
     void ProducerOuterProbe(SafetyHookContext& ctx)
     {
-        if (g_ProducerProbeBudget.load(std::memory_order_relaxed) <= 0) { return; }
+        if (g_ProbeBudgetOuter.load(std::memory_order_relaxed) <= 0) { return; }
+        if (g_ProbeBudgetOuter.fetch_sub(1) <= 0) { g_ProbeBudgetOuter.store(0); return; }
         ProbeProducerSite("outer+BAFC0", ctx);
     }
 
@@ -1603,8 +1638,9 @@ namespace AspectRatio
                         }
                         else if (std::strncmp(line, "producer", 8) == 0)
                         {
-                            g_ProducerProbeBudget.store(120);
-                            spdlog::info("MGS4: live lab: producer probe armed.");
+                            g_ProbeBudgetWrapper.store(60);
+                            g_ProbeBudgetOuter.store(60);
+                            spdlog::info("MGS4: live lab: producer probe armed (60 per site).");
                         }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
