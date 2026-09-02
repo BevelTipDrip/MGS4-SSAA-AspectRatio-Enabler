@@ -464,8 +464,19 @@ can show real widget artwork.
   strcodes (00CD1BC3 / 002506A9). The same content renders in the full menu, the quick
   selector, and the selector highlight; those copies get dragged to the HUD corner. The
   strcode names the asset, not the context
-- **Fix:** none yet. Requires instance-context discrimination — identifying which copy is
-  the HUD's — before the runtime anchoring can ship
+- **Fix:** solved 2026-09-01, at conversion time rather than runtime. Per-instance live
+  bias probes (lab session, `bias <index> 0 -300` on every registered instance) showed
+  the panel files are instantiated ten times at once and only the *first-created* pair
+  moves the visible HUD panels; the nine later pairs and every later content copy back
+  the selectors and menus. The corner table now carries a `firstInstance` flag: anchor
+  the first live object of the strcode, leave every later copy centered. Earlier
+  instances are identity-checked (`KnownObjectStillValid`) rather than counted, so a
+  stage reload's dead entries cannot veto the new HUD copy. Verified at 3840x1620:
+  boot log shows one anchor + nine declines per panel file, gameplay capture has all
+  four corners pinned, and a weapon-selector capture in the same boot shows the
+  selector untouched. The 00DE6517 all-occurrence entry (whose ten anchored copies
+  were themselves dragging selector slots) is dropped: the whole bottom-right widget
+  measurably moves with 0059FFD5 + 00CD1BC3 alone
 
 ### AR-006 — the runtime anchoring build crashed twice in play
 
@@ -481,7 +492,9 @@ can show real widget artwork.
   fundamentally racy with the engine's own lifetime management
 - **Fix:** none at this approach's level. The eventual fix likely moves the write into an
   engine-driven callsite (the converter re-run, or whatever rewrites these objects'
-  mappings post-creation) instead of an asynchronous thread
+  mappings post-creation) instead of an asynchronous thread. Moot for the corner feature
+  since the AR-005 fix landed at conversion time — on the converter's own thread, inside
+  the hook — so the runtime path stays a lab switch with no shipping role
 
 ### AR-004 — the objective bullseye leaves the radar in expanded mode
 
