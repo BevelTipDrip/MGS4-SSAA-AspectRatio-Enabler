@@ -530,6 +530,12 @@ namespace AspectRatio
     std::mutex g_PoolCacheMutex;
     std::vector<PoolVerdict> g_PoolCache;
 
+    // One-shot dump of every anchor block in the live instance pool, armed by the live
+    // command "pooldump". The AR-008 state experiment: dump with the wheel closed, dump
+    // with it held open, and the box's anchor either moves out of the corner zone (the
+    // zone-gated draw-time spread works) or it does not (it cannot).
+    std::atomic<int> g_PoolDumpBudget { 0 };
+
     uint32_t ScanForAnchors(const uint8_t* buffer, size_t bytes, size_t* firstOffset, float* sampleV8)
     {
         uint32_t hits = 0;
@@ -618,6 +624,15 @@ namespace AspectRatio
 
     void UploadHelperProbe(SafetyHookContext& ctx)
     {
+        // The helper is one of the game's hottest paths (every buffer upload). The hook
+        // now installs unconditionally so the lab can arm diagnostics mid-session, so the
+        // probe must cost one flag check when nothing is armed.
+        if (!ResolutionScalingFixes::bWatchAnchorProducers && !bAspectTestLadder
+            && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0)
+        {
+            return;
+        }
+
         uintptr_t returnAddress = 0;
         std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
         const auto base = reinterpret_cast<uintptr_t>(baseModule);
@@ -726,9 +741,43 @@ namespace AspectRatio
             }
         }
 
+        // One-shot pool dump: every anchor block's v8, raw and normalized, in draw order.
+        // Only the instance pool (the caller the working milestone spread) is dumped, and
+        // the budget is consumed by the dump so one command yields one frame's snapshot.
+        if (spread && g_PoolDumpBudget.load() > 0
+            && g_PoolDumpBudget.exchange(0) > 0)
+        {
+            const float factor = HorizontalSpreadFactor();
+            uint8_t* pool = reinterpret_cast<uint8_t*>(source);
+            const size_t bytes = (std::min<uint64_t>)(ctx.r9, 1u << 20);
+            spdlog::info("MGS4: pooldump: begin pool={:X} size={} factor={:.4f}", source, ctx.r9, factor);
+            int logged = 0;
+            size_t offset = 0;
+            bool inRun = false;
+            while (offset + kAnchorBlockSize <= bytes && logged < 600)
+            {
+                const bool strict = PlausibleAnchorBlock(pool + offset);
+                if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
+                {
+                    inRun = false;
+                    offset += 16;
+                    continue;
+                }
+                inRun = true;
+                float v8[2] {};
+                std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+                spdlog::info("MGS4: pooldump: +{:05X} v8=({:.5f},{:.5f}) norm=({:.5f},{:.5f}){}",
+                    offset, v8[0], v8[1], v8[0] * factor, v8[1],
+                    strict ? "" : " r");
+                logged++;
+                offset += kAnchorBlockSize;
+            }
+            spdlog::info("MGS4: pooldump: end, {} blocks.", logged);
+        }
+
         // The pool spread that used to live here is gone: corner anchoring now happens
         // per-object in the layout converter, keyed on each object's la2 strcode. This hook
-        // remains solely as the mount point for the producer-watch diagnostic above.
+        // remains solely as the mount point for the diagnostics above.
     }
 
     // ---- channel census -------------------------------------------------------------------
@@ -1318,6 +1367,11 @@ namespace AspectRatio
                             g_RectLogBudget.store(400);
                             spdlog::info("MGS4: live lab: rect logging armed.");
                         }
+                        else if (std::strncmp(line, "pooldump", 8) == 0)
+                        {
+                            g_PoolDumpBudget.store(1);
+                            spdlog::info("MGS4: live lab: pool dump armed.");
+                        }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
                             for (size_t i = 0; i < g_Objects.size(); i++)
@@ -1408,13 +1462,10 @@ namespace AspectRatio
     void ApplyCornerSpread()
     {
         // Corner anchoring itself needs no hook of its own any more - it rides the layout
-        // converter above. The upload-helper mid hook serves the producer-watch and
-        // ladder-pool diagnostics.
-        if (!ResolutionScalingFixes::bWatchAnchorProducers && !bAspectTestLadder)
-        {
-            return;
-        }
-
+        // converter above. The upload-helper mid hook serves the producer-watch,
+        // ladder-pool and pooldump diagnostics; it installs unconditionally so the live
+        // lab can arm them mid-session, and the probe self-gates to a flag check when
+        // nothing is armed.
         UploadHelper_hook = safetyhook::create_mid(
             reinterpret_cast<uint8_t*>(baseModule) + kRvaUploadHelper, UploadHelperProbe);
         LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect producer watch")
