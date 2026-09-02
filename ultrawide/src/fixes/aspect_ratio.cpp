@@ -884,6 +884,131 @@ namespace AspectRatio
         // remains solely as the mount point for the diagnostics above.
     }
 
+    // ---- producer attribution probe --------------------------------------------------------
+    //
+    // The identity experiment the per-object plan needs (methodology set by the user,
+    // 2026-09-01): at the moment an anchor is composed into the pool, some frame in the
+    // producer call chain must hold the layout object being evaluated - and a layout
+    // object self-identifies (strcode at +0x1C, the two engine pointers at +0x20/+0x28).
+    // The write-watch mapped the chain precisely: memcpy <- +68A938 <- +666485 <- +666729
+    // <- +BAFDF <- +BE330, with +666470 a thin wrapper entry and +BAFC0 a function entry.
+    // This probe sits on those two entries and, while armed (live command "producer"),
+    // scans every GP register and the top of the stack for pointers that validate as
+    // layout objects, logging (site, location, object, strcode). If the object is
+    // recoverable here, per-object positioning replaces every positional heuristic.
+    constexpr uintptr_t kRvaProducerWrapper = 0x666470;
+    constexpr uintptr_t kRvaProducerOuter = 0xBAFC0;
+    SafetyHookMid ProducerWrapper_hook {};
+    SafetyHookMid ProducerOuter_hook {};
+    std::atomic<int> g_ProducerProbeBudget { 0 };
+
+    // Whether an arbitrary pointer is a live layout object. The engine-pointer pair is
+    // the discriminator; the strcode is payload. Reads are guarded the same way the
+    // registry validation is.
+    bool LooksLikeLayoutObject(uintptr_t candidate, uint32_t* strcodeOut)
+    {
+        if (candidate < 0x10000 || (candidate & 0x7))
+        {
+            return false;
+        }
+        MEMORY_BASIC_INFORMATION info {};
+        if (!VirtualQuery(reinterpret_cast<void*>(candidate), &info, sizeof(info))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+            || !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+        {
+            return false;
+        }
+        const auto regionEnd = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+        if (candidate + 0x30 > regionEnd)
+        {
+            return false;
+        }
+        uintptr_t engineA = 0;
+        uintptr_t engineB = 0;
+        std::memcpy(&engineA, reinterpret_cast<const void*>(candidate + 0x20), sizeof(engineA));
+        std::memcpy(&engineB, reinterpret_cast<const void*>(candidate + 0x28), sizeof(engineB));
+        const auto moduleBase = reinterpret_cast<uintptr_t>(baseModule);
+        if (engineA != moduleBase + 0x437150 || engineB != moduleBase + 0x437110)
+        {
+            return false;
+        }
+        std::memcpy(strcodeOut, reinterpret_cast<const void*>(candidate + 0x1C), sizeof(*strcodeOut));
+        return true;
+    }
+
+    void ProbeProducerSite(const char* site, const SafetyHookContext& ctx)
+    {
+        if (g_ProducerProbeBudget.fetch_sub(1) <= 0)
+        {
+            g_ProducerProbeBudget.store(0);
+            return;
+        }
+
+        struct Candidate { const char* name; uintptr_t value; };
+        const Candidate registers[] = {
+            { "rcx", ctx.rcx }, { "rdx", ctx.rdx }, { "r8", ctx.r8 }, { "r9", ctx.r9 },
+            { "rbx", ctx.rbx }, { "rbp", ctx.rbp }, { "rsi", ctx.rsi }, { "rdi", ctx.rdi },
+            { "r10", ctx.r10 }, { "r11", ctx.r11 }, { "r12", ctx.r12 }, { "r13", ctx.r13 },
+            { "r14", ctx.r14 }, { "r15", ctx.r15 },
+        };
+
+        bool found = false;
+        for (const auto& reg : registers)
+        {
+            uint32_t strcode = 0;
+            if (LooksLikeLayoutObject(reg.value, &strcode))
+            {
+                spdlog::info("MGS4: producer probe [{}]: {} = obj {:X} la2 {:08X} (args rcx={:X} rdx={:X})",
+                    site, reg.name, reg.value, strcode, ctx.rcx, ctx.rdx);
+                found = true;
+            }
+        }
+
+        // The top of the caller's stack: spill slots and stack arguments. 16 qwords is
+        // deliberately shallow - a deep walk finds stale objects from earlier frames and
+        // muddies the attribution.
+        for (int slot = 0; slot < 16; slot++)
+        {
+            uintptr_t value = 0;
+            std::memcpy(&value, reinterpret_cast<const void*>(ctx.rsp + slot * 8), sizeof(value));
+            uint32_t strcode = 0;
+            if (LooksLikeLayoutObject(value, &strcode))
+            {
+                spdlog::info("MGS4: producer probe [{}]: rsp+{:X} = obj {:X} la2 {:08X}",
+                    site, slot * 8, value, strcode);
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            spdlog::info("MGS4: producer probe [{}]: no object in frame (rcx={:X} rdx={:X} r8={:X} r9={:X})",
+                site, ctx.rcx, ctx.rdx, ctx.r8, ctx.r9);
+        }
+    }
+
+    void ProducerWrapperProbe(SafetyHookContext& ctx)
+    {
+        if (g_ProducerProbeBudget.load(std::memory_order_relaxed) <= 0) { return; }
+        ProbeProducerSite("wrapper+666470", ctx);
+    }
+
+    void ProducerOuterProbe(SafetyHookContext& ctx)
+    {
+        if (g_ProducerProbeBudget.load(std::memory_order_relaxed) <= 0) { return; }
+        ProbeProducerSite("outer+BAFC0", ctx);
+    }
+
+    void InstallProducerProbe()
+    {
+        ProducerWrapper_hook = safetyhook::create_mid(
+            reinterpret_cast<uint8_t*>(baseModule) + kRvaProducerWrapper, ProducerWrapperProbe);
+        LOG_HOOK(ProducerWrapper_hook, "MGS4: producer probe (wrapper)")
+        ProducerOuter_hook = safetyhook::create_mid(
+            reinterpret_cast<uint8_t*>(baseModule) + kRvaProducerOuter, ProducerOuterProbe);
+        LOG_HOOK(ProducerOuter_hook, "MGS4: producer probe (outer)")
+    }
+
     // ---- channel census -------------------------------------------------------------------
     //
     // The payload assembler at +68A410 iterates the UI's channel bitmask and emits each
@@ -1476,6 +1601,11 @@ namespace AspectRatio
                             g_PoolDumpBudget.store(1);
                             spdlog::info("MGS4: live lab: pool dump armed.");
                         }
+                        else if (std::strncmp(line, "producer", 8) == 0)
+                        {
+                            g_ProducerProbeBudget.store(120);
+                            spdlog::info("MGS4: live lab: producer probe armed.");
+                        }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
                             for (size_t i = 0; i < g_Objects.size(); i++)
@@ -1619,6 +1749,7 @@ namespace AspectRatio
             }
             StartLiveAnchorLab();
             InstallRectEmitLogging();
+            InstallProducerProbe();
         }
     }
 }
