@@ -45,6 +45,13 @@ namespace AspectRatio
     // crashed in play. A lab/experiment switch until context discrimination is solved.
     inline bool bAspectRuntimeAnchoring = false;
 
+    // Draw-time corner anchoring: shift widget anchors in the per-frame instance pool at
+    // upload, with wheel-state awareness read from the pool itself (AR-008) - an open
+    // selector's whole cross moves with its box so the wheel stays rigid. Also restores
+    // the world-tracked decompression (Solid Eye labels). Experimental; intended to be
+    // run with Fix UI Aspect Corners=0 so the conversion-time table does not double-shift.
+    inline bool bAspectPoolSpread = false;
+
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
     // maps every visible widget to its host object by measured shift.
     inline bool bAspectTestLadder = false;

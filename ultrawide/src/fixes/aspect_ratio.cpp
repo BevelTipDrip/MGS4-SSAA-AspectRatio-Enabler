@@ -406,6 +406,67 @@ namespace AspectRatio
     // preserves each widget's *pixel* distance from the screen edge exactly as it is on a
     // 16:9 output. Corners land at their 16:9 margins; everything inside a widget stays
     // pixel-rigid; the reticle and its dots sit in the dead zone and never move.
+    // The selector-wheel signature, measured with pooldump on a live save (2026-09-01,
+    // AR-008): the wheel is a cross of slot anchors rooted at the box position - a column
+    // at exactly the box x (|normX| = 0.719) climbing above the box band in slot steps,
+    // and a row at exactly the box y (-0.769) stepping toward centre at pitch 0.3595.
+    // The box's own cluster (ammo ticks at y=-0.7785, parts at -0.67) appears only while
+    // the wheel is closed; the cross only while it is held open. So the pool itself says
+    // whether a wheel is open, per frame, with no engine flag: three or more column
+    // anchors above the box band is a wheel.
+    constexpr float kWheelAxisX = 0.719f;
+    constexpr float kWheelRowY = -0.769f;
+
+    struct WheelState
+    {
+        bool weaponOpen;   // right-side wheel (column at +0.719)
+        bool itemOpen;     // left-side wheel (column at -0.719)
+    };
+
+    WheelState DetectWheels(const uint8_t* pool, size_t usable, float factor)
+    {
+        int right = 0;
+        int left = 0;
+        size_t offset = 0;
+        bool inRun = false;
+        while (offset + kAnchorBlockSize <= usable)
+        {
+            const bool strict = PlausibleAnchorBlock(pool + offset);
+            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
+            {
+                inRun = false;
+                offset += 16;
+                continue;
+            }
+            inRun = true;
+            float v8[2] {};
+            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+            const float normX = v8[0] * factor;
+            if (v8[1] > -0.58f && v8[1] < 0.35f)
+            {
+                if (std::fabs(normX - kWheelAxisX) < 0.02f) { right++; }
+                if (std::fabs(normX + kWheelAxisX) < 0.02f) { left++; }
+            }
+            offset += kAnchorBlockSize;
+        }
+        return { right >= 3, left >= 3 };
+    }
+
+    // Whether an anchor belongs to the open wheel's cross (side +1 = weapon wheel bottom-
+    // right, -1 = item wheel bottom-left), in normalized 16:9 coordinates. Deliberately
+    // generous: the row band reaches past centre because the far slot sits at x=0 with a
+    // satellite label slightly beyond it, and the column band is widened for the slot
+    // adornments (SUP/light icons, CQC tags) hanging off the column slots. Wheel-open
+    // frames are transient, so a world element passing through these bands is displaced
+    // only while the player is actively holding the selector.
+    bool WheelMember(float normX, float y, int side)
+    {
+        const float x = normX * side;
+        const bool row = y > -0.87f && y < -0.58f && x > -0.21f && x < 0.86f;
+        const bool column = y >= -0.58f && y < 0.35f && x > 0.48f && x < 0.86f;
+        return row || column;
+    }
+
     void SpreadPool(uint8_t* pool, size_t bytes)
     {
         const float factor = HorizontalSpreadFactor();
@@ -426,6 +487,8 @@ namespace AspectRatio
         const float canvasEdge = 1.0f / factor;
         const float shift = 1.0f - canvasEdge;
         uint32_t touched = 0;
+
+        const WheelState wheels = DetectWheels(pool, usable, factor);
 
         size_t offset = 0;
         bool inRun = false;
@@ -481,8 +544,19 @@ namespace AspectRatio
                 }
             }
 
+            // An open wheel's whole cross moves with its box, so the wheel arrives at the
+            // corner rigid - the junction slot IS the box, and 16:9 composes the cross
+            // around the corner. The membership test subsumes the box zone on that side.
+            int wheelSide = 0;
+            if (wheels.weaponOpen && WheelMember(normX, v8[1], +1)) { wheelSide = +1; }
+            else if (wheels.itemOpen && WheelMember(normX, v8[1], -1)) { wheelSide = -1; }
+
             float spread = v8[0];
-            if (isWidget)
+            if (wheelSide != 0)
+            {
+                spread = v8[0] + wheelSide * shift;
+            }
+            else if (isWidget)
             {
                 spread = v8[0] + (v8[0] > 0.0f ? shift : -shift);
             }
@@ -627,8 +701,8 @@ namespace AspectRatio
         // The helper is one of the game's hottest paths (every buffer upload). The hook
         // now installs unconditionally so the lab can arm diagnostics mid-session, so the
         // probe must cost one flag check when nothing is armed.
-        if (!ResolutionScalingFixes::bWatchAnchorProducers && !bAspectTestLadder
-            && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0)
+        if (!bAspectPoolSpread && !ResolutionScalingFixes::bWatchAnchorProducers
+            && !bAspectTestLadder && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0)
         {
             return;
         }
@@ -698,6 +772,13 @@ namespace AspectRatio
             {
                 g_PoolCache.push_back({ source, spread });
             }
+        }
+
+        // Draw-time corner anchoring (AR-008 experiment): the spread applied to the live
+        // instance pool, wheel-state read from the pool itself inside SpreadPool.
+        if (bAspectPoolSpread && spread)
+        {
+            SpreadPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
         }
 
         // Producer identification mode: locate the two reference blocks in the live pool and
