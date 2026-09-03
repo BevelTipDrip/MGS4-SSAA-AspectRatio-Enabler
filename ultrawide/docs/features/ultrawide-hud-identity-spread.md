@@ -241,7 +241,8 @@ node+8 that identifies the element, stable across frames, boots and label instan
 | `0x0093929C` | weapon icon | 0x1D |
 | `0x00F1D8B7` | item panel | 0x1E |
 | `0x0085D6E9` | life bar | 0x21 |
-| `0x0064D23C` | camo | 0x23 |
+| `0x0064D23C` | camo ring, Solid Eye equipped | 0x23 |
+| `0x00925509` | camo ring, Solid Eye unequipped (the smaller compass) | 0x22 |
 | `0x000D12D5` | battery | 0x04 |
 | `0x0007324E` | reticle | 0x2A |
 | `0x0008F2D7` | centre marker | 0x25 |
@@ -249,6 +250,12 @@ node+8 that identifies the element, stable across frames, boots and label instan
 | `0x002CCAD3`, `0x0060CD29` | bottom-centre | 0x29 |
 | **`0x0066AF8A`** | **pickup label** (all five anchors) | dynamic (0x31-0x34 seen) |
 | **`0x00860C0D`** | **Solid Eye stat block** (enemy/friendly) | dynamic (0x4F/0x50 seen) |
+
+The two ring rows are one HUD slot drawn by two objects. Every earlier measurement had the
+Solid Eye equipped, so only its ring was tabled; the compass the game draws in its place with the
+Solid Eye unequipped stayed at the centred position (user, 2026-09-03: "the normal radar is
+broken (it's in the original location)"), and the user's F11 report (hot dump 15) named it on
+channel 0x22 with elements +1E0/+720/+A88/+BB8/+C58.
 
 The `+BCFEA` tick records (ammo pips) are opcode `0x14` with a per-record pointer instead; they
 have no strcode and are attributed by channel. The read is guarded: only when the position lies

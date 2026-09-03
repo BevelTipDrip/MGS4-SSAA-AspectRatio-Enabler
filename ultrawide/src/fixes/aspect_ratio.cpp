@@ -338,6 +338,9 @@ namespace AspectRatio
     // record: 0x1D weapon panel (and the wheel slots 0x13/15/17/19/1B, the panel at the row's
     // end), 0x1E item panel (and the item wheel 0x0E/10/12/14/16/18/1A/1C), 0x21 life bar,
     // 0x23 camo ring, 0x04 battery bar; chanbias confirmed by the user's read of the captures.
+    // The ring is two objects: the Solid Eye's, measured first, and the smaller compass the
+    // game draws in its place with the Solid Eye unequipped (channel 0x22, hot dump 15,
+    // 2026-09-03 - it sat at the centred position with the Solid Eye's ring tabled alone).
     struct HudIdentity
     {
         uint32_t strcode;
@@ -349,7 +352,8 @@ namespace AspectRatio
         { 0x0093929C, +1, "weapon icon" },
         { 0x00F1D8B7, -1, "item panel / Solid Eye" },   // also every item wheel slot
         { 0x0085D6E9, -1, "life bar" },
-        { 0x0064D23C, +1, "camo ring" },
+        { 0x0064D23C, +1, "camo ring (Solid Eye)" },
+        { 0x00925509, +1, "camo ring (compass)" },  // the plain ring the Solid Eye replaces; hot dump 15
         { 0x000D12D5, -1, "battery bar" },          // sits under the item panel; (-0.539,-0.911)
     };
 
@@ -2183,6 +2187,55 @@ namespace AspectRatio
         *reinterpret_cast<uint32_t*>(known.object + 0x18) |= 0x220000;
     }
 
+    // Arm one emit-attribution dump: snapshot the registry for the append probe's stack
+    // scan, drop any stale events, then arm one pool dump's worth of frames. The caller
+    // holds g_ObjectsMutex.
+    void ArmSiteDump(const char* who)
+    {
+        {
+            std::lock_guard appendLock(g_AppendMutex);
+            g_SiteObjects = g_Objects;
+            g_AppendEvents.clear();
+            g_AppendEvents.reserve(4096);
+        }
+        g_SiteDumpFrames.store(2);
+        spdlog::info("MGS4: {}: emit attribution armed ({} objects).", who, g_SiteObjects.size());
+    }
+
+    // ---- the HUD report (F11) --------------------------------------------------------------
+    //
+    // The one diagnostic a normal launch carries, behind the Config Tool's Debug Logging: F11
+    // writes the sites dump - every anchor record of the next instance-pool upload with its
+    // owner, channel, node strcode and element offset - into the game log under a header
+    // naming the output size and the active switches. It is exactly the dump the treatment
+    // tables were built from, so a bug report with the log and a screenshot of the same
+    // moment carries everything needed to table a widget that is still in the wrong place.
+    void StartHudReportKey()
+    {
+        std::thread([]
+            {
+                bool wasDown = false;
+                while (true)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    const bool down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+                    if (down && !wasDown)
+                    {
+                        int32_t outputWidth = 0, outputHeight = 0;
+                        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
+                        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+                        spdlog::info("MGS4: HUD report (F11): output {}x{}, factor {:.4f}, layout {}, world tracking {}.",
+                            outputWidth, outputHeight, HorizontalSpreadFactor(),
+                            bAspectPoolSpread ? "expanded" : "centered", bAspectWorldTracking ? "on" : "off");
+                        std::lock_guard lock(g_ObjectsMutex);
+                        ArmSiteDump("HUD report");
+                    }
+                    wasDown = down;
+                }
+            }).detach();
+        spdlog::info("MGS4: HUD report: F11 writes the HUD's anchor records to this log.");
+    }
+
     void StartLiveAnchorLab()
     {
         spdlog::info("MGS4: live anchor lab: polling {}.", kLiveCommandFile);
@@ -2318,17 +2371,7 @@ namespace AspectRatio
                         }
                         else if (std::strncmp(line, "sites", 5) == 0)
                         {
-                            // Snapshot the registry for the append probe's stack scan, drop
-                            // any stale events, then arm one pool dump's worth of frames.
-                            {
-                                std::lock_guard appendLock(g_AppendMutex);
-                                g_SiteObjects = g_Objects;
-                                g_AppendEvents.clear();
-                                g_AppendEvents.reserve(4096);
-                            }
-                            g_SiteDumpFrames.store(2);
-                            spdlog::info("MGS4: live lab: emit attribution armed ({} objects).",
-                                g_SiteObjects.size());
+                            ArmSiteDump("live lab");
                         }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
@@ -2489,12 +2532,26 @@ namespace AspectRatio
             InstallProducerProbe();
         }
 
-        // The spread's own hook, shared with the world tracking. Its probe self-gates to a
-        // flag check when neither treatment nor a lab diagnostic is armed, and both are a
+        // Debug Logging: the F11 HUD report, which needs the upload probe (the dump runs at
+        // the pool's upload - the lab has already installed it) as well as the append hook
+        // below. A lab boot gets the key too; it arms the same dump as the lab's own command.
+        const bool report = g_Logging.bVerboseLogging;
+        if (report && !bLabMode)
+        {
+            ApplyCornerSpread();
+        }
+
+        // The spread's own hook, shared with the world tracking and the HUD report. Its
+        // probe self-gates to a flag check when nothing is armed, and both treatments are a
         // strict no-op at 16:9.
-        if (bAspectPoolSpread || bAspectWorldTracking || bLabMode)
+        if (bAspectPoolSpread || bAspectWorldTracking || bLabMode || report)
         {
             InstallSiteAttribution();
+        }
+
+        if (report && PoolAppend_hook && UploadHelper_hook)
+        {
+            StartHudReportKey();
         }
     }
 }
