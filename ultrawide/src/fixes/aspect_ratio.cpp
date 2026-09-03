@@ -8,6 +8,8 @@
 #include "resolution_scaling_fixes.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <format>
 #include <mutex>
 
 namespace AspectRatio
@@ -271,26 +273,20 @@ namespace AspectRatio
     // ======================= Layer 2: anchors to the corners =======================
     //
     // With the layout fix above, every widget is undistorted but the whole interface huddles
-    // in a centered 16:9 area. This layer spreads the widgets back out: each one's NDC anchor
-    // is scaled by outputWidth / safeWidth, which lands corner widgets at exactly the margins
-    // they have on a 16:9 screen, keeps a centre anchor - the aiming reticle - where it
-    // points, and leaves shapes alone because size lives in the basis vectors, not the anchor.
+    // in a centered 16:9 area. This layer moves the corner widgets back out to their 16:9
+    // margins by translating their NDC anchors - shapes are untouched because size lives in
+    // the basis vectors, not the anchor - and leaves everything else where the centered
+    // canvas put it.
     //
-    // The one subtlety is measured, not guessed (see docs/features/aspect-ratio.md): most
-    // widgets share one anchor across all their quads, but some carry satellite anchors -
-    // the ammo tick row is one anchor per tick, 0.008 NDC apart. Scaling each satellite
-    // independently would grow the tick row past the box it sits in. So anchors are clustered
-    // by draw order - consecutive records within a small epsilon belong to one widget - and
-    // every record in a cluster gets the *same* translation, derived from the cluster's first
-    // anchor. Within a widget everything keeps its exact relative layout.
-    //
-    // Applied at the game's generic upload helper (+7A8CD0: Map, memcpy, Unmap), on the
-    // call that carries the per-frame instance pool. Finding this took three wrong turns,
-    // all recorded in docs/features/aspect-ratio.md: the two "instance array" sites the
-    // earlier research identified turn out to upload only tiny constant records, and the
-    // pool's source pointer rides the stack as the helper's fifth argument, invisible to
-    // any register-based probe. The pool itself is ~200KB, double-buffered, with 96-byte
-    // anchor blocks at a clean pitch from a non-zero start offset.
+    // The records are the game's per-frame instance pool: ~200KB, double-buffered, 96-byte
+    // anchor blocks appended one at a time by one assembler (+68A410) and uploaded whole
+    // through the generic upload helper (+7A8CD0: Map, memcpy, Unmap). Finding the pool
+    // took three wrong turns, all recorded in docs/features/aspect-ratio.md: the two
+    // "instance array" sites the earlier research identified upload only tiny constant
+    // records, and the pool's source pointer rides the stack as the helper's fifth argument,
+    // invisible to any register-based probe. The upload hook stays as the mount point for
+    // the pool diagnostics; the spread itself is applied per record at the append (see
+    // kHudChannels and PoolAppendProbe).
     //
     // Blocks are recognised by signature, never by offset arithmetic: a real anchor block
     // has an axis-aligned basis - v6 = (2/W, 0), v7 = (0, -2/H) - and v8.z exactly 1.
@@ -304,30 +300,121 @@ namespace AspectRatio
     constexpr uint32_t kAnchorBlockV8 = 80;
     constexpr uint32_t kAnchorBlockSize = 96;
 
-    // Which anchors to shift, as zones in 16:9 NDC. A dead zone plus "shift everything
-    // outside it" had a fatal flaw the user caught in play: world-tracking elements - the
-    // pickup label hovering over a dropped weapon, enemy markers - share the anchor space
-    // with static widgets, and the moment one panned across the threshold it jumped 480px
-    // off its target. No position rule separates "widget" from "thing tracking the world",
-    // because the world can put an element anywhere.
+    // Which anchors to shift, by identity. Two positional schemes came before this and both
+    // were rejected by the user: "shift everything outside a dead zone" threw world-tracked
+    // labels (pickup names, enemy markers) 480px off target the moment they panned across
+    // the threshold, and the measured-zone whitelist that replaced it needed a new heuristic
+    // for every screen state (wheel bands, a menu signature) and never converged. No
+    // position rule separates "widget" from "thing tracking the world", because the world
+    // can put an element anywhere.
     //
-    // So the logic is inverted: only anchors inside these measured widget zones shift, and
-    // everything unknown stays centered. That fails safe in both directions - a world-tracked
-    // element never jumps, and a widget missing from this table sits at the centered position
-    // rather than anywhere wrong, which is cosmetic, easy to spot in play, and a one-line
-    // addition here. Zones come from the anchor census (16:9 values, generous margins);
-    // at runtime anchors are normalized by the compression factor before the lookup, so one
-    // table serves every output aspect.
-    struct WidgetZone
+    // The identity comes from the game's own draw structure (measured 2026-09-02/03 with the
+    // emit-attribution probe, see the feature doc): every anchor record reaches the pool
+    // through one assembler, and one unwind out of it restores two registers its caller
+    // held - rbp, the object doing the drawing, and rsi, the record channel. For the
+    // gameplay HUD the owner is one static object (kRvaHudOwner) and the channel is a fixed
+    // index per widget and per selector slot: the same widget keeps the same channel with
+    // the wheels closed, either wheel open, and across boots. The pause menu draws through
+    // heap-allocated owners on the dynamic channels 1-4 - the same numbers the battery bar
+    // uses under the HUD owner - so the key is the pair, not the channel alone.
+    //
+    // Treatment is a constant per side (1 - 1/factor, see the shift derivation below), and
+    // everything not in this table - menus, the CAUTION banner, the reticle, world labels,
+    // any widget not measured yet - stays exactly where the centered canvas put it. A
+    // missing widget is a cosmetic gap and a one-line addition here, never a wrong jump.
+    constexpr uintptr_t kRvaHudOwner = 0x1DE3290;   // frame-1 rbp for every gameplay HUD record
+
+    struct ChannelSide
     {
-        float minX, maxX, minY, maxY;
+        uint8_t channel;
+        int8_t side;        // -1 left edge, +1 right edge
+        const char* what;
     };
-    constexpr WidgetZone kWidgetZones[] = {
-        { -0.96f, -0.74f,  0.76f, 0.96f },   // life bar / stress cluster, top-left (-0.881, 0.883)
-        { -0.82f, -0.60f, -0.86f, -0.66f },  // ration box, bottom-left (-0.719, -0.769)
-        {  0.46f,  0.82f, -0.86f, -0.61f },  // weapon box, ammo ticks, item box, bottom-right
-        {  0.61f,  0.84f,  0.50f, 0.74f },   // camo meter / compass, top-right (0.733, 0.622)
+    constexpr ChannelSide kHudChannels[] = {
+        // closed-HUD widgets (chanbias confirmed by the user's read of the captures, 2026-09-03)
+        { 0x1D, +1, "weapon panel + ammo ticks" },
+        { 0x1E, -1, "item panel / Solid Eye" },
+        { 0x21, -1, "life bar" },
+        { 0x23, +1, "camo ring" },
+        { 0x04, -1, "battery bar" },                // sits under the item panel; (-0.539,-0.911)
+        // weapon selector: column at x=+0.539 on 0x13/15/17/19, row 0x1B; the selected-weapon
+        // panel is 0x1D again, at the row's end. The wheel arrives at the corner rigid.
+        { 0x13, +1, "weapon wheel column" },
+        { 0x15, +1, "weapon wheel column" },
+        { 0x17, +1, "weapon wheel column" },
+        { 0x19, +1, "weapon wheel junction" },
+        { 0x1B, +1, "weapon wheel row" },
+        // item selector: column at x=-0.789 on 0x0E/10/12/14, junction 0x16, row 0x18/1A/1C;
+        // 0x1E becomes the top slot of the column.
+        { 0x0E, -1, "item wheel column" },
+        { 0x10, -1, "item wheel column" },
+        { 0x12, -1, "item wheel column" },
+        { 0x14, -1, "item wheel column" },
+        { 0x16, -1, "item wheel junction" },
+        { 0x18, -1, "item wheel row" },
+        { 0x1A, -1, "item wheel row" },
+        { 0x1C, -1, "item wheel row" },
     };
+
+    // Channel 0x20 is the selector overlay: a centre-anchored channel that exists only while
+    // a wheel is open and carries the fullscreen dim backdrop, the centred item/weapon text,
+    // and the slot plates (the solid selected block and the translucent boxes) that must
+    // travel with their wheel. One channel, three treatments - so the key goes one level
+    // deeper. A second unwind restores the interpreter position the record was drawn for
+    // (frame-2 rbx) and the channel's script block (frame-1 r14); their difference is the
+    // element's offset inside the script, constant across frames and boots (runs 14/15,
+    // 2026-09-03: the ordinal sweep moved exactly one element per offset). Everything on
+    // the channel not listed here - backdrop, text - stays centred.
+    struct ElementSide
+    {
+        uint8_t channel;
+        uint32_t elem;      // frame-2 rbx - frame-1 r14
+        int8_t side;
+        const char* what;
+    };
+    constexpr ElementSide kHudElements[] = {
+        { 0x20, 0x1950, -1, "item wheel slot plates" },       // backdrop is +0x10F8, text +0x3B38/+0x3C08
+        { 0x20, 0x2410, +1, "weapon wheel slot plates" },     // backdrop is +0x1BB8
+    };
+
+    bool ChannelHasElements(int channel)
+    {
+        for (const auto& entry : kHudElements)
+        {
+            if (entry.channel == channel) { return true; }
+        }
+        return false;
+    }
+
+    const ElementSide* HudElementEntry(int channel, uintptr_t elem)
+    {
+        for (const auto& entry : kHudElements)
+        {
+            if (entry.channel == channel && entry.elem == elem) { return &entry; }
+        }
+        return nullptr;
+    }
+
+    const ChannelSide* HudChannelEntry(int channel)
+    {
+        for (const auto& entry : kHudChannels)
+        {
+            if (entry.channel == channel) { return &entry; }
+        }
+        return nullptr;
+    }
+
+    int HudChannelSide(int channel)
+    {
+        const auto* entry = HudChannelEntry(channel);
+        return entry ? entry->side : 0;
+    }
+
+    const char* HudChannelName(int channel)
+    {
+        const auto* entry = HudChannelEntry(channel);
+        return entry ? entry->what : "?";
+    }
 
     SafetyHookMid UploadHelper_hook {};
 
@@ -391,229 +478,32 @@ namespace AspectRatio
         return static_cast<float>(outputWidth) / static_cast<float>(safeWidth);
     }
 
-    // Walk the pool: slide in 16-byte steps until a block matches, then advance at the
-    // 96-byte pitch while blocks keep matching; a mismatch drops back to sliding.
-    //
-    // The shift itself is a constant per side with a dead zone in the middle - deliberately
-    // NOT a function of each anchor's exact position. The first version scaled every anchor
-    // by the spread factor, grouped by a draw-order proximity heuristic, and the user's
-    // comparison shots showed what any position-dependent delta does inside a widget: the
-    // reticle's corner dots spread into a rectangle, the weapon silhouette slid out of its
-    // box, the compass lost its bullseye and its N drifted. A widget only survives if every
-    // one of its parts moves by exactly the same amount.
+    // The shift is a constant per side - deliberately NOT a function of each anchor's exact
+    // position. The first version scaled every anchor by the spread factor, grouped by a
+    // draw-order proximity heuristic, and the user's comparison shots showed what any
+    // position-dependent delta does inside a widget: the reticle's corner dots spread into
+    // a rectangle, the weapon silhouette slid out of its box, the compass lost its bullseye
+    // and its N drifted. A widget only survives if every one of its parts moves by exactly
+    // the same amount.
     //
     // The constant is 1 - 1/factor per side, and that number is not arbitrary: compressed
     // NDC times full output width equals safe-canvas NDC times safe width, so this shift
     // preserves each widget's *pixel* distance from the screen edge exactly as it is on a
     // 16:9 output. Corners land at their 16:9 margins; everything inside a widget stays
-    // pixel-rigid; the reticle and its dots sit in the dead zone and never move.
-    // The selector-wheel signature, measured with pooldump on a live save (2026-09-01,
-    // AR-008): the wheel is a cross of slot anchors rooted at the box position - a column
-    // at exactly the box x (|normX| = 0.719) climbing above the box band in slot steps,
-    // and a row at exactly the box y (-0.769) stepping toward centre at pitch 0.3595.
-    // The box's own cluster (ammo ticks at y=-0.7785, parts at -0.67) appears only while
-    // the wheel is closed; the cross only while it is held open. So the pool itself says
-    // whether a wheel is open, per frame, with no engine flag: three or more column
-    // anchors above the box band is a wheel.
-    constexpr float kWheelAxisX = 0.719f;
-    constexpr float kWheelRowY = -0.769f;
-
-    struct PoolState
-    {
-        bool weaponOpen;   // right-side wheel (column at +0.719)
-        bool itemOpen;     // left-side wheel (column at -0.719)
-        bool menuOpen;     // fullscreen menu (rails and sidebars carpeting the near-edge band)
-    };
-
-    PoolState DetectPoolState(const uint8_t* pool, size_t usable, float factor)
-    {
-        int right = 0;
-        int left = 0;
-        int nearEdge = 0;
-        size_t offset = 0;
-        bool inRun = false;
-        while (offset + kAnchorBlockSize <= usable)
-        {
-            const bool strict = PlausibleAnchorBlock(pool + offset);
-            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
-            {
-                inRun = false;
-                offset += 16;
-                continue;
-            }
-            inRun = true;
-            float v8[2] {};
-            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
-            const float normX = v8[0] * factor;
-            if (v8[1] > -0.58f && v8[1] < 0.35f)
-            {
-                if (std::fabs(normX - kWheelAxisX) < 0.02f) { right++; }
-                if (std::fabs(normX + kWheelAxisX) < 0.02f) { left++; }
-            }
-            // The near-edge band: normalized past every gameplay widget but short of the
-            // raw +-1 fullscreen layers. Gameplay produces the odd world label here; the
-            // pause menu's frame rails, side text and borders carpet it.
-            if (std::fabs(v8[0]) < 0.999f && std::fabs(normX) > 0.90f)
-            {
-                nearEdge++;
-            }
-            offset += kAnchorBlockSize;
-        }
-        return { right >= 3, left >= 3, nearEdge >= 4 };
-    }
-
-    // Whether an anchor belongs to the open wheel's cross (side +1 = weapon wheel bottom-
-    // right, -1 = item wheel bottom-left), in normalized 16:9 coordinates. Deliberately
-    // generous, and measured the hard way: with a full inventory the row runs from the
-    // junction *past centre to the far side* (a five-item row reaches x = +0.72 on the
-    // item wheel), so while a wheel is open the whole bottom band is the wheel's - safe
-    // because the game hides the opposite corner box while either selector is up
-    // (ps_itm.png). The column likewise climbs to +0.8 with a tall inventory, and slot
-    // adornments (SUP/light icons, CQC tags, mode labels) hang off it. Wheel-open frames
-    // are transient, so a world element passing through these bands is displaced only
-    // while the player is actively holding the selector.
-    bool WheelMember(float normX, float y, int side)
-    {
-        const float x = normX * side;
-        const bool row = y > -0.87f && y < -0.58f && x > -0.88f && x < 0.88f;
-        const bool column = y >= -0.58f && y < 0.88f && x > 0.48f && x < 0.88f;
-        return row || column;
-    }
-
-    void SpreadPool(uint8_t* pool, size_t bytes)
+    // pixel-rigid; an open selector wheel moves with its junction slot and arrives at the
+    // corner as one piece.
+    //
+    // Where it is applied: at the pool *append*, one record at a time, in PoolAppendProbe -
+    // not on the assembled pool at upload. The upload sees the whole 200KB ping-pong buffer,
+    // of which only the first cursor's worth is this frame's; the rest is stale from
+    // earlier frames (measured: ~150 live blocks of ~210 present with the HUD closed), and
+    // the positional pass that walked it took stale menu records for an open menu. The
+    // append sees exactly one live record with its identity one unwind away.
+    float SideShift()
     {
         const float factor = HorizontalSpreadFactor();
-        if (factor == 1.0f || !pool || bytes < kAnchorBlockSize || bytes > (8u << 20))
-        {
-            return;
-        }
-
-        MEMORY_BASIC_INFORMATION info {};
-        if (!VirtualQuery(pool, &info, sizeof(info)) || info.State != MEM_COMMIT
-            || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-        {
-            return;
-        }
-        const size_t usable = (std::min)(bytes,
-            static_cast<size_t>(reinterpret_cast<const uint8_t*>(info.BaseAddress) + info.RegionSize - pool));
-
-        const float canvasEdge = 1.0f / factor;
-        const float shift = 1.0f - canvasEdge;
-        uint32_t touched = 0;
-
-        const PoolState wheels = DetectPoolState(pool, usable, factor);
-
-        // A fullscreen menu is screen-space UI through and through - the user's stated
-        // preference is centered ("letterboxed") menus - and the game draws no world
-        // labels beneath it, so the right treatment for a menu frame is no treatment:
-        // the layer-1 centered canvas, untouched. Without this the world-decompression
-        // ramp spreads the menu's own panels back out to full width and tears its frame
-        // (ps2_menu.png).
-        if (wheels.menuOpen)
-        {
-            return;
-        }
-
-        size_t offset = 0;
-        bool inRun = false;
-        while (offset + kAnchorBlockSize <= usable)
-        {
-            const bool strict = PlausibleAnchorBlock(pool + offset);
-            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
-            {
-                inRun = false;
-                offset += 16;
-                continue;
-            }
-            inRun = true;
-
-            float v8[2] {};
-            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
-
-            // Normalize x back to 16:9 NDC (the compression only touches x). Three regimes:
-            //
-            // - Whitelisted widgets: constant shift, preserving 16:9 pixel margins and rigid
-            //   multi-anchor layout (ammo ticks, crosshair dots).
-            // - Beyond the canvas edge: output-authored fullscreen layers, untouched.
-            // - Everything else - the Solid Eye's world-tracked labels above all: the game
-            //   projects them through the full-width camera and converts through fixed
-            //   1280-canvas math, so the widened canvas compresses them toward centre by
-            //   1/factor and they drift off their targets. The correction is the exact
-            //   inverse: scale the anchor back out, which moves the label without stretching
-            //   it (shape lives in the basis vectors). A small centre dead zone keeps the
-            //   reticle's separate corner-dot anchors square, and a ramp between the two
-            //   keeps the transition continuous so nothing pops while the camera pans.
-            // The fullscreen exemption keys on the *compressed* coordinate, not the
-            // normalized one: output-authored layers are pinned at exactly +-1 as written,
-            // while a world-tracked label part near the screen edge sits at a compressed
-            // |x| around 0.75..0.9 - normalized past 1.0. An earlier version skipped
-            // anything with |normX| > 1, and a label straddling that line had some parts
-            // decompressed outward and some left inboard: its text visibly swapped sides
-            // near the screen edge.
-            const float normX = v8[0] * factor;
-            if (std::fabs(v8[0]) > 0.999f)
-            {
-                offset += kAnchorBlockSize;
-                continue;
-            }
-
-            bool isWidget = false;
-            for (const auto& zone : kWidgetZones)
-            {
-                if (normX >= zone.minX && normX <= zone.maxX
-                    && v8[1] >= zone.minY && v8[1] <= zone.maxY)
-                {
-                    isWidget = true;
-                    break;
-                }
-            }
-
-            // An open wheel's whole cross moves with its box, so the wheel arrives at the
-            // corner rigid - the junction slot IS the box, and 16:9 composes the cross
-            // around the corner. The membership test subsumes the box zone on that side.
-            int wheelSide = 0;
-            if (wheels.weaponOpen && WheelMember(normX, v8[1], +1)) { wheelSide = +1; }
-            else if (wheels.itemOpen && WheelMember(normX, v8[1], -1)) { wheelSide = -1; }
-
-            float spread = v8[0];
-            if (wheelSide != 0)
-            {
-                spread = v8[0] + wheelSide * shift;
-            }
-            else if (isWidget)
-            {
-                spread = v8[0] + (v8[0] > 0.0f ? shift : -shift);
-            }
-            else
-            {
-                constexpr float kDead = 0.06f;   // reticle dots live at |normX| ~0.03
-                constexpr float kRamp = 0.30f;   // fully world-accurate from here outward
-                const float n = std::fabs(normX);
-                if (n > kDead)
-                {
-                    const float target = (n >= kRamp)
-                        ? n
-                        : kDead / factor + (n - kDead) * (kRamp - kDead / factor) / (kRamp - kDead);
-                    spread = (normX > 0.0f) ? target : -target;
-                }
-            }
-
-            if (spread != v8[0])
-            {
-                std::memcpy(pool + offset + kAnchorBlockV8, &spread, sizeof(spread));
-                touched++;
-            }
-            offset += kAnchorBlockSize;
-        }
-
-        static std::atomic<int> reported { 0 };
-        if (touched > 0 && reported.fetch_add(1) < 3)
-        {
-            spdlog::info("MGS4: UI Aspect: shifted {} widget anchors by {:.4f} per side.",
-                touched, 1.0f - 1.0f / factor);
-        }
+        return factor == 1.0f ? 0.0f : 1.0f - 1.0f / factor;
     }
-
     // Temporary census of every anchor-bearing pool that flows through the helper. Three HUD
     // elements sit at centered positions while their widgets spread - the compass's centre
     // arrow, the weapon icon, the objective marker - which means they upload through calls
@@ -633,6 +523,15 @@ namespace AspectRatio
     // with it held open, and the box's anchor either moves out of the corner zone (the
     // zone-gated draw-time spread works) or it does not (it cannot).
     std::atomic<int> g_PoolDumpBudget { 0 };
+    // Upload census ("uploads <n>"): every buffer upload through the helper, not just the
+    // ones carrying anchor blocks - the selector's backing plates sit at fixed screen
+    // positions whatever the anchor channels do, so they travel in some other buffer.
+    std::atomic<int> g_UploadLogBudget { 0 };
+    // Raw dump ("bufdump"): the next upload from each of the three per-frame sites (instance
+    // pool, index buffer, vertex buffer) written whole to C:\mgspf_tools\lab3\buf\ for
+    // offline searching - the plates' screen rectangle has to be in one of them.
+    std::atomic<int> g_BufDumpMask { 0 };
+    std::atomic<int> g_BufDumpSeq { 0 };
 
     uint32_t ScanForAnchors(const uint8_t* buffer, size_t bytes, size_t* firstOffset, float* sampleV8)
     {
@@ -720,13 +619,20 @@ namespace AspectRatio
         }
     }
 
+    extern std::atomic<int> g_SiteDumpFrames;
+    void DumpSites(const uint8_t* pool, size_t bytes, uintptr_t source);
+
     void UploadHelperProbe(SafetyHookContext& ctx)
     {
         // The helper is one of the game's hottest paths (every buffer upload). The hook
         // now installs unconditionally so the lab can arm diagnostics mid-session, so the
-        // probe must cost one flag check when nothing is armed.
-        if (!bAspectPoolSpread && !ResolutionScalingFixes::bWatchAnchorProducers
-            && !bAspectTestLadder && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0)
+        // probe must cost one flag check when nothing is armed. The corner spread itself
+        // no longer lives here (see PoolAppendProbe); this hook is diagnostics only.
+        if (!ResolutionScalingFixes::bWatchAnchorProducers
+            && !bAspectTestLadder && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0
+            && g_SiteDumpFrames.load(std::memory_order_relaxed) <= 0
+            && g_UploadLogBudget.load(std::memory_order_relaxed) <= 0
+            && g_BufDumpMask.load(std::memory_order_relaxed) == 0)
         {
             return;
         }
@@ -740,6 +646,54 @@ namespace AspectRatio
         // is the fifth argument, on the stack.
         uintptr_t source = 0;
         std::memcpy(&source, reinterpret_cast<const void*>(ctx.rsp + 0x28), sizeof(source));
+
+        if (g_UploadLogBudget.load(std::memory_order_relaxed) > 0
+            && g_UploadLogBudget.fetch_sub(1) > 0)
+        {
+            std::string floats, hex;
+            MEMORY_BASIC_INFORMATION info {};
+            const bool readable = source
+                && VirtualQuery(reinterpret_cast<void*>(source), &info, sizeof(info))
+                && info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD));
+            if (readable)
+            {
+                const size_t n = (std::min<size_t>)(ctx.r9, 64);
+                for (size_t i = 0; i + 4 <= n; i += 4)
+                {
+                    float f;
+                    std::memcpy(&f, reinterpret_cast<const void*>(source + i), sizeof(f));
+                    floats += std::format("{}{:.4g}", i ? "," : "", f);
+                }
+                for (size_t i = 0; i < n; i++)
+                {
+                    hex += std::format("{:02X}", *reinterpret_cast<const uint8_t*>(source + i));
+                }
+            }
+            spdlog::info("MGS4: uploads: ret=+{:X} size={} off={} src={:X} f=[{}] hex={}",
+                retRva, ctx.r9, ctx.r8, source, floats, hex);
+        }
+
+        if (g_BufDumpMask.load(std::memory_order_relaxed) != 0 && source && ctx.r9 <= (8u << 20))
+        {
+            const int bit = retRva == kRvaInstancePoolCaller ? 1 : retRva == 0x7A946F ? 2 : retRva == 0x7A94BF ? 4 : 0;
+            if (bit && (g_BufDumpMask.fetch_and(~bit) & bit))
+            {
+                MEMORY_BASIC_INFORMATION info {};
+                if (VirtualQuery(reinterpret_cast<void*>(source), &info, sizeof(info))
+                    && info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+                {
+                    const auto path = std::format("C:\\mgspf_tools\\lab3\\buf\\{:02}_{:X}.bin",
+                        g_BufDumpSeq.load(), retRva);
+                    if (FILE* f = std::fopen(path.c_str(), "wb"))
+                    {
+                        std::fwrite(reinterpret_cast<const void*>(source), 1, ctx.r9, f);
+                        std::fclose(f);
+                    }
+                    spdlog::info("MGS4: bufdump: {} ({} bytes, off={}).", path, ctx.r9, ctx.r8);
+                }
+            }
+        }
+
         if (!source || ctx.r9 < kAnchorBlockSize || ctx.r9 > (8u << 20))
         {
             return;
@@ -796,13 +750,6 @@ namespace AspectRatio
             {
                 g_PoolCache.push_back({ source, spread });
             }
-        }
-
-        // Draw-time corner anchoring (AR-008 experiment): the spread applied to the live
-        // instance pool, wheel-state read from the pool itself inside SpreadPool.
-        if (bAspectPoolSpread && spread)
-        {
-            SpreadPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
         }
 
         // Producer identification mode: locate the two reference blocks in the live pool and
@@ -880,9 +827,512 @@ namespace AspectRatio
             spdlog::info("MGS4: pooldump: end, {} blocks.", logged);
         }
 
+        // Emit attribution: label the instance pool's anchor blocks with the append events
+        // that wrote them (armed by the "sites" live command, see PoolAppendProbe).
+        if (spread && g_SiteDumpFrames.load() > 0)
+        {
+            DumpSites(reinterpret_cast<const uint8_t*>(source),
+                (std::min<uint64_t>)(ctx.r9, 1u << 20), source);
+        }
+
         // The pool spread that used to live here is gone: corner anchoring now happens
         // per-object in the layout converter, keyed on each object's la2 strcode. This hook
         // remains solely as the mount point for the diagnostics above.
+    }
+
+    // ---- emit attribution ("sites") ----------------------------------------------------------
+    //
+    // Identity from the game's own call structure. Every append into the instance pool is one
+    // memcpy at +68A933 (rcx = pool cursor, rdx = the assembler's frame, r8 = size). While
+    // armed, each append records where in the pool it landed and the chain of game frames
+    // that asked for it - unwound with the executable's own unwind tables from the hook
+    // context, because RtlCaptureStackBackTrace cannot see past a mid hook's trampoline -
+    // plus the first known layout object found in those frames' stack slots. The next upload
+    // of the pool then labels every anchor block with its chain and object: la2-driven quads
+    // name their layout object outright; programmatic ones (the wheel chrome, which follows
+    // no la2 range) name the code path that draws them. Both are static identities, which is
+    // what the per-object treatment table keys on.
+    constexpr uintptr_t kRvaPoolAppendCall = 0x68A933;
+    SafetyHookMid PoolAppend_hook {};
+
+    constexpr int kSiteFrames = 12;
+    constexpr int kSiteRegFrames = 7;   // frames whose restored non-volatile registers are kept
+    constexpr int kSiteRegs = 8;        // rbx rbp rsi rdi r12 r13 r14 r15
+    constexpr uintptr_t kSiteObjectSpan = 0x1000;   // "inside a known object" tolerance
+    struct AppendEvent
+    {
+        uintptr_t dst;
+        uint32_t size;
+        uint8_t frameCount;
+        uint32_t frames[kSiteFrames];   // module RVAs, innermost first
+        uintptr_t object;               // first known layout object seen in a frame's slots
+        uint32_t objectStrcode;
+        int objectFrame;
+        uintptr_t objectDelta;          // where inside the object the pointer landed
+        // Non-volatile registers as the unwinder restores them on entering frame i, i.e. the
+        // values the code at frames[i] held: a widget's this pointer lives here if anywhere.
+        uintptr_t regs[kSiteRegFrames][kSiteRegs];
+        uint8_t head[32];               // the record's first bytes (non-anchor records are decoded from this)
+        uint8_t node[64];               // bytes at frame-2 rbx, the per-element node the record was drawn for
+        bool nodeRead;
+    };
+    std::mutex g_AppendMutex;
+    std::vector<AppendEvent> g_AppendEvents;
+    std::vector<KnownObject> g_SiteObjects;   // registry snapshot taken when the probe is armed
+    std::atomic<int> g_SiteDumpFrames { 0 };
+
+    // Channel-keyed live bias (the "chanbias" command). The channel index rides down to the
+    // assembler in rsi (measured 2026-09-02: it partitions every anchor cluster by widget
+    // and by wheel slot, and menus sit on the dynamic channels 1-4), and the record being
+    // appended still lives in the assembler's frame, so an anchor block can be shifted in
+    // place before the memcpy and the result is on screen the same frame.
+    constexpr int kChannelCount = 64;
+    float g_ChannelBias[kChannelCount] {};
+    std::atomic<bool> g_ChannelBiasActive { false };
+    // Ordinal bias ("chanord"): only the n-th record a channel appends per frame. Counted on
+    // the render thread only, so the counter needs no atomics.
+    std::atomic<int> g_OrdChannel { -1 };
+    std::atomic<int> g_OrdIndex { 0 };
+    float g_OrdDx = 0.0f;
+    uintptr_t g_OrdLastDst = 0;
+    int g_OrdCount = 0;
+
+    void BuildAppendContext(const SafetyHookContext& ctx, CONTEXT& c)
+    {
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        c = CONTEXT {};
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        // Unwind from the call's return address, not the call itself: the hook's jmp now
+        // sits at +68A933 and the unwinder reads a jmp at Rip as a tail-call epilogue.
+        c.Rip = base + kRvaPoolAppendCall + 5;
+        c.Rsp = ctx.rsp; c.Rbp = ctx.rbp; c.Rbx = ctx.rbx; c.Rsi = ctx.rsi; c.Rdi = ctx.rdi;
+        c.R12 = ctx.r12; c.R13 = ctx.r13; c.R14 = ctx.r14; c.R15 = ctx.r15;
+        c.Rax = ctx.rax; c.Rcx = ctx.rcx; c.Rdx = ctx.rdx; c.R8 = ctx.r8; c.R9 = ctx.r9;
+        c.R10 = ctx.r10; c.R11 = ctx.r11;
+    }
+
+    // One unwind out of the assembler restores the registers its caller held: rbp is the
+    // drawing object (the owner), rsi the channel index. channel is -1 when the value is
+    // not a plausible index.
+    struct AppendIdentity
+    {
+        uintptr_t owner;
+        int channel;
+        bool hasElem;
+        uintptr_t elem;     // frame-2 rbx - frame-1 r14, see kHudElements
+    };
+
+    bool UnwindOnce(CONTEXT& c)
+    {
+        DWORD64 imageBase = 0;
+        auto* entry = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
+        if (!entry)
+        {
+            return false;
+        }
+        PVOID handlerData = nullptr;
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, entry, &c, &handlerData, &establisher, nullptr);
+        return c.Rip != 0;
+    }
+
+    AppendIdentity IdentifyAppend(const SafetyHookContext& ctx, bool wantElem)
+    {
+        CONTEXT c;
+        BuildAppendContext(ctx, c);
+        if (!UnwindOnce(c))
+        {
+            return { 0, -1, false, 0 };
+        }
+        AppendIdentity id { static_cast<uintptr_t>(c.Rbp),
+            c.Rsi < static_cast<DWORD64>(kChannelCount) ? static_cast<int>(c.Rsi) : -1, false, 0 };
+        if (wantElem && ChannelHasElements(id.channel))
+        {
+            const uintptr_t script = static_cast<uintptr_t>(c.R14);
+            if (UnwindOnce(c))
+            {
+                id.hasElem = true;
+                id.elem = static_cast<uintptr_t>(c.Rbx) - script;
+            }
+        }
+        return id;
+    }
+
+    // The corner spread proper, plus the lab's per-channel bias: the record about to be
+    // appended is still in the assembler's frame (rdx), so its anchor is moved in place.
+    // Rotated quads (the compass arrow, the weapon silhouette) pass the relaxed signature;
+    // under a known owner and channel the structural test only has to reject non-anchor
+    // 96-byte records, and every 96-byte record measured on the HUD channels was an anchor.
+    std::atomic<uint64_t> g_ShiftedChannelsLogged { 0 };
+    std::atomic<uint64_t> g_ShiftedElementsLogged { 0 };
+
+    void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias)
+    {
+        if ((ctx.r8 & 0xFFFF) != kAnchorBlockSize)
+        {
+            return;
+        }
+        auto* src = reinterpret_cast<uint8_t*>(ctx.rdx);
+        if (!RelaxedAnchorBlock(src))
+        {
+            return;
+        }
+
+        const AppendIdentity id = IdentifyAppend(ctx, spread);
+        if (id.channel < 0)
+        {
+            return;
+        }
+
+        float dx = 0.0f;
+        if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
+        {
+            int side = HudChannelSide(id.channel);
+            if (side != 0)
+            {
+                const uint64_t bit = 1ull << id.channel;
+                if ((g_ShiftedChannelsLogged.fetch_or(bit) & bit) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: channel 0x{:02X} ({}) anchored {} by {:.4f}.",
+                        id.channel, HudChannelName(id.channel), side < 0 ? "left" : "right", SideShift());
+                }
+            }
+            else if (id.hasElem)
+            {
+                if (const auto* element = HudElementEntry(id.channel, id.elem))
+                {
+                    side = element->side;
+                    const uint64_t bit = 1ull << (element - kHudElements);
+                    if ((g_ShiftedElementsLogged.fetch_or(bit) & bit) == 0)
+                    {
+                        spdlog::info("MGS4: UI Aspect: channel 0x{:02X} element +{:X} ({}) anchored {} by {:.4f}.",
+                            id.channel, id.elem, element->what, side < 0 ? "left" : "right", SideShift());
+                    }
+                }
+            }
+            dx += static_cast<float>(side) * SideShift();
+        }
+        if (bias)
+        {
+            dx += g_ChannelBias[id.channel];
+            const int ordChannel = g_OrdChannel.load(std::memory_order_relaxed);
+            if (ordChannel >= 0)
+            {
+                // A new frame starts at the base of the other pool (or below the last append).
+                const uintptr_t dst = ctx.rcx;
+                if (dst < g_OrdLastDst || dst > g_OrdLastDst + 0x10000)
+                {
+                    g_OrdCount = 0;
+                }
+                g_OrdLastDst = dst;
+                if (id.channel == ordChannel)
+                {
+                    if (g_OrdCount == g_OrdIndex.load(std::memory_order_relaxed))
+                    {
+                        dx += g_OrdDx;
+                    }
+                    g_OrdCount++;
+                }
+            }
+        }
+        if (dx != 0.0f)
+        {
+            float x = 0.0f;
+            std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
+            x += dx;
+            std::memcpy(src + kAnchorBlockV8, &x, sizeof(x));
+        }
+    }
+
+    void PoolAppendProbe(SafetyHookContext& ctx)
+    {
+        const bool sites = g_SiteDumpFrames.load(std::memory_order_relaxed) > 0;
+        const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
+        const bool spread = bAspectPoolSpread && SideShift() != 0.0f;   // strict no-op at 16:9
+        if (!sites && !bias && !spread)
+        {
+            return;
+        }
+
+        if (bias || spread)
+        {
+            ShiftAppend(ctx, spread, bias);
+        }
+
+        if (!sites)
+        {
+            return;
+        }
+
+        AppendEvent ev {};
+        ev.dst = ctx.rcx;
+        ev.size = static_cast<uint32_t>(ctx.r8 & 0xFFFF);   // movzx r8d, si at +68A92B
+        std::memcpy(ev.head, reinterpret_cast<const void*>(ctx.rdx), (std::min<size_t>)(ev.size, sizeof(ev.head)));
+
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        CONTEXT c;
+        BuildAppendContext(ctx, c);
+
+        const auto noteObject = [&](uintptr_t value, int frame) {
+            if (ev.object) { return; }
+            for (const auto& known : g_SiteObjects)
+            {
+                if (value >= known.object && value < known.object + kSiteObjectSpan)
+                {
+                    ev.object = known.object;
+                    ev.objectStrcode = known.strcode;
+                    ev.objectFrame = frame;
+                    ev.objectDelta = value - known.object;
+                    return;
+                }
+            }
+        };
+
+        {
+            const uintptr_t regs0[kSiteRegs] { c.Rbx, c.Rbp, c.Rsi, c.Rdi, c.R12, c.R13, c.R14, c.R15 };
+            for (int r = 0; r < kSiteRegs; r++) { ev.regs[0][r] = regs0[r]; noteObject(regs0[r], 0); }
+        }
+
+        for (int i = 0; i < kSiteFrames; i++)
+        {
+            DWORD64 imageBase = 0;
+            const DWORD64 frameRsp = c.Rsp;
+            auto* entry = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
+            if (!entry)
+            {
+                // Leaf frame: the return address sits at [rsp].
+                std::memcpy(&c.Rip, reinterpret_cast<const void*>(c.Rsp), sizeof(c.Rip));
+                c.Rsp += 8;
+            }
+            else
+            {
+                PVOID handlerData = nullptr;
+                DWORD64 establisher = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, entry, &c,
+                    &handlerData, &establisher, nullptr);
+            }
+            if (!c.Rip)
+            {
+                break;
+            }
+
+            // This frame's slots, for a pointer into a registered layout object.
+            if (c.Rsp > frameRsp)
+            {
+                const DWORD64 slots = (std::min<DWORD64>)((c.Rsp - frameRsp) / 8, 128);
+                for (DWORD64 s = 0; s < slots && !ev.object; s++)
+                {
+                    uintptr_t value = 0;
+                    std::memcpy(&value, reinterpret_cast<const void*>(frameRsp + s * 8), sizeof(value));
+                    noteObject(value, i);
+                }
+            }
+
+            const bool inGame = c.Rip >= base && c.Rip < base + 0x30000000;
+            ev.frames[ev.frameCount] = inGame ? static_cast<uint32_t>(c.Rip - base) : 0xFFFFFFFFu;
+            const int frame = ev.frameCount + 1;   // the frame the restored registers belong to
+            if (frame < kSiteRegFrames)
+            {
+                const uintptr_t regs[kSiteRegs] { c.Rbx, c.Rbp, c.Rsi, c.Rdi, c.R12, c.R13, c.R14, c.R15 };
+                for (int r = 0; r < kSiteRegs; r++)
+                {
+                    ev.regs[frame][r] = regs[r];
+                    noteObject(regs[r], frame);
+                }
+            }
+            ev.frameCount++;
+            if (!inGame)
+            {
+                break;
+            }
+        }
+
+        // The element node: frame-2 rbx on every anchor record measured so far (a heap
+        // pointer, per record, distinct even between records on one channel).
+        {
+            const uintptr_t node = ev.regs[2][0];
+            MEMORY_BASIC_INFORMATION info {};
+            if (node > 0x10000 && VirtualQuery(reinterpret_cast<void*>(node), &info, sizeof(info))
+                && info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+                && node + sizeof(ev.node) <= reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize)
+            {
+                std::memcpy(ev.node, reinterpret_cast<const void*>(node), sizeof(ev.node));
+                ev.nodeRead = true;
+            }
+        }
+
+        std::lock_guard lock(g_AppendMutex);
+        if (g_AppendEvents.size() < 16384)
+        {
+            g_AppendEvents.push_back(ev);
+        }
+    }
+
+    void InstallSiteAttribution()
+    {
+        // call memcpy ; mov esi, [rbp+1A8h] - the append and the instruction after it.
+        static constexpr uint8_t kExpected[] { 0xE8, 0x58, 0xA5, 0x69, 0x00, 0x8B, 0xB5, 0xA8, 0x01, 0x00, 0x00 };
+        auto* at = reinterpret_cast<uint8_t*>(baseModule) + kRvaPoolAppendCall;
+        if (std::memcmp(at, kExpected, sizeof(kExpected)) != 0)
+        {
+            spdlog::error("MGS4: pool append attribution: +{:X} is not the expected call - not hooking.",
+                kRvaPoolAppendCall);
+            return;
+        }
+        PoolAppend_hook = safetyhook::create_mid(at, PoolAppendProbe);
+        LOG_HOOK(PoolAppend_hook, "MGS4: pool append attribution")
+    }
+
+    // The upload-side half: label each anchor block of the pool being uploaded with the
+    // append event that wrote it (the latest event covering its address, since the pools
+    // ping-pong and an older frame's events for the same addresses may still be queued).
+    void DumpSites(const uint8_t* pool, size_t bytes, uintptr_t source)
+    {
+        std::vector<AppendEvent> events;
+        {
+            std::lock_guard lock(g_AppendMutex);
+            events.swap(g_AppendEvents);
+        }
+        const int remaining = g_SiteDumpFrames.fetch_sub(1) - 1;
+        const float factor = HorizontalSpreadFactor();
+        spdlog::info("MGS4: sites: begin pool={:X} size={} events={} factor={:.4f} frames-left={}",
+            source, bytes, events.size(), factor, remaining);
+        // The game uploads the whole pool every frame but only appends up to its cursor;
+        // everything past the last append is stale content from earlier frames (measured
+        // 2026-09-02: 178 appends covering pool+0..+0x1BB0 against 211 anchor blocks in the
+        // 200 KB upload). Only the live region is attributed.
+        size_t inside = 0, sizeSum = 0, sz96 = 0;
+        uintptr_t liveEnd = source;
+        for (const auto& e : events)
+        {
+            if (e.dst >= source && e.dst < source + bytes)
+            {
+                inside++;
+                sizeSum += e.size;
+                if (e.size == 96) { sz96++; }
+                liveEnd = (std::max)(liveEnd, static_cast<uintptr_t>(e.dst + e.size));
+            }
+        }
+        spdlog::info("MGS4: sites: events inside={} bytes={} size96={} live=+0..+{:X}",
+            inside, sizeSum, sz96, liveEnd - source);
+
+        int logged = 0;
+        int unattributed = 0;
+        int stale = 0;
+        size_t offset = 0;
+        bool inRun = false;
+        while (offset + kAnchorBlockSize <= bytes && logged < 600)
+        {
+            if (source + offset >= liveEnd)
+            {
+                // Count the stale blocks so the census still reconciles with pooldump.
+                if (PlausibleAnchorBlock(pool + offset)) { stale++; offset += kAnchorBlockSize; }
+                else { offset += 16; }
+                continue;
+            }
+            const bool strict = PlausibleAnchorBlock(pool + offset);
+            if (!strict && !(inRun && RelaxedAnchorBlock(pool + offset)))
+            {
+                inRun = false;
+                offset += 16;
+                continue;
+            }
+            inRun = true;
+            float v8[2] {};
+            std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
+
+            const uintptr_t address = source + offset;
+            const AppendEvent* ev = nullptr;
+            for (auto it = events.rbegin(); it != events.rend(); ++it)
+            {
+                if (address >= it->dst && address < it->dst + it->size)
+                {
+                    ev = &*it;
+                    break;
+                }
+            }
+
+            std::string chain;
+            std::string regs;
+            if (ev)
+            {
+                for (int i = 0; i < ev->frameCount; i++)
+                {
+                    chain += (i ? "<+" : "+");
+                    chain += (ev->frames[i] == 0xFFFFFFFFu) ? std::string("ext") : std::format("{:X}", ev->frames[i]);
+                }
+                // regs: per frame "f<i>:" then bx bp si di 12 13 14 15 as bare hex.
+                const int regFrames = (std::min)(static_cast<int>(ev->frameCount) + 1, kSiteRegFrames);
+                for (int f = 0; f < regFrames; f++)
+                {
+                    regs += std::format(" f{}:", f);
+                    for (int r = 0; r < kSiteRegs; r++)
+                    {
+                        regs += std::format("{}{:X}", r ? "," : "", ev->regs[f][r]);
+                    }
+                }
+            }
+            else
+            {
+                unattributed++;
+            }
+
+            std::string node;
+            if (ev && ev->nodeRead)
+            {
+                for (size_t i = 0; i < sizeof(ev->node); i++)
+                {
+                    node += std::format("{}{:02X}", (i && i % 8 == 0) ? " " : "", ev->node[i]);
+                }
+            }
+
+            spdlog::info("MGS4: sites: +{:05X} v8=({:.4f},{:.4f}) norm=({:.4f},{:.4f}){} {} {}{} node={}",
+                offset, v8[0], v8[1], v8[0] * factor, v8[1], strict ? "" : " r",
+                ev ? std::format("rec@+{:X}/{}", address - ev->dst, ev->size) : "no-event",
+                ev ? (ev->object ? std::format("obj={:08X}+{:X}@f{} {}", ev->objectStrcode, ev->objectDelta, ev->objectFrame, chain)
+                                 : ("obj=- " + chain))
+                   : "",
+                regs, node);
+            logged++;
+            offset += kAnchorBlockSize;
+        }
+        spdlog::info("MGS4: sites: end, {} live blocks, {} unattributed, {} stale past the cursor.",
+            logged, unattributed, stale);
+
+        // Everything that is not a 96-byte anchor record, in pool order: the selector's
+        // backing plates were on no anchor channel (item-wheel diff sweep, 2026-09-02), so
+        // they must travel in one of these. Head bytes as floats and as hex, with the frame-1
+        // owner/channel the anchor path uses for identity.
+        int others = 0;
+        for (const auto& e : events)
+        {
+            if (e.dst < source || e.dst >= source + bytes || e.size == 96 || others >= 400)
+            {
+                continue;
+            }
+            others++;
+            std::string floats, hex;
+            const size_t n = (std::min<size_t>)(e.size, sizeof(e.head));
+            for (size_t i = 0; i + 4 <= n; i += 4)
+            {
+                float f;
+                std::memcpy(&f, e.head + i, sizeof(f));
+                floats += std::format("{}{:.4g}", i ? "," : "", f);
+            }
+            for (size_t i = 0; i < n; i++)
+            {
+                hex += std::format("{:02X}", e.head[i]);
+            }
+            std::string chain;
+            for (int i = 0; i < e.frameCount && i < 6; i++)
+            {
+                chain += (i ? "<+" : "+");
+                chain += (e.frames[i] == 0xFFFFFFFFu) ? std::string("ext") : std::format("{:X}", e.frames[i]);
+            }
+            spdlog::info("MGS4: sites: rec +{:05X}/{} owner={:X} ch={:X} f=[{}] hex={} {}",
+                e.dst - source, e.size, e.regs[1][1], e.regs[1][2], floats, hex, chain);
+        }
+        spdlog::info("MGS4: sites: {} non-anchor records listed.", others);
     }
 
     // ---- producer attribution probe --------------------------------------------------------
@@ -1637,11 +2087,81 @@ namespace AspectRatio
                             g_PoolDumpBudget.store(1);
                             spdlog::info("MGS4: live lab: pool dump armed.");
                         }
+                        else if (std::strncmp(line, "bufdump", 7) == 0)
+                        {
+                            g_BufDumpSeq.fetch_add(1);
+                            g_BufDumpMask.store(7);
+                            spdlog::info("MGS4: live lab: buffer dump {} armed.", g_BufDumpSeq.load());
+                        }
+                        else if (std::strncmp(line, "uploads", 7) == 0)
+                        {
+                            const int n = static_cast<int>(std::strtol(line + 7, nullptr, 10));
+                            g_UploadLogBudget.store(n > 0 ? n : 300);
+                            spdlog::info("MGS4: live lab: upload census armed ({} uploads).",
+                                g_UploadLogBudget.load());
+                        }
                         else if (std::strncmp(line, "producer", 8) == 0)
                         {
                             g_ProbeBudgetWrapper.store(60);
                             g_ProbeBudgetOuter.store(60);
                             spdlog::info("MGS4: live lab: producer probe armed (60 per site).");
+                        }
+                        else if (std::strncmp(line, "chanbias", 8) == 0)
+                        {
+                            // chanbias <channel> <dx>   (channel decimal or 0x.., dx in NDC)
+                            char* end = nullptr;
+                            const long channel = std::strtol(line + 8, &end, 0);
+                            const float dx = std::strtof(end, nullptr);
+                            if (channel >= 0 && channel < kChannelCount)
+                            {
+                                g_ChannelBias[channel] = dx;
+                                bool any = false;
+                                for (float v : g_ChannelBias) { any = any || v != 0.0f; }
+                                g_ChannelBiasActive.store(any);
+                                spdlog::info("MGS4: live lab: channel {} (0x{:X}) bias {:+.4f}; active={}",
+                                    channel, channel, dx, any);
+                            }
+                        }
+                        else if (std::strncmp(line, "spread", 6) == 0)
+                        {
+                            // spread 0|1 - the identity-keyed corner spread, live.
+                            bAspectPoolSpread = std::strtol(line + 6, nullptr, 0) != 0;
+                            spdlog::info("MGS4: live lab: pool spread {}.", bAspectPoolSpread ? "on" : "off");
+                        }
+                        else if (std::strncmp(line, "chanord", 7) == 0)
+                        {
+                            // chanord <channel> <ordinal> <dx> - bias only the n-th record a
+                            // channel appends each frame, to tell the records of one channel apart.
+                            char* end = nullptr;
+                            const long channel = std::strtol(line + 7, &end, 0);
+                            const long ordinal = std::strtol(end, &end, 0);
+                            g_OrdDx = std::strtof(end, nullptr);
+                            g_OrdIndex.store(static_cast<int>(ordinal));
+                            g_OrdChannel.store(channel >= 0 && channel < kChannelCount ? static_cast<int>(channel) : -1);
+                            g_ChannelBiasActive.store(true);
+                            spdlog::info("MGS4: live lab: channel 0x{:X} record #{} bias {:+.4f}.",
+                                channel, ordinal, g_OrdDx);
+                        }
+                        else if (std::strncmp(line, "chanreset", 9) == 0)
+                        {
+                            for (float& v : g_ChannelBias) { v = 0.0f; }
+                            g_OrdChannel.store(-1);
+                            g_ChannelBiasActive.store(false);
+                            spdlog::info("MGS4: live lab: channel biases cleared.");
+                        }
+                        else if (std::strncmp(line, "sites", 5) == 0)
+                        {
+                            // Snapshot the registry for the append probe's stack scan, drop
+                            // any stale events, then arm one pool dump's worth of frames.
+                            {
+                                std::lock_guard appendLock(g_AppendMutex);
+                                g_SiteObjects = g_Objects;
+                                g_AppendEvents.clear();
+                                g_AppendEvents.reserve(4096);
+                            }
+                            g_SiteDumpFrames.store(2);
+                            spdlog::info("MGS4: live lab: emit attribution armed ({} objects).",
+                                g_SiteObjects.size());
                         }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
@@ -1795,6 +2315,7 @@ namespace AspectRatio
             StartLiveAnchorLab();
             InstallRectEmitLogging();
             InstallProducerProbe();
+            InstallSiteAttribution();
         }
     }
 }

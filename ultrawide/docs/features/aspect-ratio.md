@@ -366,6 +366,17 @@ Remaining steps, converged:
    translation, no per-quad classification anywhere.
 3. **Delete the upload-time spread** once the above works.
 
+## The working design: identity-keyed draw-time spread (2026-09-02/03)
+
+The zone-based pool spread below was replaced by an **identity-keyed** version: each record is
+attributed at the pool append by a stack unwind to its owner object, channel index and (for the
+selector overlay channel) its script element offset, and shifted by the constant per-side
+amount only if that identity is in a measured table. Verified live by the user 2026-09-03
+with both wheels open and the HUD closed. The full account - transport chain, the unwind, the
+channel and element maps, the lab method, the dead ends - is in
+[ultrawide-hud-identity-spread.md](ultrawide-hud-identity-spread.md). The sections that
+follow are the history that led there and are kept as the record.
+
 ## Identification pipeline and current anchor state
 
 The corner anchoring now lives in the layout converter as a per-la2-strcode table (rigid
