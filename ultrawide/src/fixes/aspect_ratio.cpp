@@ -367,25 +367,51 @@ namespace AspectRatio
         bool named;
     };
 
-    // Channel 0x20 is the selector overlay: a centre-anchored channel that exists only while
-    // a wheel is open and carries the fullscreen dim backdrop, the centred item/weapon text,
-    // and the slot plates (the solid selected block and the translucent boxes) that must
-    // travel with their wheel. One channel, three treatments - so the key goes one level
-    // deeper. A second unwind restores the interpreter position the record was drawn for
-    // (frame-2 rbx) and the channel's script block (frame-1 r14); their difference is the
-    // element's offset inside the script, constant across frames and boots (runs 14/15,
-    // 2026-09-03: the ordinal sweep moved exactly one element per offset). Everything on
-    // the channel not listed here - backdrop, text - stays centred.
+    // The selector overlay is one script under one strcode (0x00077AEB on every one of its
+    // anchor nodes, item and weapon wheel alike): a centre-anchored channel that exists only
+    // while a wheel is open and carries the fullscreen dim backdrop, the centred item/weapon
+    // text, and the slot plates (the solid selected block and the translucent boxes) that
+    // must travel with their wheel. One strcode, three treatments - so the key goes one
+    // level deeper. A second unwind restores the interpreter position the record was drawn
+    // for (frame-2 rbx) and the channel's script block (frame-1 r14); their difference is
+    // the element's offset inside the script, constant across frames and boots (runs 14/15,
+    // 2026-09-03: the ordinal sweep moved exactly one element per offset). Everything in
+    // the script not listed here - the text - stays centred.
+    //
+    // The channel number is deliberately not part of the key: the overlay was 0x20 in every
+    // measured boot, but the gameplay widgets' channels came up one higher after a boot
+    // that went through the main menu (0x24 for the camo ring instead of 0x23, and so on),
+    // so a channel index is an allocation order, not an identity.
+    constexpr uint32_t kSelectorStrcode = 0x00077AEB;
+
     struct ElementSide
     {
-        uint8_t channel;
+        uint32_t strcode;   // opcode 0x0D node strcode, as for kHudIdentities
         uint32_t elem;      // frame-2 rbx - frame-1 r14
         int8_t side;
         const char* what;
     };
     constexpr ElementSide kHudElements[] = {
-        { 0x20, 0x1950, -1, "item wheel slot plates" },       // backdrop is +0x10F8, text +0x3B38/+0x3C08
-        { 0x20, 0x2410, +1, "weapon wheel slot plates" },     // backdrop is +0x1BB8
+        { kSelectorStrcode, 0x1950, -1, "item wheel slot plates" },       // text +0x3B38/+0x3C08
+        { kSelectorStrcode, 0x2410, +1, "weapon wheel slot plates" },
+    };
+
+    // The wheel backdrops are the opposite case: a translucent dim plate authored to cover
+    // the whole 1280 canvas, which on the centered canvas covers only the 16:9 area and
+    // leaves the side strips undimmed (hot dump 04, 2026-09-03: "needs to be extended").
+    // A plate has no detail to distort, so it is stretched about the screen centre by the
+    // spread factor - basis x and origin x both scaled - which maps the 16:9 area onto the
+    // full output exactly (hot dumps 07-09, 2026-09-03: basis 0.00117 -> 0.00156 in the
+    // record, both wheels dimmed edge to edge). Nothing else in the script is touched.
+    struct ElementStretch
+    {
+        uint32_t strcode;
+        uint32_t elem;
+        const char* what;
+    };
+    constexpr ElementStretch kHudStretched[] = {
+        { kSelectorStrcode, 0x10F8, "item wheel backdrop" },
+        { kSelectorStrcode, 0x1BB8, "weapon wheel backdrop" },
     };
 
     // World-tracked elements: labels the game pins to a projected 3D point (the pickup
@@ -422,11 +448,22 @@ namespace AspectRatio
         return nullptr;
     }
 
-    const ElementSide* HudElementEntry(int channel, uintptr_t elem)
+    const ElementSide* HudElementEntry(uint32_t strcode, uintptr_t elem)
     {
+        if (strcode == 0) { return nullptr; }
         for (const auto& entry : kHudElements)
         {
-            if (entry.channel == channel && entry.elem == elem) { return &entry; }
+            if (entry.strcode == strcode && entry.elem == elem) { return &entry; }
+        }
+        return nullptr;
+    }
+
+    const ElementStretch* HudStretchEntry(uint32_t strcode, uintptr_t elem)
+    {
+        if (strcode == 0) { return nullptr; }
+        for (const auto& entry : kHudStretched)
+        {
+            if (entry.strcode == strcode && entry.elem == elem) { return &entry; }
         }
         return nullptr;
     }
@@ -1004,6 +1041,7 @@ namespace AspectRatio
     // 96-byte records, and every 96-byte record measured on the HUD channels was an anchor.
     std::atomic<uint64_t> g_ShiftedIdentitiesLogged { 0 };
     std::atomic<uint64_t> g_ShiftedElementsLogged { 0 };
+    std::atomic<uint64_t> g_StretchedElementsLogged { 0 };
     std::atomic<uint64_t> g_WorldElementsLogged { 0 };
 
     // The per-channel treatment, this frame and last. A widget's named records set it - a
@@ -1095,18 +1133,37 @@ namespace AspectRatio
                 }
             }
 
-            // The wheel plates are the one case keyed by element offset: their channel (0x20)
-            // holds both wheels' backdrops and plates under a single strcode, and only the
-            // plates move. They do not name the channel - the backdrops stay centred.
-            const ElementSide* element = id.hasElem ? HudElementEntry(id.channel, id.elem) : nullptr;
+            // The selector overlay is the one case keyed by element offset: its script holds
+            // both wheels' backdrops, plates and text under a single strcode, and each needs
+            // its own treatment. None of them names the channel - the text stays centred.
+            const ElementSide* element = id.hasElem ? HudElementEntry(id.strcode, id.elem) : nullptr;
             if (element)
             {
                 dx += static_cast<float>(element->side) * SideShift();
                 const uint64_t bit = 1ull << (element - kHudElements);
                 if ((g_ShiftedElementsLogged.fetch_or(bit) & bit) == 0)
                 {
-                    spdlog::info("MGS4: UI Aspect: channel 0x{:02X} element +{:X} ({}) anchored {} by {:.4f}.",
-                        id.channel, id.elem, element->what, element->side < 0 ? "left" : "right", SideShift());
+                    spdlog::info("MGS4: UI Aspect: element {:08X}+{:X} ({}) on channel 0x{:02X} anchored {} by {:.4f}.",
+                        element->strcode, id.elem, element->what, id.channel, element->side < 0 ? "left" : "right", SideShift());
+                }
+            }
+            else if (const ElementStretch* stretch = id.hasElem ? HudStretchEntry(id.strcode, id.elem) : nullptr)
+            {
+                // Stretched about the screen centre: x basis and x origin scaled together,
+                // so the plate's 16:9 span becomes the full output span.
+                const float factor = HorizontalSpreadFactor();
+                float basisX = 0.0f, originX = 0.0f;
+                std::memcpy(&basisX, src + kAnchorBlockV6, sizeof(basisX));
+                std::memcpy(&originX, src + kAnchorBlockV8, sizeof(originX));
+                basisX *= factor;
+                originX *= factor;
+                std::memcpy(src + kAnchorBlockV6, &basisX, sizeof(basisX));
+                std::memcpy(src + kAnchorBlockV8, &originX, sizeof(originX));
+                const uint64_t bit = 1ull << (stretch - kHudStretched);
+                if ((g_StretchedElementsLogged.fetch_or(bit) & bit) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: element {:08X}+{:X} ({}) on channel 0x{:02X} stretched by {:.4f}.",
+                        stretch->strcode, id.elem, stretch->what, id.channel, factor);
                 }
             }
             else
@@ -1333,7 +1390,9 @@ namespace AspectRatio
                 continue;
             }
             inRun = true;
-            float v8[2] {};
+            float v6[2] {}, v7[2] {}, v8[2] {};
+            std::memcpy(v6, pool + offset + kAnchorBlockV6, sizeof(v6));
+            std::memcpy(v7, pool + offset + kAnchorBlockV7, sizeof(v7));
             std::memcpy(v8, pool + offset + kAnchorBlockV8, sizeof(v8));
 
             const uintptr_t address = source + offset;
@@ -1381,8 +1440,10 @@ namespace AspectRatio
                 }
             }
 
-            spdlog::info("MGS4: sites: +{:05X} v8=({:.4f},{:.4f}) norm=({:.4f},{:.4f}){} {} {}{} node={}",
-                offset, v8[0], v8[1], v8[0] * factor, v8[1], strict ? "" : " r",
+            // v6/v7 are the basis: the quad's extent in clip units, so a backing plate's
+            // width is readable straight off the line (Issue 04, the wheel backdrops).
+            spdlog::info("MGS4: sites: +{:05X} v8=({:.4f},{:.4f}) norm=({:.4f},{:.4f}) v6=({:.5f},{:.5f}) v7=({:.5f},{:.5f}){} {} {}{} node={}",
+                offset, v8[0], v8[1], v8[0] * factor, v8[1], v6[0], v6[1], v7[0], v7[1], strict ? "" : " r",
                 ev ? std::format("rec@+{:X}/{}", address - ev->dst, ev->size) : "no-event",
                 ev ? (ev->object ? std::format("obj={:08X}+{:X}@f{} {}", ev->objectStrcode, ev->objectDelta, ev->objectFrame, chain)
                                  : ("obj=- " + chain))

@@ -191,12 +191,28 @@ offset. Each ordinal moved exactly one element:
 
 | Wheel | Element offset | What it draws | Treatment |
 | --- | --- | --- | --- |
-| item | +0x10F8 | fullscreen dim backdrop | stays centred |
+| item | **+0x10F8** | fullscreen dim backdrop | **stretched** by the spread factor |
 | item | **+0x1950** | selector backing plates: the solid orange selected block and the translucent slot boxes | **left** |
 | item | +0x3B38, +0x3C08 | centred title / description / button prompts | stays centred |
 | item | +0x3EC0 | SE MODE plate | stays centred (pending) |
-| weapon | +0x1BB8 | fullscreen dim backdrop | stays centred |
+| weapon | **+0x1BB8** | fullscreen dim backdrop | **stretched** by the spread factor |
 | weapon | **+0x2410** | selector backing plates | **right** |
+
+The backdrops (hot dump 04, 2026-09-03: "grey background is centered, needs to be extended")
+are authored to cover the whole 1280 canvas, so on the centred canvas they dim only the 16:9
+area and leave the side strips bright. A dim plate has no detail to distort, so `kHudStretched`
+scales the record's x basis and x origin by the spread factor - the 16:9 span becomes the full
+output span exactly. Verified in the record (`sites` now prints v6/v7: basis 0.00117 ->
+0.00156 at 3840x1620) and by the user (hot dumps 07-09 and 12-14, 2026-09-03: "everything
+looks good").
+
+Every anchor node of the overlay - both backdrops, both plate sets - carries the node strcode
+**`0x00077AEB`** (`sites` dumps with each wheel open, 2026-09-03), so both tables are keyed on
+`(strcode, element offset)`, not on the channel number. That matters: the overlay was 0x20 in
+every measured boot, but a boot that went through the main menu brought every gameplay
+widget's channel up by one (camo ring 0x24 instead of 0x23, life bar 0x22, item panel 0x1F,
+weapon panel 0x1E, battery 0x05). A channel index is an allocation order, not an identity; the
+strcode-keyed widgets did not notice.
 
 The plates were the last visible defect: the item label had moved with its wheel but "there is a
 fairly large bright orange box ... extending out to the right, then there's the orange
@@ -234,8 +250,9 @@ inside the script block (`rbx - r14 < 0x10000`) and the opcode byte is `0x0D`, i
 interpreter has itself just read.
 
 The strcode is the identity that the channel and element-offset keys were standing in for.
-Nothing in the channel table has been re-keyed on it yet - the channel table works and is
-verified - but it is what a new element should be keyed on.
+Every shipping entry is keyed on it now: the corner widgets by strcode alone (`kHudIdentities`),
+the selector overlay by strcode `0x00077AEB` plus element offset (`kHudElements`,
+`kHudStretched`). No channel number is consulted for a treatment.
 
 ## 6b. World-tracked labels
 
@@ -358,9 +375,16 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 
 ## 10. What is not done
 
-- **The dim backdrop stops ~240 px short of each screen edge at 21:9** (elements +0x10F8 /
-  +0x1BB8). That is the game's own quad size, not the shift; a fix would scale that element's
-  `v6.x` basis rather than move it. Not yet decided.
+- **Other 16:9-sized backdrops.** The wheel backdrops are stretched (section 6), but the same
+  shape shows elsewhere: the BASIC CONTROLS overlay's dark panel stops at the 16:9 edges
+  (capture 2026-09-03, `lab3/title2/item_sites.jpg`), and the pause menu and codec have not
+  been looked at. Each is a strcode + element read off a `sites` dump and one `kHudStretched`
+  line; the user decides which ones matter.
+- **The title screen's grey panel** (hot dump 03: "offset to the left and not centered") was
+  reported against an earlier build; the user re-checked it on 2026-09-03 and it looked right
+  ("you already fixed that"). No dedicated fix was made and the draw path was never identified,
+  so if it comes back the plan stands: `rectlog` + `sites` on that screen to find the record
+  spanning px 0..3360.
 - **SE MODE selector cluster** (channels 0x08/09/0A and element +0x3EC0) stays centred at the
   top of the item wheel. Whether it should travel left with the wheel is the user's call.
 - **Other world-tracked labels are not in `kWorldElements` yet.** Objective markers, the
