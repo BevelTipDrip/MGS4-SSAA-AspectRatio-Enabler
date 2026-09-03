@@ -14,8 +14,8 @@ namespace AspectRatio
     // Applied only when the setting asks for it.
     void ApplyFixes();
 
-    // Experimental, off by default and absent from the Config Tool while the second layer
-    // (anchoring corner widgets to the real corners) is still being built.
+    // Layer 1. In a normal launch the Config Tool's "Ultrawide HUD Fix" sets this together
+    // with bAspectPoolSpread; the lab settings file drives them separately.
     inline bool bFixUiAspect = false;
 
     // Layer 2: spread widget anchors so corner widgets sit at the margins they have on 16:9
@@ -50,6 +50,7 @@ namespace AspectRatio
     // selector's whole cross moves with its box so the wheel stays rigid. Also restores
     // the world-tracked decompression (Solid Eye labels). Experimental; intended to be
     // run with Fix UI Aspect Corners=0 so the conversion-time table does not double-shift.
+    // This is the shipping layer 2 (see bFixUiAspect).
     inline bool bAspectPoolSpread = false;
 
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run

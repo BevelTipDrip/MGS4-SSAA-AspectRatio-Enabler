@@ -114,6 +114,10 @@ namespace AspectRatio
             return result;
         }
 
+        // The object registry only serves the lab (live bias, the corner table's
+        // first-instance rule, runtime anchoring). Nothing prunes it in a normal launch, so
+        // it is not kept there.
+        if (bLabMode)
         {
             uint32_t strcodeForRegistry = 0;
             std::memcpy(&strcodeForRegistry, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcodeForRegistry));
@@ -2361,22 +2365,22 @@ namespace AspectRatio
 
     void ApplyFixes()
     {
-        // Everything below is research instrumentation. Its switches only exist in the lab
-        // settings file, and the always-on pieces (the upload-helper hook, the live command
-        // thread, the probes) must not run in a normal launch either.
-        if (!bLabMode)
+        // A normal launch gets exactly two hooks: the layout converter (layer 1, the
+        // undistorted centered canvas) and the pool append (layer 2, the identity-keyed
+        // corner spread). Everything else here is research instrumentation - the upload-helper
+        // probe, the live command thread, the rect/producer/channel logging - whose switches
+        // only exist in the lab settings file and which must not run outside a lab boot.
+        if (bLabMode)
         {
-            return;
-        }
+            if (bLogUiChannels)
+            {
+                InstallChannelCensus();
+            }
 
-        if (bLogUiChannels)
-        {
-            InstallChannelCensus();
-        }
-
-        if (bLogLa2Loads)
-        {
-            InstallLa2Logging();
+            if (bLogLa2Loads)
+            {
+                InstallLa2Logging();
+            }
         }
 
         if (!bFixUiAspect)
@@ -2402,7 +2406,12 @@ namespace AspectRatio
 
         // Layer 2 rides on layer 1: without the undistorted centered base, spreading anchors
         // would just rearrange stretched widgets.
-        if (UiLayoutConverter_hook)
+        if (!UiLayoutConverter_hook)
+        {
+            return;
+        }
+
+        if (bLabMode)
         {
             ApplyCornerSpread();
             if (bFixUiAspectCorners && bAspectRuntimeAnchoring)
@@ -2412,6 +2421,12 @@ namespace AspectRatio
             StartLiveAnchorLab();
             InstallRectEmitLogging();
             InstallProducerProbe();
+        }
+
+        // The spread's own hook. Its probe self-gates to a flag check when neither the
+        // spread nor a lab diagnostic is armed, and the spread is a strict no-op at 16:9.
+        if (bAspectPoolSpread || bLabMode)
+        {
             InstallSiteAttribution();
         }
     }
