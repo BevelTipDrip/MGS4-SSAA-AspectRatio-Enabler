@@ -1,7 +1,13 @@
 # The ultrawide HUD fix: how it works and how it was made
 
-**Settings:** `Fix UI Aspect=1` + `Aspect Pool Spread=1` (with `Fix UI Aspect Corners=0`), both
-in `[Graphics]`, both lab-only and off by default at the time of writing
+**Settings (lab file):** `Fix UI Aspect=1` + `Aspect Pool Spread=1` (with `Fix UI Aspect
+Corners=0`), plus `Aspect World Tracking` (follows the pool spread when absent), all in
+`[Graphics]`
+**Settings (Config Tool):** `Ultrawide HUD` = Stretched HUD (nothing on) / Centered HUD (layer 1
+only) / Expanded HUD (both layers); `Solid Eye Overlay Fix` = the world-tracked groups of
+section 6b, switchable on its own so a centered HUD can keep its labels on target. Since
+2026-09-03; a settings file holding only the earlier on/off `Ultrawide HUD Fix` still reads as
+Expanded when it was on
 **Implements:** `src/fixes/aspect_ratio.cpp`
 **State:** research build, verified live at 3840x1620 on 2026-09-03 
 The umbrella document is [aspect-ratio.md](aspect-ratio.md); this one is
@@ -280,6 +286,15 @@ the channel keep their native pixel offsets, so the bracket keeps its size. Fram
 apart by the append destination (the two pools ping-pong: a `dst` below the last one, or more
 than 64 KB above it, is a new frame). Lab switch `world 0|1|2`: off, translate the group
 (default), scale every anchor (widens the bracket by 33 %; kept only for comparison).
+
+The world groups have their own switch, `bAspectWorldTracking` (the Config Tool's "Solid Eye
+Overlay Fix", lab key `Aspect World Tracking`). It shares the pool-append hook with the corner
+spread but the two never touch each other's channels: the world branch names only world
+channels, the corner and selector branches name only theirs, and the group translation
+(`ChannelDx`) carries a channel only when its own switch named it. So Centered HUD + Solid Eye
+Overlay Fix moves the labels and nothing else, and Expanded HUD without it leaves the labels
+where layer 1 puts them. Both remain a strict no-op at 16:9, and neither installs without
+layer 1 (a stretched HUD never moved the labels off their targets in the first place).
 
 Verified live by the user with the label held toward the edge: "it looks like it's working!"
 (2026-09-03, run 18; captures in `lab3\pickup2\`, log line `world element 0066AF8A (pickup

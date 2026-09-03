@@ -14,8 +14,9 @@ namespace AspectRatio
     // Applied only when the setting asks for it.
     void ApplyFixes();
 
-    // Layer 1. In a normal launch the Config Tool's "Ultrawide HUD Fix" sets this together
-    // with bAspectPoolSpread; the lab settings file drives them separately.
+    // Layer 1. In a normal launch the Config Tool's "Ultrawide HUD" choice sets this alone
+    // (Centered HUD) or together with bAspectPoolSpread (Expanded HUD); the lab settings
+    // file drives them separately.
     inline bool bFixUiAspect = false;
 
     // Layer 2: spread widget anchors so corner widgets sit at the margins they have on 16:9
@@ -52,6 +53,14 @@ namespace AspectRatio
     // run with Fix UI Aspect Corners=0 so the conversion-time table does not double-shift.
     // This is the shipping layer 2 (see bFixUiAspect).
     inline bool bAspectPoolSpread = false;
+
+    // World-tracked labels (pickup names, Solid Eye stat blocks, targeting icons): translate
+    // each group back onto the object it marks, undoing layer 1's horizontal compression for
+    // widgets that are projected from 3D positions rather than laid out on the 16:9 canvas.
+    // The Config Tool's "Solid Eye Overlay Fix"; shares the pool hook with bAspectPoolSpread
+    // but is switchable on its own, so a centered HUD can keep its labels on target. Does
+    // nothing without bFixUiAspect.
+    inline bool bAspectWorldTracking = false;
 
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
     // maps every visible widget to its host object by measured shift.

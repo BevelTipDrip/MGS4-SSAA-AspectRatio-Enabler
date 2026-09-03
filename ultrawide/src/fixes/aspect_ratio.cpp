@@ -1102,11 +1102,16 @@ namespace AspectRatio
             std::memset(g_ChannelNow, 0, sizeof(g_ChannelNow));
         }
 
+        // Two independently switchable treatments share the walk: the world-tracked groups
+        // (bAspectWorldTracking) and the corner/selector spread (bAspectPoolSpread). Each
+        // names only its own channels, so ChannelDx carries a group only when its switch is
+        // on - a centered HUD with world tracking moves the Solid Eye labels and nothing else.
         float dx = 0.0f;
         if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
         {
+            const bool corners = bAspectPoolSpread;
             ChannelTreatment& now = g_ChannelNow[id.channel];
-            if (const WorldElement* world = WorldElementEntry(id.strcode))
+            if (const WorldElement* world = bAspectWorldTracking ? WorldElementEntry(id.strcode) : nullptr)
             {
                 const int worldMode = g_WorldMode.load(std::memory_order_relaxed);
                 if (worldMode != 0 && (worldMode == 2 || !now.named))
@@ -1122,7 +1127,7 @@ namespace AspectRatio
                     }
                 }
             }
-            else if (const HudIdentity* identity = HudIdentityEntry(id.strcode))
+            else if (const HudIdentity* identity = corners ? HudIdentityEntry(id.strcode) : nullptr)
             {
                 now = { static_cast<float>(identity->side) * SideShift(), true };
                 const uint64_t logBit = 1ull << (identity - kHudIdentities);
@@ -1136,7 +1141,7 @@ namespace AspectRatio
             // The selector overlay is the one case keyed by element offset: its script holds
             // both wheels' backdrops, plates and text under a single strcode, and each needs
             // its own treatment. None of them names the channel - the text stays centred.
-            const ElementSide* element = id.hasElem ? HudElementEntry(id.strcode, id.elem) : nullptr;
+            const ElementSide* element = (corners && id.hasElem) ? HudElementEntry(id.strcode, id.elem) : nullptr;
             if (element)
             {
                 dx += static_cast<float>(element->side) * SideShift();
@@ -1147,7 +1152,7 @@ namespace AspectRatio
                         element->strcode, id.elem, element->what, id.channel, element->side < 0 ? "left" : "right", SideShift());
                 }
             }
-            else if (const ElementStretch* stretch = id.hasElem ? HudStretchEntry(id.strcode, id.elem) : nullptr)
+            else if (const ElementStretch* stretch = (corners && id.hasElem) ? HudStretchEntry(id.strcode, id.elem) : nullptr)
             {
                 // Stretched about the screen centre: x basis and x origin scaled together,
                 // so the plate's 16:9 span becomes the full output span.
@@ -1200,7 +1205,7 @@ namespace AspectRatio
     {
         const bool sites = g_SiteDumpFrames.load(std::memory_order_relaxed) > 0;
         const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
-        const bool spread = bAspectPoolSpread && SideShift() != 0.0f;   // strict no-op at 16:9
+        const bool spread = (bAspectPoolSpread || bAspectWorldTracking) && SideShift() != 0.0f;   // strict no-op at 16:9
         if (!sites && !bias && !spread)
         {
             return;
@@ -2484,9 +2489,10 @@ namespace AspectRatio
             InstallProducerProbe();
         }
 
-        // The spread's own hook. Its probe self-gates to a flag check when neither the
-        // spread nor a lab diagnostic is armed, and the spread is a strict no-op at 16:9.
-        if (bAspectPoolSpread || bLabMode)
+        // The spread's own hook, shared with the world tracking. Its probe self-gates to a
+        // flag check when neither treatment nor a lab diagnostic is armed, and both are a
+        // strict no-op at 16:9.
+        if (bAspectPoolSpread || bAspectWorldTracking || bLabMode)
         {
             InstallSiteAttribution();
         }
