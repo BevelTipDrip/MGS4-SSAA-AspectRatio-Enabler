@@ -286,7 +286,7 @@ namespace AspectRatio
     // records, and the pool's source pointer rides the stack as the helper's fifth argument,
     // invisible to any register-based probe. The upload hook stays as the mount point for
     // the pool diagnostics; the spread itself is applied per record at the append (see
-    // kHudChannels and PoolAppendProbe).
+    // kHudIdentities and PoolAppendProbe).
     //
     // Blocks are recognised by signature, never by offset arithmetic: a real anchor block
     // has an axis-aligned basis - v6 = (2/W, 0), v7 = (0, -2/H) - and v8.z exactly 1.
@@ -324,36 +324,43 @@ namespace AspectRatio
     // missing widget is a cosmetic gap and a one-line addition here, never a wrong jump.
     constexpr uintptr_t kRvaHudOwner = 0x1DE3290;   // frame-1 rbp for every gameplay HUD record
 
-    struct ChannelSide
+    // The widget itself, by the element strcode its anchor-emitting nodes carry (opcode 0x0D,
+    // dword at node+8 - the same key the world labels use). The channel alone was the key
+    // until hot dump 02 (2026-09-03): the load screen draws its save thumbnails through the
+    // HUD owner on channels 3-6, and channel 4 is also the battery bar's, so the third
+    // thumbnail went left with the battery. The strcode tells them apart - 0x000D12D5 is the
+    // battery wherever it is drawn, 0x00075ED4 a thumbnail - and no channel number needs to
+    // mean anything on its own. Which channels each widget was measured on is kept for the
+    // record: 0x1D weapon panel (and the wheel slots 0x13/15/17/19/1B, the panel at the row's
+    // end), 0x1E item panel (and the item wheel 0x0E/10/12/14/16/18/1A/1C), 0x21 life bar,
+    // 0x23 camo ring, 0x04 battery bar; chanbias confirmed by the user's read of the captures.
+    struct HudIdentity
     {
-        uint8_t channel;
+        uint32_t strcode;
         int8_t side;        // -1 left edge, +1 right edge
         const char* what;
     };
-    constexpr ChannelSide kHudChannels[] = {
-        // closed-HUD widgets (chanbias confirmed by the user's read of the captures, 2026-09-03)
-        { 0x1D, +1, "weapon panel + ammo ticks" },
-        { 0x1E, -1, "item panel / Solid Eye" },
-        { 0x21, -1, "life bar" },
-        { 0x23, +1, "camo ring" },
-        { 0x04, -1, "battery bar" },                // sits under the item panel; (-0.539,-0.911)
-        // weapon selector: column at x=+0.539 on 0x13/15/17/19, row 0x1B; the selected-weapon
-        // panel is 0x1D again, at the row's end. The wheel arrives at the corner rigid.
-        { 0x13, +1, "weapon wheel column" },
-        { 0x15, +1, "weapon wheel column" },
-        { 0x17, +1, "weapon wheel column" },
-        { 0x19, +1, "weapon wheel junction" },
-        { 0x1B, +1, "weapon wheel row" },
-        // item selector: column at x=-0.789 on 0x0E/10/12/14, junction 0x16, row 0x18/1A/1C;
-        // 0x1E becomes the top slot of the column.
-        { 0x0E, -1, "item wheel column" },
-        { 0x10, -1, "item wheel column" },
-        { 0x12, -1, "item wheel column" },
-        { 0x14, -1, "item wheel column" },
-        { 0x16, -1, "item wheel junction" },
-        { 0x18, -1, "item wheel row" },
-        { 0x1A, -1, "item wheel row" },
-        { 0x1C, -1, "item wheel row" },
+    constexpr HudIdentity kHudIdentities[] = {
+        { 0x00FF6177, +1, "weapon panel" },         // also every weapon wheel slot
+        { 0x0093929C, +1, "weapon icon" },
+        { 0x00F1D8B7, -1, "item panel / Solid Eye" },   // also every item wheel slot
+        { 0x0085D6E9, -1, "life bar" },
+        { 0x0064D23C, +1, "camo ring" },
+        { 0x000D12D5, -1, "battery bar" },          // sits under the item panel; (-0.539,-0.911)
+    };
+
+    // A widget's channel also carries records with no node of their own - the ammo and life
+    // ticks (+BCFEA, opcode 0x14), the +BCEF3 pairs - which go where the widget goes. So a
+    // record that names its widget sets the channel's treatment for the frame, and a record
+    // that names nothing follows it: this frame's if the widget has already been named, last
+    // frame's for the records a widget emits before its first named node (the life bar's ticks
+    // lead its panel). The channel is one widget's for as long as the widget exists, so a
+    // stale treatment outlives it by one frame at most, and a channel nobody names - the
+    // load screen's - shifts nothing.
+    struct ChannelTreatment
+    {
+        float dx;
+        bool named;
     };
 
     // Channel 0x20 is the selector overlay: a centre-anchored channel that exists only while
@@ -397,6 +404,8 @@ namespace AspectRatio
     constexpr WorldElement kWorldElements[] = {
         { 0x0066AF8A, "pickup label" },
         { 0x00860C0D, "stat block" },   // Solid Eye enemy/friendly block: one anchor + tick bar, channels 0x4F/0x50 (run 19)
+        { 0x004FBED3, "targeting icon" },   // Solid Eye NV target marker, channels 0x52/0x53 (hot dumps 07/08);
+                                            // its screen position also needs the reticle truncation fix, see graphics_settings.cpp
     };
 
     const WorldElement* WorldElementEntry(uint32_t strcode)
@@ -418,25 +427,14 @@ namespace AspectRatio
         return nullptr;
     }
 
-    const ChannelSide* HudChannelEntry(int channel)
+    const HudIdentity* HudIdentityEntry(uint32_t strcode)
     {
-        for (const auto& entry : kHudChannels)
+        if (strcode == 0) { return nullptr; }
+        for (const auto& entry : kHudIdentities)
         {
-            if (entry.channel == channel) { return &entry; }
+            if (entry.strcode == strcode) { return &entry; }
         }
         return nullptr;
-    }
-
-    int HudChannelSide(int channel)
-    {
-        const auto* entry = HudChannelEntry(channel);
-        return entry ? entry->side : 0;
-    }
-
-    const char* HudChannelName(int channel)
-    {
-        const auto* entry = HudChannelEntry(channel);
-        return entry ? entry->what : "?";
     }
 
     SafetyHookMid UploadHelper_hook {};
@@ -1000,26 +998,28 @@ namespace AspectRatio
     // Rotated quads (the compass arrow, the weapon silhouette) pass the relaxed signature;
     // under a known owner and channel the structural test only has to reject non-anchor
     // 96-byte records, and every 96-byte record measured on the HUD channels was an anchor.
-    std::atomic<bool> g_ShiftedChannelsLogged[kChannelCount] {};
+    std::atomic<uint64_t> g_ShiftedIdentitiesLogged { 0 };
     std::atomic<uint64_t> g_ShiftedElementsLogged { 0 };
     std::atomic<uint64_t> g_WorldElementsLogged { 0 };
 
-    // World tracking, per channel and per frame: the first world-element record a channel
-    // appends in a frame is the label's reference (the pickup label's centre, +0x298, leads
-    // its four corners); its correction is remembered and applied to the rest of the group,
-    // so the bracket moves as one piece. The stat block emits ten records - two +BCEF3 and
-    // eight tick pips - *before* its reference (run 20, 2026-09-03: they stayed at the native
-    // x while the rest moved), so a channel that carried a reference last frame keeps its
-    // delta armed for the records that precede this frame's reference. The channel is
-    // dedicated to the label while it exists and the reference recurs every frame, so a
-    // stale delta can outlive its label by one frame at most. Render thread only. The lab
-    // switch: 0 off, 1 translate the group by the reference's correction (default), 2 scale
-    // every anchor - the wrong treatment for a fixed-size bracket, kept for comparison.
+    // The per-channel treatment, this frame and last. A widget's named records set it - a
+    // corner widget to its side's constant, a world label to the correction its reference
+    // needs - and its unnamed records read it. World tracking: the first world-element
+    // record a channel appends in a frame is the label's reference (the pickup label's
+    // centre, +0x298, leads its four corners); its correction is remembered and applied to
+    // the rest of the group, so the bracket moves as one piece. The stat block emits ten
+    // records - two +BCEF3 and eight tick pips - *before* its reference (run 20,
+    // 2026-09-03: they stayed at the native x while the rest moved), and the life bar's
+    // ticks lead its panel the same way, so a record that arrives before its channel is
+    // named this frame takes last frame's treatment. The channel is dedicated to the widget
+    // while it exists and the widget names it every frame, so a stale treatment can outlive
+    // its widget by one frame at most. Render thread only. The world lab switch: 0 off, 1
+    // translate the group by the reference's correction (default), 2 scale every anchor -
+    // the wrong treatment for a fixed-size bracket, kept for comparison.
     std::atomic<int> g_WorldMode { 1 };
     uintptr_t g_FrameLastDst = 0;
-    float g_WorldDelta[kChannelCount] {};
-    bool g_WorldSet[kChannelCount] {};     // per channel: reference seen this frame
-    bool g_WorldArmed[kChannelCount] {};   // per channel: reference seen last frame
+    ChannelTreatment g_ChannelNow[kChannelCount] {};
+    ChannelTreatment g_ChannelLast[kChannelCount] {};
 
     // A new frame starts at the base of the other pool (or below the last append).
     bool NewFrameAt(uintptr_t dst)
@@ -1027,6 +1027,13 @@ namespace AspectRatio
         const bool fresh = dst < g_FrameLastDst || dst > g_FrameLastDst + 0x10000;
         g_FrameLastDst = dst;
         return fresh;
+    }
+
+    float ChannelDx(int channel)
+    {
+        if (g_ChannelNow[channel].named) { return g_ChannelNow[channel].dx; }
+        if (g_ChannelLast[channel].named) { return g_ChannelLast[channel].dx; }
+        return 0.0f;
     }
 
     void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias)
@@ -1049,60 +1056,59 @@ namespace AspectRatio
         if (NewFrameAt(ctx.rcx))
         {
             g_OrdCount = 0;
-            std::memcpy(g_WorldArmed, g_WorldSet, sizeof(g_WorldArmed));
-            std::memset(g_WorldSet, 0, sizeof(g_WorldSet));
+            std::memcpy(g_ChannelLast, g_ChannelNow, sizeof(g_ChannelLast));
+            std::memset(g_ChannelNow, 0, sizeof(g_ChannelNow));
         }
 
         float dx = 0.0f;
         if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
         {
-            const WorldElement* world = WorldElementEntry(id.strcode);
-            const int worldMode = world ? g_WorldMode.load(std::memory_order_relaxed) : 0;
-            if (worldMode != 0 && (worldMode == 2 || !g_WorldSet[id.channel]))
+            ChannelTreatment& now = g_ChannelNow[id.channel];
+            if (const WorldElement* world = WorldElementEntry(id.strcode))
             {
-                float x = 0.0f;
-                std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
-                const float own = x * (HorizontalSpreadFactor() - 1.0f);
-                g_WorldDelta[id.channel] = own;
-                g_WorldSet[id.channel] = true;
-                const uint64_t logBit = 1ull << (world - kWorldElements);
-                if ((g_WorldElementsLogged.fetch_or(logBit) & logBit) == 0)
+                const int worldMode = g_WorldMode.load(std::memory_order_relaxed);
+                if (worldMode != 0 && (worldMode == 2 || !now.named))
                 {
-                    spdlog::info("MGS4: UI Aspect: world element {:08X} ({}) on channel 0x{:02X}: reference element +{:X}, x {:.4f} -> {:.4f}.",
-                        world->strcode, world->what, id.channel, id.elem, x, x + own);
-                }
-            }
-            // A world label's channel is its own: everything the channel appends this frame
-            // (corners, ticks, text anchors) travels with it - after the reference by this
-            // frame's delta, before it by last frame's.
-            const bool worldChannel = g_WorldSet[id.channel] || g_WorldArmed[id.channel];
-            if (worldChannel)
-            {
-                dx += g_WorldDelta[id.channel];
-            }
-            int side = worldChannel ? 0 : HudChannelSide(id.channel);
-            if (side != 0)
-            {
-                if (!g_ShiftedChannelsLogged[id.channel].exchange(true))
-                {
-                    spdlog::info("MGS4: UI Aspect: channel 0x{:02X} ({}) anchored {} by {:.4f}.",
-                        id.channel, HudChannelName(id.channel), side < 0 ? "left" : "right", SideShift());
-                }
-            }
-            else if (id.hasElem)
-            {
-                if (const auto* element = HudElementEntry(id.channel, id.elem))
-                {
-                    side = element->side;
-                    const uint64_t bit = 1ull << (element - kHudElements);
-                    if ((g_ShiftedElementsLogged.fetch_or(bit) & bit) == 0)
+                    float x = 0.0f;
+                    std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
+                    now = { x * (HorizontalSpreadFactor() - 1.0f), true };
+                    const uint64_t logBit = 1ull << (world - kWorldElements);
+                    if ((g_WorldElementsLogged.fetch_or(logBit) & logBit) == 0)
                     {
-                        spdlog::info("MGS4: UI Aspect: channel 0x{:02X} element +{:X} ({}) anchored {} by {:.4f}.",
-                            id.channel, id.elem, element->what, side < 0 ? "left" : "right", SideShift());
+                        spdlog::info("MGS4: UI Aspect: world element {:08X} ({}) on channel 0x{:02X}: reference element +{:X}, x {:.4f} -> {:.4f}.",
+                            world->strcode, world->what, id.channel, id.elem, x, x + now.dx);
                     }
                 }
             }
-            dx += static_cast<float>(side) * SideShift();
+            else if (const HudIdentity* identity = HudIdentityEntry(id.strcode))
+            {
+                now = { static_cast<float>(identity->side) * SideShift(), true };
+                const uint64_t logBit = 1ull << (identity - kHudIdentities);
+                if ((g_ShiftedIdentitiesLogged.fetch_or(logBit) & logBit) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: element {:08X} ({}) on channel 0x{:02X} anchored {} by {:.4f}.",
+                        identity->strcode, identity->what, id.channel, identity->side < 0 ? "left" : "right", SideShift());
+                }
+            }
+
+            // The wheel plates are the one case keyed by element offset: their channel (0x20)
+            // holds both wheels' backdrops and plates under a single strcode, and only the
+            // plates move. They do not name the channel - the backdrops stay centred.
+            const ElementSide* element = id.hasElem ? HudElementEntry(id.channel, id.elem) : nullptr;
+            if (element)
+            {
+                dx += static_cast<float>(element->side) * SideShift();
+                const uint64_t bit = 1ull << (element - kHudElements);
+                if ((g_ShiftedElementsLogged.fetch_or(bit) & bit) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: channel 0x{:02X} element +{:X} ({}) anchored {} by {:.4f}.",
+                        id.channel, id.elem, element->what, element->side < 0 ? "left" : "right", SideShift());
+                }
+            }
+            else
+            {
+                dx += ChannelDx(id.channel);
+            }
         }
         if (bias)
         {
