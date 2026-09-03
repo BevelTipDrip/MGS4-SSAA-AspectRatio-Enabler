@@ -3,6 +3,7 @@
 #include "aspect_ratio.hpp"
 
 #include "common.hpp"
+#include "config.hpp"
 #include "logging.hpp"
 #include "resolution_scaling_fixes.hpp"
 
@@ -1743,6 +1744,14 @@ namespace AspectRatio
 
     void ApplyFixes()
     {
+        // Everything below is research instrumentation. Its switches only exist in the lab
+        // settings file, and the always-on pieces (the upload-helper hook, the live command
+        // thread, the probes) must not run in a normal launch either.
+        if (!bLabMode)
+        {
+            return;
+        }
+
         if (bLogUiChannels)
         {
             InstallChannelCensus();
