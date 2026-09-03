@@ -377,13 +377,36 @@ namespace AspectRatio
         { 0x20, 0x2410, +1, "weapon wheel slot plates" },     // backdrop is +0x1BB8
     };
 
-    bool ChannelHasElements(int channel)
+    // World-tracked elements: labels the game pins to a projected 3D point (the pickup
+    // label's name plate and bracket). Their channel is allocated per label instance, so
+    // the key is the element itself: every anchor-emitting node measured (run 17,
+    // 2026-09-03) is opcode 0x0D with the element's strcode in the dword at node+8, and the
+    // label's five anchors - the centre first, then the four bracket corners - all carry
+    // 0x0066AF8A. The 3D projection already uses the real aspect, so the centre's NDC x is
+    // right for the full output width, but the HUD canvas maps it onto the centred 16:9
+    // area: the plate lands at 480 + (x+1)*1440 px instead of (x+1)*1920, an error of x*480
+    // px that grows toward the edges. Multiplying the centre by the spread factor lands it
+    // on the object; the corners are then translated by the same delta so the bracket keeps
+    // its native size (the vertical axis needs nothing - the canvas height is the output
+    // height).
+    struct WorldElement
     {
-        for (const auto& entry : kHudElements)
+        uint32_t strcode;   // dword at frame-2 rbx + 8 under opcode 0x0D
+        const char* what;
+    };
+    constexpr WorldElement kWorldElements[] = {
+        { 0x0066AF8A, "pickup label" },
+        { 0x00860C0D, "stat block" },   // Solid Eye enemy/friendly block: one anchor + tick bar, channels 0x4F/0x50 (run 19)
+    };
+
+    const WorldElement* WorldElementEntry(uint32_t strcode)
+    {
+        if (strcode == 0) { return nullptr; }
+        for (const auto& entry : kWorldElements)
         {
-            if (entry.channel == channel) { return true; }
+            if (entry.strcode == strcode) { return &entry; }
         }
-        return false;
+        return nullptr;
     }
 
     const ElementSide* HudElementEntry(int channel, uintptr_t elem)
@@ -886,7 +909,9 @@ namespace AspectRatio
     // and by wheel slot, and menus sit on the dynamic channels 1-4), and the record being
     // appended still lives in the assembler's frame, so an anchor block can be shifted in
     // place before the memcpy and the result is on screen the same frame.
-    constexpr int kChannelCount = 64;
+    // 128: the Solid Eye stat blocks take channels 0x4F/0x50 (runs 18/19, 2026-09-03), so
+    // the dynamic range runs past 64.
+    constexpr int kChannelCount = 128;
     float g_ChannelBias[kChannelCount] {};
     std::atomic<bool> g_ChannelBiasActive { false };
     // Ordinal bias ("chanord"): only the n-th record a channel appends per frame. Counted on
@@ -894,7 +919,6 @@ namespace AspectRatio
     std::atomic<int> g_OrdChannel { -1 };
     std::atomic<int> g_OrdIndex { 0 };
     float g_OrdDx = 0.0f;
-    uintptr_t g_OrdLastDst = 0;
     int g_OrdCount = 0;
 
     void BuildAppendContext(const SafetyHookContext& ctx, CONTEXT& c)
@@ -920,6 +944,7 @@ namespace AspectRatio
         int channel;
         bool hasElem;
         uintptr_t elem;     // frame-2 rbx - frame-1 r14, see kHudElements
+        uint32_t strcode;   // the node's element strcode, 0 when the node is not opcode 0x0D
     };
 
     bool UnwindOnce(CONTEXT& c)
@@ -945,14 +970,26 @@ namespace AspectRatio
             return { 0, -1, false, 0 };
         }
         AppendIdentity id { static_cast<uintptr_t>(c.Rbp),
-            c.Rsi < static_cast<DWORD64>(kChannelCount) ? static_cast<int>(c.Rsi) : -1, false, 0 };
-        if (wantElem && ChannelHasElements(id.channel))
+            c.Rsi < static_cast<DWORD64>(kChannelCount) ? static_cast<int>(c.Rsi) : -1, false, 0, 0 };
+        if (wantElem && id.channel >= 0)
         {
             const uintptr_t script = static_cast<uintptr_t>(c.R14);
             if (UnwindOnce(c))
             {
+                const uintptr_t node = static_cast<uintptr_t>(c.Rbx);
                 id.hasElem = true;
-                id.elem = static_cast<uintptr_t>(c.Rbx) - script;
+                id.elem = node - script;
+                // The node the interpreter is executing: it has just read this opcode and
+                // its operands out of the script block, so the same bytes are readable here
+                // as long as the position really is inside the block r14 points at.
+                if (script > 0x10000 && id.elem < 0x10000)
+                {
+                    const auto* bytes = reinterpret_cast<const uint8_t*>(node);
+                    if (bytes[0] == 0x0D)
+                    {
+                        std::memcpy(&id.strcode, bytes + 8, sizeof(id.strcode));
+                    }
+                }
             }
         }
         return id;
@@ -963,8 +1000,34 @@ namespace AspectRatio
     // Rotated quads (the compass arrow, the weapon silhouette) pass the relaxed signature;
     // under a known owner and channel the structural test only has to reject non-anchor
     // 96-byte records, and every 96-byte record measured on the HUD channels was an anchor.
-    std::atomic<uint64_t> g_ShiftedChannelsLogged { 0 };
+    std::atomic<bool> g_ShiftedChannelsLogged[kChannelCount] {};
     std::atomic<uint64_t> g_ShiftedElementsLogged { 0 };
+    std::atomic<uint64_t> g_WorldElementsLogged { 0 };
+
+    // World tracking, per channel and per frame: the first world-element record a channel
+    // appends in a frame is the label's reference (the pickup label's centre, +0x298, leads
+    // its four corners); its correction is remembered and applied to the rest of the group,
+    // so the bracket moves as one piece. The stat block emits ten records - two +BCEF3 and
+    // eight tick pips - *before* its reference (run 20, 2026-09-03: they stayed at the native
+    // x while the rest moved), so a channel that carried a reference last frame keeps its
+    // delta armed for the records that precede this frame's reference. The channel is
+    // dedicated to the label while it exists and the reference recurs every frame, so a
+    // stale delta can outlive its label by one frame at most. Render thread only. The lab
+    // switch: 0 off, 1 translate the group by the reference's correction (default), 2 scale
+    // every anchor - the wrong treatment for a fixed-size bracket, kept for comparison.
+    std::atomic<int> g_WorldMode { 1 };
+    uintptr_t g_FrameLastDst = 0;
+    float g_WorldDelta[kChannelCount] {};
+    bool g_WorldSet[kChannelCount] {};     // per channel: reference seen this frame
+    bool g_WorldArmed[kChannelCount] {};   // per channel: reference seen last frame
+
+    // A new frame starts at the base of the other pool (or below the last append).
+    bool NewFrameAt(uintptr_t dst)
+    {
+        const bool fresh = dst < g_FrameLastDst || dst > g_FrameLastDst + 0x10000;
+        g_FrameLastDst = dst;
+        return fresh;
+    }
 
     void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias)
     {
@@ -983,15 +1046,44 @@ namespace AspectRatio
         {
             return;
         }
+        if (NewFrameAt(ctx.rcx))
+        {
+            g_OrdCount = 0;
+            std::memcpy(g_WorldArmed, g_WorldSet, sizeof(g_WorldArmed));
+            std::memset(g_WorldSet, 0, sizeof(g_WorldSet));
+        }
 
         float dx = 0.0f;
         if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
         {
-            int side = HudChannelSide(id.channel);
+            const WorldElement* world = WorldElementEntry(id.strcode);
+            const int worldMode = world ? g_WorldMode.load(std::memory_order_relaxed) : 0;
+            if (worldMode != 0 && (worldMode == 2 || !g_WorldSet[id.channel]))
+            {
+                float x = 0.0f;
+                std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
+                const float own = x * (HorizontalSpreadFactor() - 1.0f);
+                g_WorldDelta[id.channel] = own;
+                g_WorldSet[id.channel] = true;
+                const uint64_t logBit = 1ull << (world - kWorldElements);
+                if ((g_WorldElementsLogged.fetch_or(logBit) & logBit) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: world element {:08X} ({}) on channel 0x{:02X}: reference element +{:X}, x {:.4f} -> {:.4f}.",
+                        world->strcode, world->what, id.channel, id.elem, x, x + own);
+                }
+            }
+            // A world label's channel is its own: everything the channel appends this frame
+            // (corners, ticks, text anchors) travels with it - after the reference by this
+            // frame's delta, before it by last frame's.
+            const bool worldChannel = g_WorldSet[id.channel] || g_WorldArmed[id.channel];
+            if (worldChannel)
+            {
+                dx += g_WorldDelta[id.channel];
+            }
+            int side = worldChannel ? 0 : HudChannelSide(id.channel);
             if (side != 0)
             {
-                const uint64_t bit = 1ull << id.channel;
-                if ((g_ShiftedChannelsLogged.fetch_or(bit) & bit) == 0)
+                if (!g_ShiftedChannelsLogged[id.channel].exchange(true))
                 {
                     spdlog::info("MGS4: UI Aspect: channel 0x{:02X} ({}) anchored {} by {:.4f}.",
                         id.channel, HudChannelName(id.channel), side < 0 ? "left" : "right", SideShift());
@@ -1018,13 +1110,6 @@ namespace AspectRatio
             const int ordChannel = g_OrdChannel.load(std::memory_order_relaxed);
             if (ordChannel >= 0)
             {
-                // A new frame starts at the base of the other pool (or below the last append).
-                const uintptr_t dst = ctx.rcx;
-                if (dst < g_OrdLastDst || dst > g_OrdLastDst + 0x10000)
-                {
-                    g_OrdCount = 0;
-                }
-                g_OrdLastDst = dst;
                 if (id.channel == ordChannel)
                 {
                     if (g_OrdCount == g_OrdIndex.load(std::memory_order_relaxed))
@@ -2127,6 +2212,12 @@ namespace AspectRatio
                             // spread 0|1 - the identity-keyed corner spread, live.
                             bAspectPoolSpread = std::strtol(line + 6, nullptr, 0) != 0;
                             spdlog::info("MGS4: live lab: pool spread {}.", bAspectPoolSpread ? "on" : "off");
+                        }
+                        else if (std::strncmp(line, "world", 5) == 0)
+                        {
+                            // world 0|1|2 - world-tracked labels: off, translate group, scale each.
+                            g_WorldMode.store(static_cast<int>(std::strtol(line + 5, nullptr, 0)));
+                            spdlog::info("MGS4: live lab: world mode {}.", g_WorldMode.load());
                         }
                         else if (std::strncmp(line, "chanord", 7) == 0)
                         {

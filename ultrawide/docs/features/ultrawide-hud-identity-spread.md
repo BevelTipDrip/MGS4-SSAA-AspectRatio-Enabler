@@ -3,10 +3,10 @@
 **Settings:** `Fix UI Aspect=1` + `Aspect Pool Spread=1` (with `Fix UI Aspect Corners=0`), both
 in `[Graphics]`, both lab-only and off by default at the time of writing
 **Implements:** `src/fixes/aspect_ratio.cpp`
-**State:** research build, verified live at 3840x1620 by the user on 2026-09-03 ("This looks
-great"). Not shipped. The umbrella document is [aspect-ratio.md](aspect-ratio.md); this one is
+**State:** research build, verified live at 3840x1620 on 2026-09-03 
+The umbrella document is [aspect-ratio.md](aspect-ratio.md); this one is
 the full account of the mechanism that finally worked, written so that someone else can
-reproduce it, extend it to widgets not yet covered, or port the idea to another engine.
+reproduce it, or extend it to widgets not yet covered.
 
 ---
 
@@ -203,9 +203,92 @@ fairly large bright orange box ... extending out to the right, then there's the 
 translucent box ... offset to the right" (user, 2026-09-03). They are centre-anchored quads with
 absolute offsets, drawn by the overlay channel, not by the slot channels they visually belong to.
 
-`kHudElements` in the source is this table; `IdentifyAppend` performs the second unwind only
-when the channel has element entries, so the cost stays one unwind per record for everything
-else.
+`kHudElements` in the source is this table. `IdentifyAppend` now performs the second unwind on
+every HUD-owner record (the world labels below need it on channels nobody can predict), so the
+cost is two unwinds per anchor record - a few hundred per frame, well under a millisecond.
+
+### The node strcode (any channel)
+
+Frame-2 `rbx` is the interpreter's position in the channel script: the node it is executing.
+Every anchor-emitting node measured (runs 17/18, 2026-09-03) is opcode `0x0D` with a dword at
+node+8 that identifies the element, stable across frames, boots and label instances:
+
+| Strcode | Element | Channel |
+| --- | --- | --- |
+| `0x00FF6177` | weapon panel | 0x1D |
+| `0x0093929C` | weapon icon | 0x1D |
+| `0x00F1D8B7` | item panel | 0x1E |
+| `0x0085D6E9` | life bar | 0x21 |
+| `0x0064D23C` | camo | 0x23 |
+| `0x000D12D5` | battery | 0x04 |
+| `0x0007324E` | reticle | 0x2A |
+| `0x0008F2D7` | centre marker | 0x25 |
+| `0x001A8623`, `0x0079E671` | bottom-centre prompts | 0x28 |
+| `0x002CCAD3`, `0x0060CD29` | bottom-centre | 0x29 |
+| **`0x0066AF8A`** | **pickup label** (all five anchors) | dynamic (0x31-0x34 seen) |
+| **`0x00860C0D`** | **Solid Eye stat block** (enemy/friendly) | dynamic (0x4F/0x50 seen) |
+
+The `+BCFEA` tick records (ammo pips) are opcode `0x14` with a per-record pointer instead; they
+have no strcode and are attributed by channel. The read is guarded: only when the position lies
+inside the script block (`rbx - r14 < 0x10000`) and the opcode byte is `0x0D`, i.e. bytes the
+interpreter has itself just read.
+
+The strcode is the identity that the channel and element-offset keys were standing in for.
+Nothing in the channel table has been re-keyed on it yet - the channel table works and is
+verified - but it is what a new element should be keyed on.
+
+## 6b. World-tracked labels
+
+The pickup label ("AK102 / Weapon / ASSAULT RIFLE / 30" with the bracket) is pinned to a
+projected 3D point. Both of the user's captures (2026-09-03) showed the defect: head-on the
+label sits on the gun, toward the edge it drifts off it - "they're running in the centered 16:9
+area, but they need to be able to track the ultrawide view properly without being stretched."
+
+Measured mechanism: the 3D projection already uses the real 21:9 aspect, so the label's centre
+NDC x is correct for the full output width - but the HUD canvas draws it onto the centred 16:9
+area, at `480 + (x+1)*1440` px instead of `(x+1)*1920`. The error is `480*x` px: zero at the
+centre, 480 px at the edge, exactly the drift seen. Vertical needs nothing (canvas height is the
+output height; the bracket's y already covers the gun).
+
+Each label is one dedicated, dynamically numbered channel (0x33/0x34 in run 17, 0x31/0x32/0x34
+in run 18 with three guns on the ground) that appends five anchors per frame, all with strcode
+`0x0066AF8A`: the centre first (element +0x298), then the four bracket corners (+0x8E8, +0x9E8,
++0xAE8, +0xBE8). The channel number is useless as a key; the strcode is the key.
+
+The fix (`kWorldElements`, `g_WorldDelta`): the first record with a world strcode that a channel
+appends in a frame is the reference; its correction `x * (factor - 1)` (i.e. `x *= factor`) is
+remembered for the channel, and every record the channel appends for the rest of that frame
+gets the same translation. The centre lands on the object; the corners and everything else on
+the channel keep their native pixel offsets, so the bracket keeps its size. Frames are told
+apart by the append destination (the two pools ping-pong: a `dst` below the last one, or more
+than 64 KB above it, is a new frame). Lab switch `world 0|1|2`: off, translate the group
+(default), scale every anchor (widens the bracket by 33 %; kept only for comparison).
+
+Verified live by the user with the label held toward the edge: "it looks like it's working!"
+(2026-09-03, run 18; captures in `lab3\pickup2\`, log line `world element 0066AF8A (pickup
+label) on channel 0x34: reference element +298, x -0.2791 -> -0.3721`).
+
+### The Solid Eye stat block
+
+The enemy/friendly stat block ("Militia 8.7 / AK102" with the tick bar) is the second world
+element: strcode `0x00860C0D`, reference element +0x2C48, on channels **0x4F/0x50** - above the
+old 64-channel limit, which is why `kChannelCount` is now 128 and the per-channel masks became
+arrays. Per frame it emits two `+BCEF3` records and eight tick pips *before* its reference
+record, then the reference, more pips (four of them at anchor − 0.0334, a sub-element) and
+`+BCEF3` records after it. The first build moved everything after the reference and left the
+leading ten at the native x (run 20: anchor −0.6741, leading pips −0.5056 = −0.6741 / factor);
+"every element was moved except one" (user).
+
+So a channel that carried a reference last frame keeps its delta **armed** for the records
+that precede this frame's reference (`g_WorldArmed`). The channel is dedicated to the label
+while it exists and the reference recurs every frame, so a stale delta outlives its label by
+one frame at most, and the leading pips lag by one frame only while the label is moving.
+Verified: hot dump 01 (2026-09-03, `lab3\hotdump\01\`) - all 42 records on channel 0x50 at the
+anchor's x (−1.0549) or the sub-element offset; "it appears to be working" (user).
+
+Dumps are now taken by the user: `hotdump.ps1` runs detached and maps **F11** in the game to
+capture + `sites` + log archive under `lab3\hotdump\NN\`, so the dump and the capture are of
+the same frame with the element in view.
 
 ## 7. The shift
 
@@ -241,11 +324,13 @@ None of the numbers above came from reading disassembly alone. The workflow, all
   captures the client area; the game is closed and the marker removed after every run.
 - **Live commands** through `live_anchor.txt`, polled by the ASI, so the game never has to
   restart between experiments ("live editing is going to be the fastest and most comprehensive
-  way to test these things" - user): `spread 0|1`, `chanbias <ch> <dx>`, `chanord <ch> <n>
-  <dx>`, `chanreset`, `sites` (dump every append of the next frames with unwound registers,
+  way to test these things" - user): `spread 0|1`, `world 0|1|2`, `chanbias <ch> <dx>`,
+  `chanord <ch> <n> <dx>`, `chanreset`, `sites` (dump every append of the next frames with unwound registers,
   chain RVAs and node bytes), `uploads <n>` (census of the upload helper), `bufdump` (write the
   three per-frame buffers to disk for offline analysis with `vbdiff.py` / `vbpeek.py` /
   `vbfind.py`), `pooldump`.
+- **F11 hot dump** (`hotdump.ps1`, detached): the user presses F11 with the element in frame;
+  the script captures, arms `sites`, and archives the log to `lab3\hotdump\NN\`.
 - **Pixel diffs.** `uidiff.ps1` diffs each capture against an unbiased reference at half scale
   and prints the bounding box of what changed. One bias, one capture, one diff, one element.
 - **The user reads every capture.** No screenshot was treated as fact until the user confirmed
@@ -278,6 +363,12 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
   `v6.x` basis rather than move it. Not yet decided.
 - **SE MODE selector cluster** (channels 0x08/09/0A and element +0x3EC0) stays centred at the
   top of the item wheel. Whether it should travel left with the wheel is the user's call.
+- **Other world-tracked labels are not in `kWorldElements` yet.** Objective markers, the
+  Solid Eye "OP / AK102" panel, Metal Gear Mk.II labels, and whatever else is pinned to a 3D
+  point drift the same way until tabled. Each needs its strcode read off an F11 dump with the
+  label on screen, then one table line - no code.
+- **A world label's very first frame** gets no delta on the records before its reference (the
+  armed delta comes from the previous frame). One frame; not visible.
 - **Channels 0x04 and 0x12 fire under the HUD owner during the title and save screens.** Logged
   every boot; not yet checked for a visible side effect on those screens.
 - **Only the Act 4 barrel-save loadout has been measured.** Other HUD states - alerts, codec,
@@ -304,7 +395,8 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 | anchor block | 96 B: `v6` +48, `v7` +64, `v8` +80 |
 | element type by innermost producer | `+BAFDF` quads, `+BC213` text, `+BB65F`, `+BCEF3<+BC9A0` |
 | shift | `1 - 1/factor` per side; `factor = W / (H*16/9)` |
-| tables | `kHudChannels` (owner+channel), `kHudElements` (owner+channel+element offset) |
+| node strcode | frame-2 `rbx` = executing node; opcode `0x0D`, element strcode at node+8 |
+| tables | `kHudChannels` (owner+channel), `kHudElements` (owner+channel+element offset), `kWorldElements` (owner+strcode, world-tracked) |
 
 Attribution: the layout converter RVA and object field layout are mgs4Ultra120's research
 (github.com/drbermejor/mgs4Ultra120); the la2 archive-read signature is from cipherxof's
