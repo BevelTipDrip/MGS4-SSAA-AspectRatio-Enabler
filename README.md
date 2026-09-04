@@ -19,7 +19,7 @@ corner widgets sit at the edges of the actual screen, where they belong.
 
 ![HUD at 21:9](docs/images/hud-21-9.jpg)
 
-**16:9 (3840x2160), the reference the game was made for**
+**16:9 (3840x2160)**
 
 ![HUD at 16:9](docs/images/hud-16-9.jpg)
 
