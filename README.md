@@ -60,6 +60,11 @@ bottom off.
   that mod's setting wins and the tool tells you so.
 - Nothing phones home. No updater, no telemetry.
 
+**Planned**
+- 16:10 displays: the same HUD, menu and cutscene treatment. The masking and FOV work is
+  written against the window's real shape, so it is a matter of measuring and tabling the
+  16:10 cases rather than new machinery.
+
 ## Installation
 
 Extract the zip into the game's **install folder**, the one that contains the `MGS4` folder
