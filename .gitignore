@@ -1,0 +1,11 @@
+# Build output
+bin/
+obj/
+release/
+*.user
+.vs/
+
+# Ultimate ASI Loader zip for build\package.ps1 (downloaded, not ours)
+build/loader/
+
+# Third-party build products inside the submodules are ignored by the submodules themselves.

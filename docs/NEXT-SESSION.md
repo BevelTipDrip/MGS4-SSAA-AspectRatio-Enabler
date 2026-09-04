@@ -1,0 +1,104 @@
+# Start here
+
+**PF Companion** is the standalone home of the MGS4 graphics work that used to ship inside a
+fork of MGSPatriotFix. It has its own ASI (`PFCompanion.asi`), its own settings file
+(`PFCompanion.settings`) and its own wxWidgets tool (`PF Companion.exe`); nothing from
+MGSPatriotFix is compiled in. It reads `MGSPatriotFix.settings` read-only to stand aside where
+both mods patch the same thing (`shared/overlap_table.hpp`). The fork repository is frozen at
+its 0.2.6 release.
+
+**Next task: aspect ratio fixes — ultrawide (21:9, 32:9) and 4:3.**
+
+The aspect-ratio implementation, its bug register and its working notes live in the private
+module at `external/ultrawide` (a submodule; see its README). Without access to it the project
+still builds, with a stub in place of the fixes. Begin at that module's docs. The gameplay HUD
+is done at 21:9 and 4:3, and cutscene/menu masking plus the FOV settings shipped in the fork's
+0.2.6; what remains is listed under "Remaining work" in that module's `aspect-ratio.md` and in
+`letterbox.md` §5.
+
+**Releases are packaged locally** with `build\package.ps1` (7-Zip, needs the Ultimate ASI
+Loader zip). Do not prepare a release unless asked.
+
+**Never push or tag without being asked.** Commit freely; pushing is the user's call every time.
+
+---
+
+## Layout
+
+```
+shared/          version, settings keys, INI reader, overlap table — used by both projects
+asi/src/core/    game (module/root), mem (scanning), log, config (settings + lab mode), upstream
+asi/src/features/render_pipeline, graphics_settings, stage_automation, aspect_ratio (stub)
+tool/src/        fields (the settings table + help), settings_io, upstream, ui, main
+external/        safetyhook, zydis, spdlog, wxWidgets, ultrawide (private)
+build/           build.cmd, build_zydis.cmd, build_wx.cmd, package.ps1, make_art.ps1
+```
+
+Game side: `MGS4\scripts\PFCompanion.asi` (the harness deploys to `MGS4\PFCompanion.asi`,
+which the loader also picks up), settings and tool in the game root, log at
+`logs\PFCompanion_Game.log`. Never put an `.asi` in the game root.
+
+---
+
+## Read these, in this order
+
+Reading order matters: each one assumes the engine facts established by the one above it.
+
+| # | Document | Why it is needed for this task |
+| --- | --- | --- |
+| 1 | [features/README.md](features/README.md) | evidence levels, bug entry format, the conventions every claim here is held to |
+| 2 | `external/ultrawide/docs/features/aspect-ratio.md` | the task itself — known facts, open questions, design constraints (private module) |
+| 3 | [features/window-resolution.md](features/window-resolution.md) | how the window size is already overridden, and **WR-001**, the one existing claim in this area |
+| 4 | [features/supersampling.md](features/supersampling.md) | the render-buffer vs output-size distinction, and **SS-003** — what the removed wrap-around UI patch broke |
+| 5 | [features/tooling.md](features/tooling.md) | lab mode, the test harness and the per-draw UI diagnostics needed to inspect a frame |
+| 6 | [features/anti-aliasing.md](features/anti-aliasing.md) | only for its "limits of the automated check" section — why screen-measurement metrics here are not trustworthy |
+
+Also worth having open: `asi/src/features/render_pipeline.cpp` for the UI research
+diagnostics, and `asi/src/features/graphics_settings.cpp` for how a shipping patch is structured
+(including how it yields to MGSPatriotFix via `upstream::Yields`).
+
+---
+
+## Facts that will save a day each
+
+These are all written up in the documents above, but they are the ones most likely to be
+rediscovered the hard way:
+
+- **Read the render size from the log, never the settings file.** With `Window Aspect Ratio` at
+  `Use Game Setting`, the resolution keys are not read at all and the game runs at the display
+  resolution. A whole set of measurements was mislabelled this way — self-consistent, and wrong.
+- **The UI uses fixed virtual coordinate spaces** (1280x720, 1429x800, 720x400), none of them
+  aspect-derived. This is why a non-16:9 window is expected to distort rather than reveal.
+- **`.text` is encrypted on disk** by the Steam DRM, so all code reading must happen in-process.
+  Static disassembly of the exe shows nothing useful.
+- **Research keys only work in lab mode.** They are read from `PFCompanion.lab.settings`, and
+  only when a fresh `PFCompanion.lab` marker sits beside it; the ASI consumes the marker. Putting
+  them in `PFCompanion.settings` does nothing.
+- **`Log Viewports` and `Watch Staging Writes` make the game unplayable.** Use them for a captured
+  frame, never for a play session. Left on once, the stutter was mistaken for a rendering
+  regression.
+- **A screensaver breaks automation in a way that looks like a crash.** It switches the input
+  desktop to `Screen-saver`, after which input never reaches the game and screen capture throws
+  "the handle is invalid" — while the game keeps running fine. `boot_to_aim.ps1` now detects this
+  and exits 4; `screensaver_guard.ps1` prevents it.
+- **`CopyFromScreen` can fail from a non-interactive shell** with the same "handle is invalid"
+  even with the desktop unlocked; `PrintWindow` with `PW_RENDERFULLCONTENT` into a bitmap you own
+  works from anywhere and is how the tool's window is captured.
+- **MGSPatriotFix loads first and wins where both patch the same thing** (aniso: whenever its
+  ASI is present; shadow resolution: when its `Custom Shadow Resolution` is non-zero). Both the
+  ASI and the tool decide this from the same table; do not add a second source of truth.
+
+---
+
+## How to work on this
+
+- **Confirm before concluding.** Send any screenshot to the user and wait for their read before
+  treating it as fact. Pixel-counting detectors return a number, not a fact.
+- **When something unexpected happens, ask what they saw** rather than theorising. Four
+  consecutive wrong crash theories in one session came from skipping this; the user's original
+  explanation was correct.
+- **Close the game after every test.** `boot_to_aim.ps1` does this on all exit paths, but a
+  manual launch is yours to clean up.
+- **Evidence levels are enforced.** Inferred is a hypothesis with a note attached, not a reason to
+  change code. Promote to Observed or Measured first, or record that it could not be promoted.
+- **The user's `MGSPatriotFix.settings` is never written**, by the tool, the ASI or you.

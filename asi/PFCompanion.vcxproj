@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{7e0c4f2a-3b8d-4c61-9f5e-2a1d6b8c0e11}</ProjectGuid>
+    <RootNamespace>PFCompanion</RootNamespace>
+    <ProjectName>PFCompanion</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\PFCompanion.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>PFCompanion</TargetName>
+    <TargetExt>.asi</TargetExt>
+    <ExternalIncludePath>$(PfcExternal)spdlog\include;$(PfcExternal)zydis\include;$(PfcExternal)zydis\dependencies\zycore\include;$(PfcExternal)safetyhook\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_USRDLL;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.hpp</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)src\core;$(ProjectDir)src\features;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalLibraryDirectories>$(PfcExternal)zydis\msvc\bin\ReleaseX64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Zydis.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ImportLibrary />
+      <AdditionalOptions>/NOIMPLIB %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="src\core\config.cpp" />
+    <ClCompile Include="src\core\game.cpp" />
+    <ClCompile Include="src\core\log.cpp" />
+    <ClCompile Include="src\core\mem.cpp" />
+    <ClCompile Include="src\core\upstream.cpp" />
+    <ClCompile Include="src\features\graphics_settings.cpp" />
+    <ClCompile Include="src\features\render_pipeline.cpp" />
+    <ClCompile Include="src\features\stage_automation.cpp" />
+    <!-- The ultrawide module is a private submodule: built when it is checked out, replaced by a logging stub when it is not. -->
+    <ClCompile Include="$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="$(PfcExternal)safetyhook\src\allocator.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\easy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\inline_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\mid_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\os.linux.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\os.windows.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\utility.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(PfcExternal)safetyhook\src\vmt_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\pch.hpp" />
+    <ClInclude Include="src\core\config.hpp" />
+    <ClInclude Include="src\core\game.hpp" />
+    <ClInclude Include="src\core\log.hpp" />
+    <ClInclude Include="src\core\mem.hpp" />
+    <ClInclude Include="src\core\upstream.hpp" />
+    <ClInclude Include="src\features\aspect_ratio.hpp" />
+    <ClInclude Include="src\features\graphics_settings.hpp" />
+    <ClInclude Include="src\features\render_pipeline.hpp" />
+    <ClInclude Include="src\features\stage_automation.hpp" />
+    <ClInclude Include="..\shared\ini.hpp" />
+    <ClInclude Include="..\shared\overlap_table.hpp" />
+    <ClInclude Include="..\shared\settings_keys.hpp" />
+    <ClInclude Include="..\shared\version.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\PFCompanion.rc" />
+    <Image Include="res\PFCompanion.ico" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

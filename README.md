@@ -1,0 +1,147 @@
+# PF Companion
+
+Graphics settings for **METAL GEAR SOLID 4** in the Master Collection: internal resolution
+scaling (supersampling), sharper shadows, anisotropic filtering, FXAA control, window
+resolution and aspect ratio selection, and an undistorted HUD, menus and cutscenes on
+ultrawide (21:9, 32:9) and 4:3 displays.
+
+It is built to sit next to [MGSPatriotFix](https://github.com/ShizCalev/MGSPatriotFix), which
+handles the launcher, controller and mouse side of things. Use both, or this on its own.
+
+---
+
+## Installation
+
+Extract the zip into the game's **install folder** — the one that contains the `MGS4` folder
+(Steam: right-click the game → Manage → Browse local files):
+
+```
+METAL GEAR SOLID 4\
+├─ PF Companion.exe
+├─ README.md
+├─ UltimateASILoader_LICENSE.md
+└─ MGS4\
+   ├─ winmm.dll                (Ultimate ASI Loader)
+   └─ scripts\PFCompanion.asi
+```
+
+Then run **PF Companion.exe** from that folder, pick your settings and save. That creates
+`PFCompanion.settings` next to it, which `PFCompanion.asi` reads every time the game starts.
+Changes take effect on the next launch.
+
+If MGSPatriotFix is already installed you will have its `MGS4\winmm.dll`; it is the same
+loader, so keep whichever is newer. The loader runs every `.asi` in `MGS4\scripts`.
+
+> Do not put an `.asi` file in the game's install folder itself. It is not loaded from there,
+> and MGSPatriotFix's Config Tool will hang if it finds one.
+
+---
+
+## Settings
+
+Everything lives on the **Graphics** tab. Hover a setting in the tool for the long version.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape; leave it on Use Game Setting to keep whatever the game's own launcher selected. |
+| **Ultrawide HUD** | Expanded HUD | How the HUD is laid out on a window that is not 16:9 — ultrawide or 4:3. **Stretched HUD** leaves the game's own behaviour. **Centered HUD** gives every widget its proper shape and centres the whole interface in a 16:9 area. **Expanded HUD** does that and moves the life bar, camo meter, weapon and item panels out to the real edges (the sides on an ultrawide, the top and bottom on 4:3), with the wheels and menus staying centred. Keys off the actual window size, so it also works on a native ultrawide or 4:3 display with the aspect left on Use Game Setting. No effect at 16:9. |
+| **Solid Eye Overlay Fix** | on | With a Centered or Expanded HUD, keeps the labels that follow things in the world — pickup names, Solid Eye stat blocks and targeting icons — on the objects they mark instead of sliding toward the centre with the rest of the interface. Does nothing with a Stretched HUD. |
+| **Menu Masking** | on | The title screen, main menu, pause menu, codec and loading screens are drawn for 16:9. On a wider or taller window this keeps them at that shape and blacks out the rest — side bars on an ultrawide, top and bottom bars on 4:3 — instead of letting the world show past their edges. Needs a Centered or Expanded HUD. No effect at 16:9. |
+| **Cutscene Masking** | on | Shows cutscenes as the 16:9 picture centred in the window with black bars over the rest, so they are framed the way they were shot. Pair it with Cutscene FOV Compensation on an ultrawide, otherwise the bars just frame the game's own cropped picture. No effect at 16:9. |
+| **Cutscene FOV Compensation** | on | On a window wider than 16:9 the game's cutscene camera keeps the 16:9 width and cuts the top and bottom off. This zooms the camera back out so the full 16:9 frame fits, which is what Cutscene Masking then shows. Only matters wider than 16:9. |
+| **FOV Adjustment (%)** | 100 | How much of the world the gameplay camera shows, relative to stock. 120 shows 20% more in each direction, 80 shows less. Gameplay only — cutscenes are not affected. On a 21:9 window, 133 restores the vertical view you would have at 16:9, since the game otherwise crops it. |
+| **Internal Resolution Scale (%)** | 100 | Renders internally above your display resolution and scales down on output. Works even if your monitor cannot exceed its native resolution. Up to 400%, with the internal buffer capped at 8192 wide — so the useful maximum depends on your window: about 400% at 1080p, 200% at 4K. |
+| **Shadow Resolution Scale (%)** | 100 | Raises shadow map resolution beyond the game's highest Shadow Quality. 200 doubles it in each dimension; costs four times the shadow memory. |
+| **Shadow Softness (Samples)** | 0 (off) | How many samples the game takes filtering a shadow edge — smoother, less noisy shadows. Separate from resolution: this is edge quality, not detail. The game's highest preset uses 7. |
+| **Anisotropic Filtering** | 0 (off) | Maximum anisotropy for textures viewed at a steep angle — floors, walls, terrain seen edge-on. The game's highest texture setting asks for 8x; 16x is the hardware maximum and nearly free. |
+| **FXAA** | on | Post-process anti-aliasing. The game has its own toggle in its display menu; this overrides it, and either way the change needs a restart. |
+| **FXAA Quality** | Slow | Slow / Medium / Fast, where slower does more work and looks better. The game ships Medium and exposes this nowhere. Worth keeping on even with supersampling: extra resolution fixes geometry edges but not shader aliasing or specular sparkle. |
+
+### Notes
+
+- Internal Resolution Scale is **very** demanding — every 41% adds another whole screen's
+  worth of pixels. The internal buffer is capped at 8192 wide whatever you ask for; at a 4K
+  window 200% gives 7680×4320 and anything higher is clamped (the log says so).
+- Shadow scaling is applied on top of the game's own Shadow Quality option, so leave that at
+  its highest setting for the best result.
+- A **4:3** window squashes the interface horizontally with a Stretched HUD, because the game's
+  UI is authored for 16:9. Centered or Expanded HUD corrects it the same way it does on an
+  ultrawide.
+- The masking options and FOV Adjustment only apply when the window is not 16:9. They are on
+  by default because that is the framing the game was made for; turn Cutscene Masking off if
+  you would rather have cutscenes fill an ultrawide.
+- The aiming reticle stays put at any internal resolution. The game truncated a coordinate on
+  the way into its UI space, which sent the reticle off screen once the buffer was wider than
+  4095; `PFCompanion.asi` widens those conversions. Verified at 8192×4608. The cause was
+  identified by **drbermejor**'s [mgs4Ultra120](https://github.com/drbermejor/mgs4Ultra120);
+  the details are in [docs/mgs4-rendering-research.md](docs/mgs4-rendering-research.md).
+
+---
+
+## Using it with MGSPatriotFix
+
+Both mods load from `MGS4\scripts` and both can be installed at once. MGSPatriotFix loads
+first (the loader goes alphabetically). Two of its settings change the same thing as two of
+these; when that happens **MGSPatriotFix wins** and PF Companion stands aside:
+
+| PF Companion setting | Stands aside when MGSPatriotFix… | Why |
+| --- | --- | --- |
+| Anisotropic Filtering | is installed at all | Its aniso patch is always on, and the two would stack. |
+| Shadow Resolution Scale (%) | has `Custom Shadow Resolution` set to anything but 0 | Both write the shadow map size; its write lands last. |
+
+The tool greys those fields out and shows the value MGSPatriotFix has; the ASI logs the
+same. `MGSPatriotFix.settings` is only ever read, never written. Everything else — internal
+resolution, shadow softness, FXAA, window resolution, the ultrawide and 4:3 fixes — has no
+counterpart there and works regardless.
+
+If you used the earlier fork of MGSPatriotFix that carried these settings, the first run of
+the tool imports them from `MGSPatriotFix.settings` for you. Remove the fork's build of
+`MGSPatriotFix.asi` and its Config Tool, and install the current MGSPatriotFix release
+alongside this one.
+
+---
+
+## Reporting a problem
+
+A report is only useful with a log:
+
+1. In PF Companion, **Troubleshooting** tab, tick **Debug Logging** and save.
+2. Launch the game from Steam and reproduce the problem. If it crashes or hangs, stop there.
+3. Quit the game (Task Manager if it hung).
+4. Attach `logs\PFCompanion_Game.log` from the game's install folder. The log is rewritten
+   on every launch, so copy it before starting the game again.
+
+**A HUD element in the wrong place on an ultrawide or 4:3 screen:** with Debug Logging on and
+a Centered or Expanded HUD, press **F11** in-game while the element is on screen. A record of
+every HUD element being drawn at that moment goes into the log. Take a screenshot at the same
+moment (Steam's F12) and attach both.
+
+Issues: <https://github.com/BevelTipDrip/PFCompanion/issues>
+
+---
+
+## Building
+
+Visual Studio 2026 Build Tools (v145, C++20), Windows SDK 10. Clone with submodules, then
+`build\build.cmd` builds Zydis and wxWidgets once and the solution after that; outputs land
+in `bin\Release`. `build\package.ps1` makes the release zip (it needs the
+[Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases) zip, which
+is not in the repository).
+
+The ultrawide and 4:3 layout code is a private submodule (`external/ultrawide`). Without it
+the project still builds, with a stub in its place: every setting works except the Ultrawide
+HUD family, which then does nothing.
+
+---
+
+## Credits
+
+ASI loading by [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
+(ThirteenAG) — see `UltimateASILoader_LICENSE.md`.
+
+Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
+[Zydis](https://github.com/zyantific/zydis) (instruction decoding),
+[spdlog](https://github.com/gabime/spdlog) (logging), [wxWidgets](https://www.wxwidgets.org/)
+(the tool).
+
+MIT License — see `LICENSE.md`.

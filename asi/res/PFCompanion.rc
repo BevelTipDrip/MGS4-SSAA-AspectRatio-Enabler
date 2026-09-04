@@ -1,0 +1,34 @@
+#include <windows.h>
+#include "version.hpp"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    PFC_FILE_VERSION_RC
+ PRODUCTVERSION PFC_FILE_VERSION_RC
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_DLL
+ FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      PFC_COMPANY_NAME "\0"
+            VALUE "FileDescription",  PFC_DISPLAY_NAME " for METAL GEAR SOLID 4\0"
+            VALUE "FileVersion",      PFC_VERSION_STRING "\0"
+            VALUE "InternalName",     PFC_NAME ".asi\0"
+            VALUE "OriginalFilename", PFC_NAME ".asi\0"
+            VALUE "ProductName",      PFC_DISPLAY_NAME "\0"
+            VALUE "ProductVersion",   PFC_VERSION_STRING "\0"
+            VALUE "LegalCopyright",   PFC_COPYRIGHT "\0"
+            VALUE "Comments",         PFC_REPO_URL "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDI_ICON1 ICON "PFCompanion.ico"

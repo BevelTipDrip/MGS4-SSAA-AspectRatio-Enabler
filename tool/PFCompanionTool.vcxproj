@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{9b3d2e60-5a7f-4d18-8c42-6e0f1a2b3c4d}</ProjectGuid>
+    <RootNamespace>PFCompanionTool</RootNamespace>
+    <ProjectName>PFCompanionTool</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\PFCompanion.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>PF Companion</TargetName>
+    <ExternalIncludePath>$(PfcExternal)wxWidgets\lib\vc_x64_lib\mswu;$(PfcExternal)wxWidgets\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- The prebuilt wxWidgets libraries link the DLL runtime, so the tool does too (the ASI stays static). -->
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <PreprocessorDefinitions>__WXMSW__;wxUSE_DPI_AWARE_MANIFEST=2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.hpp</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>wxUSE_DPI_AWARE_MANIFEST=2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)res;$(PfcExternal)wxWidgets\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalLibraryDirectories>$(PfcExternal)wxWidgets\lib\vc_x64_lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>wxmsw33u_core.lib;wxbase33u.lib;wxpng.lib;wxzlib.lib;wxregexu.lib;comctl32.lib;rpcrt4.lib;uxtheme.lib;oleacc.lib;shlwapi.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\fields.cpp" />
+    <ClCompile Include="src\paths.cpp" />
+    <ClCompile Include="src\settings_io.cpp" />
+    <ClCompile Include="src\ui.cpp" />
+    <ClCompile Include="src\upstream.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\pch.hpp" />
+    <ClInclude Include="src\fields.hpp" />
+    <ClInclude Include="src\paths.hpp" />
+    <ClInclude Include="src\settings_io.hpp" />
+    <ClInclude Include="src\ui.hpp" />
+    <ClInclude Include="src\upstream.hpp" />
+    <ClInclude Include="..\shared\ini.hpp" />
+    <ClInclude Include="..\shared\overlap_table.hpp" />
+    <ClInclude Include="..\shared\settings_keys.hpp" />
+    <ClInclude Include="..\shared\version.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\PFCompanionTool.rc" />
+    <Image Include="res\PFCompanion.ico" />
+    <Image Include="res\banner.png" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
