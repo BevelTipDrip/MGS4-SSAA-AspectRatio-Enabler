@@ -256,3 +256,4 @@ the same way. Log now shows "swap chain resize (ResizeBuffers1) to 3840x2160, ba
 dropped" followed by the renderer rebuilt at 3840x2160. Verified at the main menu, 4:3 2048x1536,
 masking on: picture in its region, bands top and bottom. The 14:03 session had looked fine only
 because a later display-mode change went through the hooked `ResizeBuffers`.
+Confirmed by the user in a play session the same day.
