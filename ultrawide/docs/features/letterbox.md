@@ -1,9 +1,11 @@
 # Letterbox: cutscenes and menus kept at 16:9 (AR-010)
 
-**Status:** working in the lab at 21:9 and 4:3, 2026-09-04. Switch: `Aspect Letterbox=1`
-(`[Graphics]`, lab settings only; `bAspectLetterbox` in `aspect_ratio.hpp`). Code: the
+**Status:** shipping in 0.2.6 (2026-09-04) as three switches - `Menu Masking`,
+`Cutscene Masking`, `Cutscene FOV Compensation` - plus the gameplay `FOV Adjustment (%)`
+that reuses the camera hook (section 6). Lab settings keep `Aspect Letterbox=1` as a
+shorthand that sets all three masks, and the shipping keys read on top of it. Code: the
 "Letterbox" section of `src/fixes/aspect_ratio.cpp` and the screen table just above
-`ShiftAppend`.
+`ShiftAppend`; the switch plumbing is in the public `config.cpp`.
 
 ## 1. What it does
 
@@ -39,8 +41,15 @@ patches, bands 270 px top and bottom.
 
 ## 2. The gate - when the bands are on
 
-`BandsWanted()` (live `box 0|1|2`: gated, forced on, forced off). Gated means either signal
-within the last 150 ms:
+`BandsWanted()` (live `box 0|1|2`: gated, forced on, forced off). Gated means, per switch:
+
+    (bMenuMasking     && (BootPhaseLive() || ScreenLive()))
+ || (bCutsceneMasking && CutsceneCameraLive() && !PostLoadGrace() && !plateUp)
+
+with the boot ladder stepped (`BootPhaseLive()`) *before* the grace is read - the order
+matters on the dismissal present, where the ladder goes Over and opens the grace in the same
+call (split_b painted one present the other way round). The two signals, each live for
+150 ms after its last sighting:
 
 - **Cutscene:** a cinematic camera was built (`g_CinematicBuiltTick`, set in the builder hook
   above). Structural - no state flag, no stage name. The title screen's graveyard is a
@@ -196,4 +205,41 @@ only appeared in the last capture. Poll for the HUD before pressing keys if this
 - **Boot phase on other paths**: NEW GAME (no plate; relies on the 15 s camera-alone
   fallback) and saves other than the rusted barrel (the dismissal channels 37/38 may be
   save-specific; the 3 s PlateUp fallback covers it) have not been run.
-- **Shipping** - all of this is lab-only behind `Aspect Letterbox`.
+- **The cutscene-only load path** (menu masking off) leaves the title, main menu and load
+  plates unmasked but still masks the title graveyard, which is a cinematic camera. Consistent
+  with the switch's name; not a bug, noted so nobody chases it.
+
+## 6. Shipping switches (0.2.6)
+
+The lab's single `Aspect Letterbox` became four settings in `[Graphics]`, all read in the
+public `config.cpp` and exposed in the Config Tool:
+
+| setting | default | what it drives |
+| --- | --- | --- |
+| `Menu Masking` | on | the `ScreenLive()` and boot-phase terms of the gate; forced off when `Fix UI Aspect` is off (Stretched HUD), since the screen identities come from the pool hook, and the Config Tool greys it out unless the HUD is Centered/Expanded |
+| `Cutscene Masking` | on | the `CutsceneCameraLive()` term |
+| `Cutscene FOV Compensation` | on | seeds `g_CutsceneZoom` (the cinematic-route division by the spread factor); a no-op at 4:3 and 16:9 |
+| `FOV Adjustment (%)` | 100 (50-200) | `fFovAdjustment`; the gameplay route's projection scale is divided by it |
+
+A 16:9 window (`Window Aspect Ratio` explicit 16:9) skips all four - `bSixteenNineWindow`
+in `config.cpp`. `CameraHooksWanted()` / `BandHooksWanted()` decide which hooks install:
+the camera builder hook when any of the four is active, the DXGI hooks only for the two
+masks. The pool-append probe now carries `screens` (either mask) and `icon` (spinner,
+keyed on `bFixUiAspect`) as separate flags, so cutscene-only masking works without the
+HUD spread.
+
+**Plate-up mute.** With menu masking off the split run (split_a) painted seven presents at
+the continue press: the level's intro pan is a cinematic camera and it is live *before* the
+dismissal identities open the grace. The cutscene term is therefore muted while the ladder
+is at PlateUp as well as during the grace. Verified in split_c: `painted` and `cleared`
+flat from the plate through the press and the grace end.
+
+**Gameplay FOV.** The gameplay camera is rebuilt several times per frame: first from
+`+0x0B9BA0` at depth 0 (before the `+0x0BA3A3` call the hook recognises), then from
+`+0x0EB0EB`, `+0x0EB191`, `+0x0B8A43`, `+0x0B8B4F`. The later rebuilds read the scale
+back from the camera object, so they already carry the divided value (fov130 log:
+`1.38462 -> 1.38462`); only the `+0x0B9BA0` pre-call matches the gameplay-rebuild
+signature (same camera, same input scale, within 250 ms) and gets divided too. At 130 %:
+`1.80000 -> 1.38462` standing, `1.74000 -> 1.33846` aiming; user-confirmed on the
+fov100/fov130 comparison sheet. The cinematic routes are untouched by it, and the cutscene
+compensation is untouched by the FOV setting.

@@ -66,9 +66,32 @@ namespace AspectRatio
     // maps every visible widget to its host object by measured shift.
     inline bool bAspectTestLadder = false;
 
-    // Lab (AR-010): keep cutscenes, the codec, the pause menu and the title at 16:9 on a
-    // non-16:9 output - a uniform zoom-out of the cinematic camera on a wide output, plus
-    // black bands over the region outside the centred 16:9 rect, gated on the cinematic
-    // camera or a tabled screen element (kScreenIdentities). Lab boots only for now.
-    inline bool bAspectLetterbox = false;
+    // The 16:9 frame on a non-16:9 output (AR-010): black bands over the region outside the
+    // centred 16:9 rect - side pillars on a wide output, top and bottom bands on a tall one.
+    // Three switches, the Config Tool's "Menu Masking", "Cutscene Masking" and "Cutscene FOV
+    // Compensation"; the lab settings' "Aspect Letterbox" turns all three on.
+    //
+    // Menu masking: the bands are up over the boot sequence up to the continue press on a
+    // loaded save (the boot ladder), and over any tabled screen element (kScreenIdentities:
+    // title, main menu, pause menu, codec). Needs bFixUiAspect - the menus have to be drawn
+    // in the 16:9 frame before it makes sense to mask outside it.
+    inline bool bMenuMasking = false;
+
+    // Cutscene masking: the bands are up while a cinematic camera is being built (structural
+    // - no state flag, no stage name), except over the post-load grace. Does not need the
+    // HUD fix: the ladder still runs for the grace when the pool hook is installed, and
+    // degrades to the camera-alone fallbacks without it.
+    inline bool bCutsceneMasking = false;
+
+    // Cutscene FOV compensation: divide the cinematic camera's projection scale by the
+    // horizontal spread factor - a uniform zoom-out that puts the authored 16:9 frame back
+    // inside a wide window (the engine's cutscene camera is Vert- otherwise). With the
+    // cutscene masking that frame is what the bands surround; without it the cutscene is
+    // simply shown wider than authored. A no-op on outputs that are not wider than 16:9.
+    inline bool bCutsceneFovCompensation = false;
+
+    // Gameplay FOV: the gameplay camera's view width relative to stock, as the Config Tool's
+    // percentage / 100. 1.0 is stock; the projection scale on the gameplay route alone is
+    // divided by it. Cutscenes are not touched by this.
+    inline float fFovAdjustment = 1.0f;
 }

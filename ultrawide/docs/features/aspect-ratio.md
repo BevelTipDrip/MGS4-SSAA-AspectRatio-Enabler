@@ -616,7 +616,8 @@ can show real widget artwork.
 
 ### AR-002 — the 3D camera appears to lose vertical FOV at 21:9 rather than gaining horizontal
 
-- **Status:** Active for gameplay; fixed for cutscenes by AR-010
+- **Status:** Fixed for cutscenes by AR-010; gameplay is user-adjustable since 0.2.6
+  (`FOV Adjustment (%)`, 133 on 21:9 restores the 16:9 vertical field)
 - **Evidence:** Observed, 2026-09-04 — projection matrices logged at the setter `+0x0E3410`
 - **Affects:** any output wider than 16:9
 - **Repro:** as AR-001; compare visible world extent against a 16:9 control of the same scene
@@ -630,8 +631,9 @@ can show real widget artwork.
 - **Cause:** the camera builder `+0x0B9BB0` derives the projection from a scale that does not
   know the window; the aspect comes in separately
 - **Fix:** cutscenes: the builder's scale divided by the spread factor on the cinematic
-  routes (AR-010). Gameplay: none yet — the same builder via `+0x0BA3A3`, the same division
-  would give Hor+, but whether gameplay should be Hor+ or stay as authored is the user's call
+  routes (AR-010). Gameplay: the same builder via `+0x0BA3A3` divided by `fFovAdjustment`
+  (plus the `+0x0B9BA0` pre-call rebuild of the same camera); default 100 % leaves it as
+  authored. [letterbox.md §6](letterbox.md)
 
 ---
 
@@ -690,7 +692,8 @@ can show real widget artwork.
 
 ### AR-010 — cutscenes, codec, pause menu and title are letterboxed to 16:9
 
-- **Status:** Working in the lab, 2026-09-04 (`Aspect Letterbox=1`, lab settings only)
+- **Status:** Shipping in 0.2.6 as `Menu Masking`, `Cutscene Masking` and
+  `Cutscene FOV Compensation` (all default on; [letterbox.md §6](letterbox.md))
 - **Evidence:** Observed — 21:9 cutscene framing confirmed by the user; the load path at
   21:9 and 4:3 confirmed by the user (2026-09-04, watched live); the menu captures are the
   lab's read
@@ -720,7 +723,7 @@ can show real widget artwork.
 
 ### AR-011 — the loading spinner stretches with the window and sits outside the 16:9 frame
 
-- **Status:** Fixed in the lab, 2026-09-04 (under `Aspect Pool Spread`)
+- **Status:** Fixed, 2026-09-04; ships in 0.2.6 under `Fix UI Aspect` (Centered/Expanded HUD)
 - **Evidence:** Observed — user ("it's stretched ... obviously its own object we are not
   forcing to conform to the 16:9 space"); fix confirmed by the user on the load-path sheets
 - **Affects:** the top-right spinner on the boot and save-load plates, any non-16:9 window

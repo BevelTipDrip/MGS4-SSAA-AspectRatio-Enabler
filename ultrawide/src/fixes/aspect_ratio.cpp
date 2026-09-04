@@ -1504,11 +1504,14 @@ namespace AspectRatio
         }
     }
 
-    void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias, bool screens)
+    void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias, bool screens, bool icon)
     {
-        if (spread && (ctx.r8 & 0xFFFF) == kLoadIconRecordSize)
+        if ((ctx.r8 & 0xFFFF) == kLoadIconRecordSize)
         {
-            LoadIconAppend(ctx);
+            if (icon)
+            {
+                LoadIconAppend(ctx);
+            }
             return;
         }
         if ((ctx.r8 & 0xFFFF) != kAnchorBlockSize)
@@ -1671,19 +1674,23 @@ namespace AspectRatio
     {
         const bool sites = g_SiteDumpFrames.load(std::memory_order_relaxed) > 0;
         const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
-        const bool spread = (bAspectPoolSpread || bAspectWorldTracking)
-            && (SideShift() != 0.0f || SideShiftY() != 0.0f);   // strict no-op at 16:9
-        // The letterbox's menu gate reads the element identity too, whenever the output has
-        // bands to draw (either axis; SideShift and SideShiftY are each 0 at 16:9).
-        const bool screens = bAspectLetterbox && (SideShift() != 0.0f || SideShiftY() != 0.0f);
-        if (!sites && !bias && !spread && !screens)
+        const bool shifted = SideShift() != 0.0f || SideShiftY() != 0.0f;   // false at 16:9: strict no-op
+        const bool spread = (bAspectPoolSpread || bAspectWorldTracking) && shifted;
+        // The masking reads the element identity too, whenever the output has bands to
+        // draw: the menu gate and the boot ladder for the menu masking, the ladder alone
+        // (its dismissal starts the post-load grace) for the cutscene masking.
+        const bool screens = (bMenuMasking || bCutsceneMasking) && shifted;
+        // The loading spinner is mapped into the 16:9 frame whenever the HUD is: it is the
+        // one HUD element drawn outside the pool's anchor records (AR-011).
+        const bool icon = bFixUiAspect && shifted;
+        if (!sites && !bias && !spread && !screens && !icon)
         {
             return;
         }
 
-        if (bias || spread || screens)
+        if (bias || spread || screens || icon)
         {
-            ShiftAppend(ctx, spread, bias, screens);
+            ShiftAppend(ctx, spread, bias, screens, icon);
         }
 
         if (!sites)
@@ -2718,10 +2725,13 @@ namespace AspectRatio
     thread_local void* g_CinematicCamera = nullptr;
     thread_local ULONGLONG g_CinematicCameraTick = 0;
     thread_local float g_CinematicInputScale = 0.0f;
+    thread_local void* g_GameplayCamera = nullptr;
+    thread_local ULONGLONG g_GameplayCameraTick = 0;
+    thread_local float g_GameplayInputScale = 0.0f;
 
     // Cross-thread state for the band gate and the live lab.
     std::atomic<ULONGLONG> g_CinematicBuiltTick { 0 };   // last time a cinematic camera was built
-    std::atomic<int> g_CutsceneZoom { 1 };               // live "cutzoom": 0 off, 1 on
+    std::atomic<int> g_CutsceneZoom { 0 };               // live "cutzoom": 0 off, 1 on; seeded from bCutsceneFovCompensation
     std::atomic<float> g_CutsceneDivisor { 0.0f };       // live "cutdiv": explicit divisor, 0 = the factor
     std::atomic<int> g_BandMode { 0 };                   // live "box": 0 cutscene-gated, 1 forced on, 2 forced off
     std::atomic<int> g_CameraLogBudget { 0 };            // live "camlog N": builder calls to log
@@ -2734,8 +2744,9 @@ namespace AspectRatio
     }
 
     // The builder: void(camera, source, projection_scale, p4, p5, aspect_scale). Only the
-    // scale is touched, and only for the tagged cinematic routes; the gameplay owner at
-    // +0x0BA3A3 and everything else pass through untouched. The original does all the work -
+    // scale is touched: divided by the spread factor on the tagged cinematic routes (the
+    // cutscene FOV compensation) and by the FOV adjustment on the gameplay route at
+    // +0x0BA3A3; everything else passes through untouched. The original does all the work -
     // nothing in the camera object is rewritten afterwards (Ultra120 measured the double
     // transform that produces).
     void __fastcall BuildCamera(void* camera, const void* source, float projectionScale,
@@ -2753,11 +2764,33 @@ namespace AspectRatio
             && now - g_CinematicCameraTick <= 250
             && std::fabs(projectionScale - g_CinematicInputScale) <= tolerance;
 
+        const bool usable = std::isfinite(projectionScale) && projectionScale > 0.0f;
         float scale = projectionScale;
-        if (rva == kRvaCameraGameplayReturn)
+        const bool gameplay = rva == kRvaCameraGameplayReturn;
+        // The gameplay camera is rebuilt several times per frame after the tagged call
+        // (+0x0B9BA0 outside the owner, +0x0EB0EB, +0x0EB191, +0x0B8A43, +0x0B8B4F; fov100,
+        // 2026-09-04), each with the same input scale; the last write is what shows, so the
+        // adjustment follows the camera object the way the cutscene's final rebuild does.
+        const float gameplayTolerance = std::max(0.001f, std::fabs(g_GameplayInputScale) * 0.001f);
+        const bool gameplayRebuild = !gameplay && !cinematicSource && !cinematicFinal
+            && camera == g_GameplayCamera
+            && now - g_GameplayCameraTick <= 250
+            && std::fabs(projectionScale - g_GameplayInputScale) <= gameplayTolerance;
+        if (gameplay)
         {
             g_GameplayBuiltTick.store(now, std::memory_order_relaxed);
             g_GameplayBuilds.fetch_add(1, std::memory_order_relaxed);
+            g_GameplayCamera = camera;
+            g_GameplayCameraTick = now;
+            g_GameplayInputScale = projectionScale;
+        }
+        if (gameplay || gameplayRebuild)
+        {
+            const float fov = fFovAdjustment;
+            if (usable && std::isfinite(fov) && fov > 0.0f && fov != 1.0f)
+            {
+                scale = projectionScale / fov;
+            }
         }
         if (cinematicSource || cinematicFinal)
         {
@@ -2771,7 +2804,7 @@ namespace AspectRatio
             if (g_CutsceneZoom.load() != 0)
             {
                 const float divisor = g_CutsceneDivisor.load() > 0.0f ? g_CutsceneDivisor.load() : HorizontalSpreadFactor();
-                if (std::isfinite(projectionScale) && projectionScale > 0.0f && divisor > 0.0f && divisor != 1.0f)
+                if (usable && divisor > 0.0f && divisor != 1.0f)
                 {
                     scale = projectionScale / divisor;
                     g_CameraPatches.fetch_add(1);
@@ -2783,7 +2816,7 @@ namespace AspectRatio
         {
             spdlog::info("MGS4: letterbox: camera build from +{:X} ({}) cam={:X} scale {:.5f} -> {:.5f} p4={:.4f} p5={:.4f} aspect={:.4f} depth={}",
                 rva,
-                rva == kRvaCameraGameplayReturn ? "gameplay" : cinematicSource ? "cinematic" : cinematicFinal ? "cinematic-final" : "other",
+                gameplay ? "gameplay" : gameplayRebuild ? "gameplay-rebuild" : cinematicSource ? "cinematic" : cinematicFinal ? "cinematic-final" : "other",
                 reinterpret_cast<uintptr_t>(camera), projectionScale, scale, p4, p5, aspectScale, g_CinematicOwnerDepth);
         }
 
@@ -3055,10 +3088,20 @@ namespace AspectRatio
             case 2: return false;
             default:
             {
-                // The grace is stepped every present: it ends on the first present without
-                // the intro camera, whether or not the rung would have fired.
+                // Both the ladder and the grace are stepped every present, whichever
+                // switches are on: the ladder's dismissal rung starts the grace the cutscene
+                // masking relies on, and the grace ends on the first present without the
+                // intro camera. Ladder first - the grace must be read after the rung on the
+                // same present (one painted frame otherwise; split_b, 2026-09-04).
+                const bool boot = BootPhaseLive();
                 const bool grace = PostLoadGrace();
-                return BootPhaseLive() || (CutsceneCameraLive() && !grace) || ScreenLive();
+                // With the menus unmasked, the plate itself is left alone, and so is the
+                // intro camera that starts under it at the press: the dismissal identity
+                // lands ~0.6 s after the key, and the camera was back for ~7 presents
+                // before the grace began (split_a, 2026-09-04) - a visible blink.
+                const bool plateUp = static_cast<BootStage>(g_BootStage.load(std::memory_order_relaxed)) == BootStage::PlateUp;
+                return (bMenuMasking && (boot || ScreenLive()))
+                    || (bCutsceneMasking && CutsceneCameraLive() && !grace && !plateUp);
             }
         }
     }
@@ -3247,6 +3290,20 @@ namespace AspectRatio
         return result;
     }
 
+    // The camera hooks serve the masking's gate (the cinematic camera signal, the gameplay
+    // camera for the ladder's fallbacks), the cutscene FOV compensation and the gameplay
+    // FOV adjustment; the DXGI hooks serve the bands. Each half installs only when
+    // something it serves is on.
+    bool CameraHooksWanted()
+    {
+        return bMenuMasking || bCutsceneMasking || bCutsceneFovCompensation || fFovAdjustment != 1.0f;
+    }
+
+    bool BandHooksWanted()
+    {
+        return bMenuMasking || bCutsceneMasking;
+    }
+
     void InstallLetterbox()
     {
         auto* const base = reinterpret_cast<uint8_t*>(baseModule);
@@ -3260,6 +3317,14 @@ namespace AspectRatio
                 }
                 return at;
             };
+
+        spdlog::info("MGS4: letterbox: menu masking {}, cutscene masking {}, cutscene FOV compensation {}, FOV adjustment {:.2f}.",
+            bMenuMasking ? "on" : "off", bCutsceneMasking ? "on" : "off", bCutsceneFovCompensation ? "on" : "off", fFovAdjustment);
+        g_CutsceneZoom.store(bCutsceneFovCompensation ? 1 : 0);
+        if (!CameraHooksWanted())
+        {
+            return;
+        }
 
         // Camera side.
         if (auto* at = checked(kRvaCameraBuilder, { 0x48, 0x8B, 0xC4, 0x53, 0x56, 0x57 }, "camera builder"))
@@ -3279,6 +3344,10 @@ namespace AspectRatio
         }
 
         // Band side: the DXGI exports, before the game resolves them.
+        if (!BandHooksWanted())
+        {
+            return;
+        }
         const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
         if (!dxgi) { spdlog::error("MGS4: letterbox: dxgi.dll did not load."); return; }
         if (void* fn = reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory")))
@@ -3638,11 +3707,13 @@ namespace AspectRatio
 
     void ApplyFixes()
     {
-        // A normal launch gets exactly two hooks: the layout converter (layer 1, the
-        // undistorted centered canvas) and the pool append (layer 2, the identity-keyed
-        // corner spread). Everything else here is research instrumentation - the upload-helper
-        // probe, the live command thread, the rect/producer/channel logging - whose switches
-        // only exist in the lab settings file and which must not run outside a lab boot.
+        // A normal launch gets the layout converter (layer 1, the undistorted centered
+        // canvas), the pool append (layer 2, the identity-keyed corner spread; also the
+        // masking's screen identities) and, for the masking and FOV settings, the camera
+        // builder and DXGI hooks. Everything else here is research instrumentation - the
+        // upload-helper probe, the live command thread, the rect/producer/channel logging -
+        // whose switches only exist in the lab settings file and which must not run outside
+        // a lab boot.
         if (bLabMode)
         {
             if (bLogUiChannels)
@@ -3656,32 +3727,41 @@ namespace AspectRatio
             }
         }
 
-        if (!bFixUiAspect)
+        // Menu masking without the corrected HUD would mask stretched menus: the Config Tool
+        // only offers it with a centered or expanded HUD, and the read enforces the same.
+        bMenuMasking = bMenuMasking && bFixUiAspect;
+        // The masking and the camera settings (AR-010) stand on their own: a stretched HUD
+        // with masked, compensated cutscenes is a legitimate choice.
+        const bool letterbox = CameraHooksWanted() || BandHooksWanted();
+        if (!bFixUiAspect && !letterbox)
         {
             return;
         }
 
-        auto* const at = reinterpret_cast<uint8_t*>(baseModule) + kRvaUiLayoutConverter;
-
-        // The RVA is specific to one executable build and .text is encrypted on disk, so the
-        // only meaningful check is here, in-process, before hooking. MSVC's canonical
-        // home-register prologue; anything else means a different binary.
-        constexpr uint8_t kExpectedPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
-        if (std::memcmp(at, kExpectedPrologue, sizeof(kExpectedPrologue)) != 0)
+        if (bFixUiAspect)
         {
-            spdlog::error("MGS4: UI Aspect: +{:X} does not start with the expected prologue - "
-                "wrong executable build, not hooking.", kRvaUiLayoutConverter);
-            return;
-        }
+            auto* const at = reinterpret_cast<uint8_t*>(baseModule) + kRvaUiLayoutConverter;
 
-        UiLayoutConverter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&ConvertLayout));
-        LOG_HOOK(UiLayoutConverter_hook, "MGS4: UI Aspect")
+            // The RVA is specific to one executable build and .text is encrypted on disk, so
+            // the only meaningful check is here, in-process, before hooking. MSVC's canonical
+            // home-register prologue; anything else means a different binary.
+            constexpr uint8_t kExpectedPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
+            if (std::memcmp(at, kExpectedPrologue, sizeof(kExpectedPrologue)) != 0)
+            {
+                spdlog::error("MGS4: UI Aspect: +{:X} does not start with the expected prologue - "
+                    "wrong executable build, not hooking.", kRvaUiLayoutConverter);
+                return;
+            }
 
-        // Layer 2 rides on layer 1: without the undistorted centered base, spreading anchors
-        // would just rearrange stretched widgets.
-        if (!UiLayoutConverter_hook)
-        {
-            return;
+            UiLayoutConverter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&ConvertLayout));
+            LOG_HOOK(UiLayoutConverter_hook, "MGS4: UI Aspect")
+
+            // Layer 2 rides on layer 1: without the undistorted centered base, spreading
+            // anchors would just rearrange stretched widgets.
+            if (!UiLayoutConverter_hook)
+            {
+                return;
+            }
         }
 
         if (bLabMode)
@@ -3694,10 +3774,11 @@ namespace AspectRatio
             StartLiveAnchorLab();
             InstallRectEmitLogging();
             InstallProducerProbe();
-            if (bAspectLetterbox)
-            {
-                InstallLetterbox();
-            }
+        }
+
+        if (letterbox)
+        {
+            InstallLetterbox();
         }
 
         // Debug Logging: the F11 HUD report, which needs the upload probe (the dump runs at
@@ -3709,10 +3790,11 @@ namespace AspectRatio
             ApplyCornerSpread();
         }
 
-        // The spread's own hook, shared with the world tracking and the HUD report. Its
-        // probe self-gates to a flag check when nothing is armed, and both treatments are a
-        // strict no-op at 16:9.
-        if (bAspectPoolSpread || bAspectWorldTracking || bLabMode || report)
+        // The pool append hook, shared by the spread, the world tracking, the loading
+        // spinner, the masking's screen identities and the HUD report. Its probe self-gates
+        // to a flag check when nothing is armed, and every treatment is a strict no-op at
+        // 16:9.
+        if (bFixUiAspect || BandHooksWanted() || bLabMode || report)
         {
             InstallSiteAttribution();
         }
