@@ -12,7 +12,8 @@ without the ultrawide fixes. Nothing in the public tree describes how the fix wo
 Release build of the ASI carries none of the research instrumentation or its strings: the
 lab switches here are compile-time constants outside the Lab configuration (`shared/lab.hpp`).
 
-This code is not open source: all rights reserved, see `LICENSE.md`.
+This code is licensed separately from the public repository: free to use and build on, but the
+ultrawide and 4:3 fix must be credited directly and visibly to BevelTipDrip. See `LICENSE.md`.
 
 ## Layout
 
