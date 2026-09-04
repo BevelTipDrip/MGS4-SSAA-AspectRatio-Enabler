@@ -34,6 +34,12 @@ foreach ($f in $asi, $exe) {
 }
 if (-not (Test-Path $sevenZip)) { throw "7-Zip not found at $sevenZip." }
 
+# A Lab build must never ship: it carries the research instrumentation (shared\lab.hpp). The
+# lab-mode banner is a string only a Lab ASI contains.
+if (Select-String -Path $asi -Pattern 'LAB MODE: research instrumentation' -Quiet) {
+    throw "$asi is a Lab build. Build the Release configuration before packaging."
+}
+
 if (-not $LoaderZip) { $LoaderZip = Join-Path $PSScriptRoot 'loader\Ultimate-ASI-Loader_x64.zip' }
 if (-not (Test-Path $LoaderZip)) {
     throw "Ultimate ASI Loader zip not found at $LoaderZip. Download Ultimate-ASI-Loader_x64.zip from " +

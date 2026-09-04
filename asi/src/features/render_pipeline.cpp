@@ -5178,6 +5178,7 @@ namespace
             }).detach();
     }
 
+#if MGS4E_LAB_BUILD
     // A mid hook takes a plain function pointer, so one distinct function per site is
     // generated from the index rather than captured.
     template <size_t Index>
@@ -5272,6 +5273,7 @@ namespace
                 }
             }).detach();
     }
+#endif
 
     // ---- UI layout converter probe --------------------------------------------------------
     //
@@ -5966,6 +5968,7 @@ namespace
         GraphicsSettings::ApplyShadowAndAntiAliasing();
         AspectRatio::ApplyFixes();
 
+#if MGS4E_LAB_BUILD
         if (bRedirectUiCoordinateSpace)
         {
             RedirectUiCoordinateSpace();
@@ -6091,6 +6094,7 @@ namespace
                 std::memcpy(&i, at, sizeof(i));
                 spdlog::info("MGS4: Constant mgs4.exe+{:X} = {} (float) / {} (int32) / 0x{:08X}", rva, f, i, static_cast<uint32_t>(i));
             });
+#endif
 
         // Before the early return: the truncation fix is about the reticle, not the render
         // size, and it costs nothing at 1.0 scale.
@@ -6354,6 +6358,7 @@ namespace
 // that produces each kind of anchor names itself in the log ("WATCH ... by mgs4.exe+...").
 // The same debug-register machinery as the wrap-era anchor watch, but two slots: the whole
 // point is comparing the static-widget producer against the dynamic-element producer.
+#if MGS4E_LAB_BUILD
 void RenderPipeline::ArmProducerWatch(uintptr_t address, const char* what)
 {
     static std::atomic<int> nextSlot { 0 };
@@ -6390,6 +6395,7 @@ void RenderPipeline::ArmProducerWatch(uintptr_t address, const char* what)
             }
         }).detach();
 }
+#endif
 
 void RenderPipeline::ApplyFixes()
 {

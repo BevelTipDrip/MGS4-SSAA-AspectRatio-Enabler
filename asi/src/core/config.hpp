@@ -2,6 +2,8 @@
 
 #include <filesystem>
 
+#include "lab.hpp"
+
 // MGS4Enabler.settings, and the lab file that replaces it for research boots.
 //
 // Load() reads the file once and writes every value straight into the feature namespaces
@@ -13,8 +15,14 @@ namespace mgs4e::config
 
     // Whether this boot is a lab run: the harness dropped a fresh MGS4Enabler.lab marker next
     // to a MGS4Enabler.lab.settings, so that file was read instead of the user's and the
-    // research keys were honoured. The marker is consumed as it is read.
+    // research keys were honoured. The marker is consumed as it is read. A release build has
+    // no lab mode at all (lab.hpp): this is a constant there, so everything gated on it
+    // compiles out.
+#if MGS4E_LAB_BUILD
     bool LabMode();
+#else
+    constexpr bool LabMode() { return false; }
+#endif
 
     // The settings file that was (or would have been) read.
     const std::filesystem::path& File();

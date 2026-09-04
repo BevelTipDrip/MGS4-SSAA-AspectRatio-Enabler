@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lab.hpp"
+
 namespace RenderPipeline
 {
     void ApplyFixes();
@@ -83,20 +85,20 @@ namespace RenderPipeline
     // something that patches code, but it means any narrowing reached by a different route is
     // invisible. This lists them all so the difference can be examined rather than assumed - the
     // aiming reticle was the symptom people noticed, not necessarily the only one.
-    inline bool bScanNarrowingConversions = false;
+    MGS4E_LAB_SWITCH(bool, bScanNarrowingConversions, false);
 
     // Diagnostics: loads PIX's capture library before the renderer starts, so frames can be
     // captured from inside the process with F10. The game refuses to run when launched by a
     // capture tool directly, and D3D12 cannot be hooked once the device exists, so this is
     // the only way to get a GPU capture out of it. Disables our own D3D12 hooks while on.
 
-    inline bool bRedirectUiCoordinateSpace = false;
+    MGS4E_LAB_SWITCH(bool, bRedirectUiCoordinateSpace, false);
 
     // Diagnostic: disassembles a range of mgs4.exe into the log at startup. RVA as a hex
     // string ("4E14E0"); empty disables. The .text section is encrypted on disk, so this is
     // the practical way to read the game's code.
     inline std::string sDisassembleRva = "";
-    inline int iDisassembleBytes = 512;
+    MGS4E_LAB_SWITCH(int, iDisassembleBytes, 512);
 
     // Diagnostic: logs the value at each of a comma-separated list of hex RVAs, as float and
     // as int32. For reading the constants an instruction multiplies by.
@@ -113,14 +115,14 @@ namespace RenderPipeline
     // Diagnostic: disassembles all of .text looking for code that reads both a render size
     // global and the 16.0f constant - the signature of a screen-pixel to fixed-point
     // conversion, which is what the dynamic HUD elements overflow.
-    inline bool bScanFixedPointSites = false;
+    MGS4E_LAB_SWITCH(bool, bScanFixedPointSites, false);
 
     // Diagnostic: also log the disassembly of each cluster the scan reports.
-    inline bool bScanClusterDisassembly = false;
+    MGS4E_LAB_SWITCH(bool, bScanClusterDisassembly, false);
 
     // Diagnostic: hooks the fixed-point conversion at mgs4.exe+4F9F67 and logs the floats it
     // converts, to establish whether they are screen pixels (which wrap) or virtual.
-    inline bool bFixedPointProbe = false;
+    MGS4E_LAB_SWITCH(bool, bFixedPointProbe, false);
 
     // Diagnostic: hardware execute breakpoints on up to four comma-separated hex RVAs. Watches
     // instructions without modifying them, which mid hooks cannot do safely for short stores.
@@ -128,81 +130,85 @@ namespace RenderPipeline
 
     // Diagnostic: on F9, search memory for an already-wrapped centre-screen coordinate and set
     // hardware write watches on it, so the code that writes it identifies itself.
-    inline bool bWatchWrappedValue = false;
+    MGS4E_LAB_SWITCH(bool, bWatchWrappedValue, false);
 
     // Diagnostic: hardware watch on the render size globals, armed as soon as they resolve, to
     // log every distinct instruction that reads them - including during load, when the UI
     // geometry that overflows is built.
-    inline bool bWatchRenderSizeReads = false;
+    MGS4E_LAB_SWITCH(bool, bWatchRenderSizeReads, false);
 
     // Diagnostic: watch the float copies of the render size instead of the global itself, for
     // code that works from a cached value and so never touches the global.
-    inline bool bWatchCachedRenderSize = false;
+    MGS4E_LAB_SWITCH(bool, bWatchCachedRenderSize, false);
 
     // Diagnostic: PAGE_GUARD the whole allocation holding the wrapped coordinate and log the
     // instruction behind each write fault - covers the entire buffer, unlike a debug register.
-    inline bool bGuardWrappedRegion = false;
+    MGS4E_LAB_SWITCH(bool, bGuardWrappedRegion, false);
 
     // Diagnostic: guard the engine heap and record every write, so the one that creates the
     // wrapped coordinate can be looked up afterwards by address.
-    inline bool bGuardRecordHeapWrites = false;
+    MGS4E_LAB_SWITCH(bool, bGuardRecordHeapWrites, false);
 
     // Diagnostic: plants an INT3 at every candidate fixed-point conversion site, so all of
     // them can be observed at once instead of four at a time with debug registers.
-    inline bool bTrapFixedPointSites = false;
+    MGS4E_LAB_SWITCH(bool, bTrapFixedPointSites, false);
 
     // Diagnostic: on F9, dump the memory around a wrapped coordinate so its structure can be
     // read directly instead of assumed.
-    inline bool bDumpWrappedContext = false;
+    MGS4E_LAB_SWITCH(bool, bDumpWrappedContext, false);
 
     // Diagnostic: guard each D3D12 upload buffer at creation so the first CPU write to it
     // identifies itself - the only way to catch a value written once, before its address
     // can be known.
-    inline bool bGuardUploadBuffers = false;
+    MGS4E_LAB_SWITCH(bool, bGuardUploadBuffers, false);
 
     // Diagnostic: find the wrapped coordinate inside a staging copy and watch that address.
     // Staging is rewritten every frame, so unlike the vertex pool a watch on it will fire.
-    inline bool bWatchStagingWrites = false;
+    MGS4E_LAB_SWITCH(bool, bWatchStagingWrites, false);
 
     // Diagnostic: F8 toggles the render buffer globals between buffer and window size while
     // the game runs, to see whether the UI's NDC conversion reads them live or a cached copy.
-    inline bool bUiCoordinateProbe = false;
+    MGS4E_LAB_SWITCH(bool, bUiCoordinateProbe, false);
 
     // Bisection over the candidate sites for the UI's NDC divisor. Patches the half-open
     // range [start, start+count) of the candidate list; count 0 patches nothing.
-    inline int iUiNdcSiteStart = 0;
-    inline int iUiNdcSiteCount = 0;
+    MGS4E_LAB_SWITCH(int, iUiNdcSiteStart, 0);
+    MGS4E_LAB_SWITCH(int, iUiNdcSiteCount, 0);
 
-    inline bool bEnablePixCapture = false;
+    MGS4E_LAB_SWITCH(bool, bEnablePixCapture, false);
 
     // How many frames each PIX capture spans. One Present-to-Present interval on this game
     // can contain nothing but the final blit, with the scene work landing in a neighbouring
     // interval, so a single-frame capture can come back with no draw calls at all.
-    inline int iPixCaptureFrames = 5;
+    MGS4E_LAB_SWITCH(int, iPixCaptureFrames, 5);
 
     // Diagnostic: hooks the UI layout converter (logical 1280x720 -> output pixels,
     // mgs4.exe+439810) and logs the rectangles flowing through it with their callers.
     // Answers whether the converter runs per widget or per sub-quad, which decides
     // whether an anchored aspect-ratio remap is viable there. Logging only.
-    inline bool bLogUiLayout = false;
+    MGS4E_LAB_SWITCH(bool, bLogUiLayout, false);
 
     // Diagnostic: hardware write watches on two known anchor slots in the UI instance pool -
     // one static widget (the ration box), one dynamic element (the aiming reticle) - so the
     // code that produces each kind of anchor names itself. The foundation of the
     // producer-based aspect positioning (the ultrawide module).
-    inline bool bWatchAnchorProducers = false;
+    MGS4E_LAB_SWITCH(bool, bWatchAnchorProducers, false);
 
     // Arms one of the producer watches (up to two). Called from the aspect-ratio upload hook
-    // once it has located a target block in the live pool.
+    // once it has located a target block in the live pool. Lab builds only.
+#if MGS4E_LAB_BUILD
     void ArmProducerWatch(uintptr_t address, const char* what);
+#else
+    inline void ArmProducerWatch(uintptr_t, const char*) {}
+#endif
 
     // Diagnostics: logs every viewport and scissor rect the engine sets, flagging any that
     // are empty. The reticle's draw calls are issued at every render resolution but stop
     // producing output above a 4095-wide buffer, so the pass state is the remaining suspect.
-    inline bool bLogViewports = false;
+    MGS4E_LAB_SWITCH(bool, bLogViewports, false);
 
     // Diagnostics: hooks D3D12 resource creation to log every render target allocation
     // with the mgs4.exe call sites that requested it, and watches the render size
     // globals for changes. Off by default; only useful when investigating the renderer.
-    inline bool bLogRenderTargetAllocations = false;
+    MGS4E_LAB_SWITCH(bool, bLogRenderTargetAllocations, false);
 }

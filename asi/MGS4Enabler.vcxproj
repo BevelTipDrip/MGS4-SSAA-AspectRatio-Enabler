@@ -5,6 +5,10 @@
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Lab|x64">
+      <Configuration>Lab</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -49,6 +53,12 @@
       <AdditionalOptions>/NOIMPLIB %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
+  <!-- Lab: Release plus the research instrumentation, lab mode and the lab settings file (shared\lab.hpp). Never shipped. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Lab'">
+    <ClCompile>
+      <PreprocessorDefinitions>MGS4E_LAB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
@@ -61,7 +71,7 @@
     <ClCompile Include="src\core\compat.cpp" />
     <ClCompile Include="src\features\graphics_settings.cpp" />
     <ClCompile Include="src\features\render_pipeline.cpp" />
-    <ClCompile Include="src\features\stage_automation.cpp" />
+    <ClCompile Include="src\features\stage_automation.cpp" Condition="'$(Configuration)'=='Lab'" />
     <!-- The ultrawide module is a private submodule: built when it is checked out, replaced by a logging stub when it is not. -->
     <ClCompile Include="$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
     <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
@@ -102,6 +112,7 @@
     <ClInclude Include="src\features\render_pipeline.hpp" />
     <ClInclude Include="src\features\stage_automation.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
+    <ClInclude Include="..\shared\lab.hpp" />
     <ClInclude Include="..\shared\compat_table.hpp" />
     <ClInclude Include="..\shared\settings_keys.hpp" />
     <ClInclude Include="..\shared\version.hpp" />

@@ -1,11 +1,13 @@
 # Tooling
 
-**Settings:** none user-facing. Everything here is off by default and absent from `MGS4Enabler.exe`
+**Settings:** none user-facing. Everything here is off by default, absent from `MGS4Enabler.exe` and, outside a Lab build, from `MGS4Enabler.asi`
 **Implements:** `asi/src/features/stage_automation.cpp`, `asi/src/features/render_pipeline.cpp`,
 `asi/src/core/config.cpp` (`ChooseFile`), `C:\mgspf_tools\*.ps1`
 
-Development harness. It ships in the binary but does nothing unless the game is booted in **lab
-mode**, so a normal install never touches any of it.
+Development harness. Since 2026-09-04 it is compiled only into the **Lab** configuration
+(`build\build.cmd lab`, output `bin\Lab`): in a Release build every switch here is a compile-time
+constant (`shared/lab.hpp`), the code and its strings are absent from the ASI, and lab mode itself
+does not exist. A Lab build still does nothing unless the game is booted in **lab mode**.
 
 ## Lab mode
 

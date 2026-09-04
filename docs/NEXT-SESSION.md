@@ -75,9 +75,18 @@ rediscovered the hard way:
   aspect-derived. This is why a non-16:9 window is expected to distort rather than reveal.
 - **`.text` is encrypted on disk** by the Steam DRM, so all code reading must happen in-process.
   Static disassembly of the exe shows nothing useful.
-- **Research keys only work in lab mode.** They are read from `MGS4Enabler.lab.settings`, and
-  only when a fresh `MGS4Enabler.lab` marker sits beside it; the ASI consumes the marker. Putting
-  them in `MGS4Enabler.settings` does nothing.
+- **Research keys only work in lab mode, and lab mode only exists in a Lab build.** They are read
+  from `MGS4Enabler.lab.settings`, and only when a fresh `MGS4Enabler.lab` marker sits beside it;
+  the ASI consumes the marker. Putting them in `MGS4Enabler.settings` does nothing. Since
+  2026-09-04 the instrumentation is compiled only into the **Lab** configuration
+  (`build\build.cmd lab` -> `bin\Lab`): every research switch is declared with
+  `MGS4E_LAB_SWITCH` (`shared/lab.hpp`) and is a constexpr `false` in a Release build, so the
+  probes, scans, dumps, hotkeys, stage automation, the marker check and all their strings drop
+  out of the shipped ASI (5015 -> 2460 printable strings; verified by grepping the binary). The
+  harness deploys `bin\Lab` on `-LabConfig` and `bin\Release` otherwise; `run_test.ps1` always
+  uses the Lab build; `package.ps1` refuses a Lab ASI. The F11 HUD report (Debug Logging) is the
+  one piece of diagnostic output still in Release, by design: users report misplaced widgets
+  with it.
 - **`Log Viewports` and `Watch Staging Writes` make the game unplayable.** Use them for a captured
   frame, never for a play session. Left on once, the stutter was mistaken for a rendering
   regression.

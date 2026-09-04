@@ -7,7 +7,9 @@
 #include "version.hpp"
 
 #include "features/render_pipeline.hpp"
+#if MGS4E_LAB_BUILD
 #include "features/stage_automation.hpp"
+#endif
 
 namespace
 {
@@ -43,7 +45,9 @@ namespace
             // Render pipeline first: it resolves the render size globals the aspect fixes
             // read, and calls GraphicsSettings and AspectRatio itself in the order they need.
             RenderPipeline::ApplyFixes();
+#if MGS4E_LAB_BUILD
             StageAutomation::ApplyFixes();
+#endif
 
             spdlog::info("Initialisation complete.");
         });

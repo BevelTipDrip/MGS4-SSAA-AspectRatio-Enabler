@@ -129,7 +129,11 @@ is not in the repository).
 
 The ultrawide and 4:3 layout code is a private submodule (`external/ultrawide`). Without it
 the project still builds, with a stub in its place: every setting works except the Ultrawide
-HUD family, which then does nothing.
+HUD family, which then does nothing. That component is not open source (see Licence below).
+
+Two configurations: **Release** is what ships. **Lab** (`build\build.cmd lab`, output in
+`bin\Lab`) compiles in the research instrumentation and the lab settings file that the test
+harness drives; a Release build contains none of it.
 
 ---
 
@@ -143,4 +147,11 @@ Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
 [spdlog](https://github.com/gabime/spdlog) (logging), [wxWidgets](https://www.wxwidgets.org/)
 (the tool).
 
-MIT License — see `LICENSE.md`.
+## Licence
+
+This repository is under the MIT License — see `LICENSE.md`.
+
+The ultrawide and 4:3 layout component (the private `external/ultrawide` submodule) is
+closed source: © 2026 BevelTipDrip, all rights reserved. It is included in the release
+binaries, which may be redistributed unmodified with credit to BevelTipDrip and a link to
+this repository. If you build on this work, say where it came from.

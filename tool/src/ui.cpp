@@ -268,7 +268,7 @@ namespace mgs4e::tool
 
         wxStaticText* credits = new wxStaticText(panel, wxID_ANY,
             "Built with safetyhook, Zydis, spdlog and wxWidgets. ASI loading by ThirteenAG's Ultimate ASI Loader.\n"
-            MGS4E_COPYRIGHT);
+            MGS4E_COPYRIGHT " " MGS4E_LICENSE_NOTE);
         credits->Wrap(FromDIP(620));
         outer->Add(credits, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 

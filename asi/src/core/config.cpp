@@ -9,13 +9,17 @@
 
 #include "aspect_ratio.hpp"
 #include "render_pipeline.hpp"
+#if MGS4E_LAB_BUILD
 #include "stage_automation.hpp"
+#endif
 
 namespace mgs4e::config
 {
     namespace
     {
+#if MGS4E_LAB_BUILD
         bool g_LabMode = false;
+#endif
         std::filesystem::path g_File;
 
         // Reads a key into `out` when it is present and parses; otherwise leaves the default.
@@ -59,6 +63,7 @@ namespace mgs4e::config
             const std::filesystem::path root = mgs4e::game::Root();
             std::filesystem::path file = root / (std::string(MGS4E_NAME) + ".settings");
 
+#if MGS4E_LAB_BUILD
             const std::filesystem::path marker = root / (std::string(MGS4E_NAME) + ".lab");
             std::error_code ec;
             if (std::filesystem::exists(marker, ec))
@@ -79,6 +84,7 @@ namespace mgs4e::config
                 }
                 std::filesystem::remove(marker, ec);
             }
+#endif
             return file;
         }
 
@@ -135,8 +141,10 @@ namespace mgs4e::config
             }
         }
 
+#if MGS4E_LAB_BUILD
         // The research keys, read only from the lab file. A normal launch ignores them even if
-        // someone has copied them into the user's file.
+        // someone has copied them into the user's file, and a release build does not contain
+        // this function or anything the keys switch on.
         void ReadLabKeys(const mgs4e::Ini& ini)
         {
             using namespace mgs4e::keys;
@@ -225,6 +233,7 @@ namespace mgs4e::config
             Read(ini, Graphics, FovAdjustment, fov);
             AspectRatio::fFovAdjustment = static_cast<float>(std::clamp(fov, 50, 200)) / 100.0f;
         }
+#endif
 
         // The shipping aspect keys.
         void ReadAspectKeys(const mgs4e::Ini& ini)
@@ -364,10 +373,12 @@ namespace mgs4e::config
         }
 
         spdlog::info("Settings file: {}", g_File.string());
+#if MGS4E_LAB_BUILD
         if (g_LabMode)
         {
             spdlog::warn("LAB MODE: research instrumentation enabled for this boot only.");
         }
+#endif
 
         bool verbose = false;
         Read(ini, mgs4e::keys::Debugging, mgs4e::keys::DebugLogging, verbose);
@@ -376,20 +387,22 @@ namespace mgs4e::config
 
         ReadWindowSize(ini);
         ReadGraphicsKeys(ini);
+#if MGS4E_LAB_BUILD
         if (g_LabMode)
         {
             ReadLabKeys(ini);
+            return;
         }
-        else
-        {
-            ReadAspectKeys(ini);
-        }
+#endif
+        ReadAspectKeys(ini);
     }
 
+#if MGS4E_LAB_BUILD
     bool LabMode()
     {
         return g_LabMode;
     }
+#endif
 
     const std::filesystem::path& File()
     {
