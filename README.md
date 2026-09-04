@@ -129,7 +129,7 @@ is not in the repository).
 
 The ultrawide and 4:3 layout code is a private submodule (`external/ultrawide`). Without it
 the project still builds, with a stub in its place: every setting works except the Ultrawide
-HUD family, which then does nothing. That component is not open source (see Licence below).
+HUD family, which then does nothing. That component has its own licence (see Licence below).
 
 Two configurations: **Release** is what ships. **Lab** (`build\build.cmd lab`, output in
 `bin\Lab`) compiles in the research instrumentation and the lab settings file that the test
@@ -151,7 +151,9 @@ Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
 
 This repository is under the MIT License — see `LICENSE.md`.
 
-The ultrawide and 4:3 layout component (the private `external/ultrawide` submodule) is
-closed source: © 2026 BevelTipDrip, all rights reserved. It is included in the release
-binaries, which may be redistributed unmodified with credit to BevelTipDrip and a link to
-this repository. If you build on this work, say where it came from.
+The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the release
+binaries) is licensed separately, under a credit-required licence: you may use, modify and
+redistribute it, in your own mods too, but the fix must be credited **directly and visibly to
+BevelTipDrip** wherever it is used or distributed - on the mod page, in the README and in any
+about screen, with a link to this repository. Passing it off as your own ends that permission.
+The full text is in the submodule's `LICENSE.md`.

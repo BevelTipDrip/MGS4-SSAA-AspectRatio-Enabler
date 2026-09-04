@@ -22,7 +22,7 @@
 // Resource metadata
 #define MGS4E_COMPANY_NAME     "BevelTipDrip"
 #define MGS4E_COPYRIGHT        "\xA9 2026 BevelTipDrip."
-#define MGS4E_LICENSE_NOTE     "Public source under the MIT License. The ultrawide and 4:3 layout component is closed source: all rights reserved."
+#define MGS4E_LICENSE_NOTE     "Public source under the MIT License. The ultrawide and 4:3 fix is licensed separately: free to use, but it must be credited directly to BevelTipDrip."
 #define MGS4E_FILE_VERSION_RC  MGS4E_VERSION_MAJOR,MGS4E_VERSION_MINOR,MGS4E_VERSION_PATCH,0
 
 // Other mods this one knows how to share the game with are listed in compat_table.hpp.
