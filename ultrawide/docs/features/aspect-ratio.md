@@ -409,8 +409,8 @@ can show real widget artwork.
 2. **The 3D camera** (AR-002) — the world is still Vert- at 21:9. Squash vs crop first, then
    the projection.
 3. ~~**4:3**~~ — done 2026-09-04 (AR-009). Left to check there: the 3D view (cropped or
-   squashed?), and the BASIC CONTROLS panel which stops at the 16:9 band top/bottom exactly as
-   it stops at the sides on 21:9 (one `kHudStretched` line once its element is read off F11).
+   squashed?). The BASIC CONTROLS panel stopping at the 16:9 band is by design — it is a menu
+   (user, 2026-09-04).
 4. **A real play session at 21:9** — the harness sees one stage and one aim; an hour of play
    sees codec, item switching, alerts, and everything else.
 5. **32:9** — nothing in the math is 21:9-specific, but factor 2.37 stretches the cluster

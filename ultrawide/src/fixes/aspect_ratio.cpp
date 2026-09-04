@@ -362,6 +362,10 @@ namespace AspectRatio
         { 0x0064D23C, +1, +1, "camo ring (Solid Eye)" },
         { 0x00925509, +1, +1, "camo ring (compass)" },  // the plain ring the Solid Eye replaces; hot dump 15
         { 0x000D12D5, -1, -1, "battery bar" },          // sits under the item panel; (-0.539,-0.911)
+        // Top-centre: never needed a horizontal side, so it went untabled until 4:3 showed it
+        // sitting 270 px below the top edge (user, 2026-09-04). Channel 0x26 in the chanbias
+        // census; the node was in hot dumps 04-15 at (0, 0.8111).
+        { 0x0071FC3E,  0, +1, "alert / caution banner" },
     };
 
     // A widget's channel also carries records with no node of their own - the ammo and life
@@ -1200,7 +1204,9 @@ namespace AspectRatio
             {
                 now = { static_cast<float>(identity->side) * SideShift(), static_cast<float>(identity->sideY) * SideShiftY(), true };
                 const uint64_t logBit = 1ull << (identity - kHudIdentities);
-                if ((g_ShiftedIdentitiesLogged.fetch_or(logBit) & logBit) == 0)
+                // A widget with no side on the active axis (the top-centre banner at 21:9) is
+                // carried as a zero so its channel's satellites stay put too; nothing to log.
+                if ((now.dx != 0.0f || now.dy != 0.0f) && (g_ShiftedIdentitiesLogged.fetch_or(logBit) & logBit) == 0)
                 {
                     spdlog::info("MGS4: UI Aspect: element {:08X} ({}) on channel 0x{:02X} anchored {} by {:.4f}.",
                         identity->strcode, identity->what, id.channel, ShiftEdgeName(identity->side, identity->sideY), ActiveShift());

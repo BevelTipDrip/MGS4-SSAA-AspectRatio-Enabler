@@ -26,8 +26,8 @@ everything else - menus, subtitles, the reticle, the CAUTION banner, anything th
 3D world - exactly centred where a plain 16:9 canvas would put it. Nothing is stretched, nothing
 is guessed from where it happens to be on screen, and on a 16:9 output the code is a strict
 no-op. At an output *taller* than 16:9 (4:3) the same rule runs on the vertical axis: the
-interface keeps its 16:9 shape, the corner widgets move to the real top and bottom edges, and
-the wheels hang from their boxes (section 7).
+interface keeps its 16:9 shape, the corner widgets and the top-centre alert banner move to the
+real top and bottom edges, and the wheels hang from their boxes (section 7).
 
 ## 2. The problem
 
@@ -180,7 +180,7 @@ diff against the unbiased capture) and having the user read what moved:
 | 0x0E / 0x10 / 0x12 / 0x14 | item wheel column | left |
 | 0x16 | item wheel junction | left |
 | 0x18 / 0x1A / 0x1C | item wheel row | left |
-| 0x26 | CAUTION banner | centred (not in the table) |
+| 0x26 | ALERT / EVASION / CAUTION banner | centred at 21:9; **top** at 4:3 (strcode `0x0071FC3E`, tabled 2026-09-04) |
 | 0x25 / 0x29 / 0x2A | centre-ish elements | centred |
 | 0x08 / 0x09 / 0x0A | SE MODE selector cluster | centred (user decision pending) |
 | 0x20 | selector overlay, centre-anchored `(0,0)`, only exists while a wheel is open | per element, below |
@@ -248,6 +248,7 @@ node+8 that identifies the element, stable across frames, boots and label instan
 | `0x000D12D5` | battery | 0x04 |
 | `0x0007324E` | reticle | 0x2A |
 | `0x0008F2D7` | centre marker | 0x25 |
+| `0x0071FC3E` | alert / evasion / caution banner (one node for all three states; user F11 dumps 2026-09-04) | 0x26 |
 | `0x001A8623`, `0x0079E671` | bottom-centre prompts | 0x28 |
 | `0x002CCAD3`, `0x0060CD29` | bottom-centre | 0x29 |
 | **`0x0066AF8A`** | **pickup label** (all five anchors) | dynamic (0x31-0x34 seen) |
@@ -430,11 +431,11 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 ## 10. What is not done
 
 - **Other 16:9-sized backdrops.** The wheel backdrops are stretched (section 6), but the same
-  shape shows elsewhere: the BASIC CONTROLS overlay's dark panel stops at the 16:9 edges
-  (capture 2026-09-03, `lab3/title2/item_sites.jpg`; the same panel stops at the 16:9 band top
-  and bottom at 4:3, capture 2026-09-04), and the pause menu and codec have not
-  been looked at. Each is a strcode + element read off a `sites` dump and one `kHudStretched`
-  line; the user decides which ones matter.
+  shape shows elsewhere; the pause menu and codec have not been looked at. Each is a strcode +
+  element read off a `sites` dump and one `kHudStretched` line; the user decides which ones
+  matter. The BASIC CONTROLS overlay's dark panel, which stops at the 16:9 edges (21:9, capture
+  2026-09-03; top/bottom at 4:3, 2026-09-04), is **not** one of them: it is a menu and keeps
+  its 16:9 position and size by design (user, 2026-09-04).
 - **The title screen's grey panel** (hot dump 03: "offset to the left and not centered") was
   reported against an earlier build; the user re-checked it on 2026-09-03 and it looked right
   ("you already fixed that"). No dedicated fix was made and the draw path was never identified,
