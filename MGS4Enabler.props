@@ -33,7 +33,8 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <ProgramDatabaseFile>$(OutDir)pdb\$(TargetName).pdb</ProgramDatabaseFile>
+      <!-- Per project, not per target: the ASI and the tool share the target name MGS4Enabler. -->
+      <ProgramDatabaseFile>$(OutDir)pdb\$(ProjectName).pdb</ProgramDatabaseFile>
       <!-- The binaries record only the PDB's file name, not the build machine's path to it. -->
       <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
     </Link>
