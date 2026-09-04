@@ -65,4 +65,10 @@ namespace AspectRatio
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
     // maps every visible widget to its host object by measured shift.
     inline bool bAspectTestLadder = false;
+
+    // Lab (AR-010): keep cutscenes, the codec, the pause menu and the title at 16:9 on a
+    // non-16:9 output - a uniform zoom-out of the cinematic camera on a wide output, plus
+    // black bands over the region outside the centred 16:9 rect, gated on the cinematic
+    // camera or a tabled screen element (kScreenIdentities). Lab boots only for now.
+    inline bool bAspectLetterbox = false;
 }

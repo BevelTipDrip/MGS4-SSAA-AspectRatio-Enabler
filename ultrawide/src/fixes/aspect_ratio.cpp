@@ -8,9 +8,14 @@
 #include "resolution_scaling_fixes.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
+#include <dxgi1_4.h>
 #include <format>
+#include <intrin.h>
 #include <mutex>
+
+#pragma intrinsic(_ReturnAddress)
 
 namespace AspectRatio
 {
@@ -1089,8 +1094,19 @@ namespace AspectRatio
                 id.elem = node - script;
                 // The node the interpreter is executing: it has just read this opcode and
                 // its operands out of the script block, so the same bytes are readable here
-                // as long as the position really is inside the block r14 points at.
-                if (script > 0x10000 && id.elem < 0x10000)
+                // as long as the position really is inside the block r14 points at. The
+                // menus' heap owners (the pause menu, the codec) run their nodes from
+                // outside that block - node - r14 was 0xA48630 on the pause menu, census
+                // 2026-09-04 - so for those the node's page is checked before the read.
+                bool readable = script > 0x10000 && id.elem < 0x10000;
+                if (!readable && node > 0x10000)
+                {
+                    MEMORY_BASIC_INFORMATION info {};
+                    readable = VirtualQuery(reinterpret_cast<void*>(node), &info, sizeof(info))
+                        && info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+                        && node + 12 <= reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+                }
+                if (readable)
                 {
                     const auto* bytes = reinterpret_cast<const uint8_t*>(node);
                     if (bytes[0] == 0x0D)
@@ -1147,7 +1163,57 @@ namespace AspectRatio
         return nullptr;
     }
 
-    void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias)
+    // The letterbox's menu gate (AR-010): screens that keep the 16:9 frame besides
+    // cutscenes, named by an element their layout script draws every frame they are up
+    // and on no other screen (census 2026-09-04, sites dumps read against gameplay and the
+    // BASIC CONTROLS overlay). The pause menu and the codec share one la2 object
+    // (001997E2) and these two elements. PRESS ANY BUTTON is the HUD owner's channel 1 and
+    // its object stays appended (parked above the screen, channel 0xB) on the main menu
+    // list, whose own rows are 0052133A on channel 0xA. The same structural style as the
+    // cutscene tick: the pool append is the signal, and BandsWanted() reads how long ago a
+    // listed element was last appended.
+    struct ScreenIdentity
+    {
+        uint32_t strcode;
+        const char* what;
+    };
+    constexpr ScreenIdentity kScreenIdentities[] = {
+        { 0x005F9476, "pause menu / codec" },
+        { 0x001AAC76, "pause menu / codec" },
+        { 0x00042FAA, "title (press any button)" },
+        { 0x0052133A, "main menu list" },
+        // The fade plate is 16:9-sized, so on a wider output the world shows past its
+        // sides while it is up (title boot, 2026-09-04); bands there cover exactly that.
+        { 0x004FC96A, "fade plate" },
+    };
+    std::atomic<ULONGLONG> g_ScreenBuiltTick { 0 };      // last time a listed element was appended
+    std::atomic<uint32_t> g_ScreenLastStrcode { 0 };
+    std::atomic<uint64_t> g_ScreenIdentitiesLogged { 0 };
+
+    bool NoteScreenElement(uint32_t strcode)
+    {
+        if (!strcode) { return false; }
+        for (const auto& screen : kScreenIdentities)
+        {
+            if (screen.strcode != strcode) { continue; }
+            g_ScreenBuiltTick.store(GetTickCount64(), std::memory_order_relaxed);
+            g_ScreenLastStrcode.store(strcode, std::memory_order_relaxed);
+            const uint64_t bit = 1ull << (&screen - kScreenIdentities);
+            if ((g_ScreenIdentitiesLogged.fetch_or(bit) & bit) == 0)
+            {
+                spdlog::info("MGS4: letterbox: screen element {:08X} ({}) seen; bands follow it.", screen.strcode, screen.what);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    bool ScreenLive()
+    {
+        return GetTickCount64() - g_ScreenBuiltTick.load(std::memory_order_relaxed) <= 150;
+    }
+
+    void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias, bool screens)
     {
         if ((ctx.r8 & 0xFFFF) != kAnchorBlockSize)
         {
@@ -1159,8 +1225,16 @@ namespace AspectRatio
             return;
         }
 
-        const AppendIdentity id = IdentifyAppend(ctx, spread);
+        const AppendIdentity id = IdentifyAppend(ctx, spread || screens);
         if (id.channel < 0)
+        {
+            return;
+        }
+        if (screens)
+        {
+            NoteScreenElement(id.strcode);
+        }
+        if (!spread && !bias)
         {
             return;
         }
@@ -1294,14 +1368,17 @@ namespace AspectRatio
         const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
         const bool spread = (bAspectPoolSpread || bAspectWorldTracking)
             && (SideShift() != 0.0f || SideShiftY() != 0.0f);   // strict no-op at 16:9
-        if (!sites && !bias && !spread)
+        // The letterbox's menu gate reads the element identity too, whenever the output has
+        // bands to draw (either axis; SideShift and SideShiftY are each 0 at 16:9).
+        const bool screens = bAspectLetterbox && (SideShift() != 0.0f || SideShiftY() != 0.0f);
+        if (!sites && !bias && !spread && !screens)
         {
             return;
         }
 
-        if (bias || spread)
+        if (bias || spread || screens)
         {
-            ShiftAppend(ctx, spread, bias);
+            ShiftAppend(ctx, spread, bias, screens);
         }
 
         if (!sites)
@@ -2286,6 +2363,545 @@ namespace AspectRatio
         spdlog::info("MGS4: {}: emit attribution armed ({} objects).", who, g_SiteObjects.size());
     }
 
+    // ---- letterbox / pillarbox (AR-010) ----------------------------------------------------
+    //
+    // Cutscenes, the codec, the pause menu and the title are 16:9 compositions. Layer 1
+    // already centres their UI; the picture behind them is not centred, it is re-framed: the
+    // engine holds the horizontal angle at every output ratio and lets the vertical float, so
+    // a 21:9 window loses the top and bottom of every cinematic frame (Vert-) and a 4:3 window
+    // gains sky and floor (Vert+). Measured 2026-09-04: s01a10l_D2 Snake close-up at equal
+    // width, 16:9 against 21:9; the gameplay trio fov_169/219/43.
+    //
+    // Two pieces put the 16:9 picture back:
+    //   - Camera. The cinematic camera builder takes a projection scale; dividing it by the
+    //     horizontal spread factor is a uniform zoom-out - m00 and m11 shrink together, the
+    //     matrix keeps the window's ratio - and because it lands at the builder's input the
+    //     engine rebuilds its frustum planes to match, so nothing pops at the recovered top
+    //     and bottom edges. At 4:3 the stock frame already contains the 16:9 picture, so the
+    //     camera is left alone there (the factor is 1.0).
+    //   - Bands. Black rects cleared onto the back buffer right before Present, over the
+    //     region outside the centred 16:9 rect. At 21:9 they cover the extra world the zoom
+    //     reveals at the sides; at 4:3 the extra sky and floor - and the HUD widgets the
+    //     title screen draws there.
+    //
+    // The sites are mgs4Ultra120's (github.com/drbermejor/mgs4Ultra120; same executable
+    // build, TimeDateStamp 6A8CFC47), each prologue-checked in-process before hooking. The
+    // cutscene signal is structural rather than a state flag: +0x652E00 owns the in-engine
+    // cinematic camera and reaches the builder through the return at +0x0B9BA0 only while a
+    // cinematic camera is live; a thread-local depth counter around the owner tags exactly
+    // those builder calls. The final rebuild at +0x0EB0EB runs outside the owner's scope and
+    // is recognised the way Ultra120 does it: same camera object, same input scale, within a
+    // quarter second of the tagged call.
+    constexpr uintptr_t kRvaCameraBuilder = 0x0B9BB0;
+    constexpr uintptr_t kRvaCinematicOwner = 0x652E00;
+    constexpr uintptr_t kRvaProjectionSetter = 0x0E3410;
+    constexpr uintptr_t kRvaCameraGameplayReturn = 0x0BA3A3;
+    constexpr uintptr_t kRvaCameraCinematicSourceReturn = 0x0B9BA0;
+    constexpr uintptr_t kRvaCameraCinematicFinalReturn = 0x0EB0EB;
+
+    SafetyHookInline CameraBuilder_hook {};
+    SafetyHookInline CinematicOwner_hook {};
+    SafetyHookInline ProjectionSetter_hook {};
+
+    thread_local unsigned g_CinematicOwnerDepth = 0;
+    thread_local void* g_CinematicCamera = nullptr;
+    thread_local ULONGLONG g_CinematicCameraTick = 0;
+    thread_local float g_CinematicInputScale = 0.0f;
+
+    // Cross-thread state for the band gate and the live lab.
+    std::atomic<ULONGLONG> g_CinematicBuiltTick { 0 };   // last time a cinematic camera was built
+    std::atomic<int> g_CutsceneZoom { 1 };               // live "cutzoom": 0 off, 1 on
+    std::atomic<float> g_CutsceneDivisor { 0.0f };       // live "cutdiv": explicit divisor, 0 = the factor
+    std::atomic<int> g_BandMode { 0 };                   // live "box": 0 cutscene-gated, 1 forced on, 2 forced off
+    std::atomic<int> g_CameraLogBudget { 0 };            // live "camlog N": builder calls to log
+    std::atomic<int> g_ProjectionLogBudget { 0 };        // live "projlog N": setter calls to log
+    std::atomic<uint32_t> g_CameraPatches { 0 };
+
+    bool CutsceneCameraLive()
+    {
+        return GetTickCount64() - g_CinematicBuiltTick.load() <= 150;
+    }
+
+    // The builder: void(camera, source, projection_scale, p4, p5, aspect_scale). Only the
+    // scale is touched, and only for the tagged cinematic routes; the gameplay owner at
+    // +0x0BA3A3 and everything else pass through untouched. The original does all the work -
+    // nothing in the camera object is rewritten afterwards (Ultra120 measured the double
+    // transform that produces).
+    void __fastcall BuildCamera(void* camera, const void* source, float projectionScale,
+        float p4, float p5, float aspectScale)
+    {
+        const auto ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
+        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const uintptr_t rva = ret >= base ? ret - base : ret;
+        const ULONGLONG now = GetTickCount64();
+
+        const bool cinematicSource = g_CinematicOwnerDepth != 0 && rva == kRvaCameraCinematicSourceReturn;
+        const float tolerance = std::max(0.001f, std::fabs(g_CinematicInputScale) * 0.001f);
+        const bool cinematicFinal = rva == kRvaCameraCinematicFinalReturn
+            && camera == g_CinematicCamera
+            && now - g_CinematicCameraTick <= 250
+            && std::fabs(projectionScale - g_CinematicInputScale) <= tolerance;
+
+        float scale = projectionScale;
+        if (cinematicSource || cinematicFinal)
+        {
+            g_CinematicBuiltTick.store(now);
+            if (cinematicSource)
+            {
+                g_CinematicCamera = camera;
+                g_CinematicCameraTick = now;
+                g_CinematicInputScale = projectionScale;
+            }
+            if (g_CutsceneZoom.load() != 0)
+            {
+                const float divisor = g_CutsceneDivisor.load() > 0.0f ? g_CutsceneDivisor.load() : HorizontalSpreadFactor();
+                if (std::isfinite(projectionScale) && projectionScale > 0.0f && divisor > 0.0f && divisor != 1.0f)
+                {
+                    scale = projectionScale / divisor;
+                    g_CameraPatches.fetch_add(1);
+                }
+            }
+        }
+
+        if (g_CameraLogBudget.load() > 0 && g_CameraLogBudget.fetch_sub(1) > 0)
+        {
+            spdlog::info("MGS4: letterbox: camera build from +{:X} ({}) cam={:X} scale {:.5f} -> {:.5f} p4={:.4f} p5={:.4f} aspect={:.4f} depth={}",
+                rva,
+                rva == kRvaCameraGameplayReturn ? "gameplay" : cinematicSource ? "cinematic" : cinematicFinal ? "cinematic-final" : "other",
+                reinterpret_cast<uintptr_t>(camera), projectionScale, scale, p4, p5, aspectScale, g_CinematicOwnerDepth);
+        }
+
+        CameraBuilder_hook.call<void>(camera, source, scale, p4, p5, aspectScale);
+    }
+
+    // The owner takes one argument; the other three registers are forwarded regardless so
+    // a wider signature would still survive.
+    void __fastcall UpdateCinematicCamera(void* a, void* b, void* c, void* d)
+    {
+        ++g_CinematicOwnerDepth;
+        CinematicOwner_hook.call<void>(a, b, c, d);
+        --g_CinematicOwnerDepth;
+    }
+
+    // Passthrough with a log budget: the common projection setter sees every matrix the
+    // renderer is given, so "projlog" answers whether the zoom reached the render side
+    // as a uniform scale (m11/m00 unchanged) and nothing applied it twice.
+    void __fastcall SetProjection(const float* matrix)
+    {
+        if (matrix && g_ProjectionLogBudget.load() > 0 && g_ProjectionLogBudget.fetch_sub(1) > 0)
+        {
+            spdlog::info("MGS4: letterbox: projection m00={:.5f} m11={:.5f} m11/m00={:.4f} m[11]={:+.3f} m[10]={:.5f} m[14]={:.4f} cutscene={}",
+                matrix[0], matrix[5], matrix[0] != 0.0f ? matrix[5] / matrix[0] : 0.0f, matrix[11], matrix[10], matrix[14],
+                CutsceneCameraLive() ? "yes" : "no");
+        }
+        ProjectionSetter_hook.call<void>(matrix);
+    }
+
+    // ---- the bands: a clear on the back buffer before Present -----------------------------
+    //
+    // The game's swap chain is reached through the DXGI factory exports (hooked the way the
+    // fork hooks D3D12CreateDevice), which hands over both the swap chain and the command
+    // queue it presents from. Each Present records one small command list on that queue:
+    // transition the current back buffer, clear the band rects, transition back. Same queue,
+    // so it is ordered after the game's frame and before the present.
+    SafetyHookInline CreateDXGIFactory_hook {};
+    SafetyHookInline CreateDXGIFactory1_hook {};
+    SafetyHookInline CreateDXGIFactory2_hook {};
+    SafetyHookInline CreateSwapChain_hook {};
+    SafetyHookInline CreateSwapChainForHwnd_hook {};
+    SafetyHookInline Present_hook {};
+    SafetyHookInline Present1_hook {};
+    SafetyHookInline ResizeBuffers_hook {};
+
+    // IDXGIFactory / IDXGIFactory2 / IDXGISwapChain / IDXGISwapChain1 vtable slots.
+    constexpr size_t kFactoryCreateSwapChainSlot = 10;
+    constexpr size_t kFactory2CreateSwapChainForHwndSlot = 15;
+    constexpr size_t kSwapChainPresentSlot = 8;
+    constexpr size_t kSwapChainResizeBuffersSlot = 13;
+    constexpr size_t kSwapChain1Present1Slot = 22;
+
+    struct BandRenderer
+    {
+        IDXGISwapChain3* swapChain = nullptr;
+        ID3D12Device* device = nullptr;
+        ID3D12CommandQueue* queue = nullptr;
+        ID3D12DescriptorHeap* rtvHeap = nullptr;
+        std::vector<ID3D12Resource*> buffers;
+        std::vector<ID3D12CommandAllocator*> allocators;
+        std::vector<UINT64> fenceValues;
+        ID3D12GraphicsCommandList* list = nullptr;
+        ID3D12Fence* fence = nullptr;
+        HANDLE fenceEvent = nullptr;
+        UINT64 fenceCounter = 0;
+        UINT rtvStride = 0;
+        UINT width = 0;
+        UINT height = 0;
+        bool failed = false;
+        uint32_t presents = 0;
+        uint32_t cleared = 0;
+    };
+    BandRenderer g_Band;
+    std::mutex g_BandMutex;
+    ID3D12CommandQueue* g_PresentQueue = nullptr;
+
+    template <typename T> void SafeRelease(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+    void BandWaitIdle(BandRenderer& b)
+    {
+        if (!b.fence || !b.queue) { return; }
+        const UINT64 value = ++b.fenceCounter;
+        if (SUCCEEDED(b.queue->Signal(b.fence, value)) && b.fence->GetCompletedValue() < value)
+        {
+            b.fence->SetEventOnCompletion(value, b.fenceEvent);
+            WaitForSingleObject(b.fenceEvent, 2000);
+        }
+    }
+
+    void BandRelease(BandRenderer& b)
+    {
+        BandWaitIdle(b);
+        for (auto*& r : b.buffers) { SafeRelease(r); }
+        for (auto*& a : b.allocators) { SafeRelease(a); }
+        b.buffers.clear();
+        b.allocators.clear();
+        b.fenceValues.clear();
+        SafeRelease(b.list);
+        SafeRelease(b.rtvHeap);
+        SafeRelease(b.fence);
+        if (b.fenceEvent) { CloseHandle(b.fenceEvent); b.fenceEvent = nullptr; }
+        SafeRelease(b.device);
+        SafeRelease(b.queue);
+        SafeRelease(b.swapChain);
+        b.width = b.height = 0;
+    }
+
+    bool BandSetup(BandRenderer& b, IDXGISwapChain* swapChain)
+    {
+        BandRelease(b);
+        if (!g_PresentQueue) { spdlog::error("MGS4: letterbox: no command queue captured at swap chain creation."); return false; }
+        if (FAILED(swapChain->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&b.swapChain))) || !b.swapChain)
+        {
+            spdlog::error("MGS4: letterbox: the swap chain is not IDXGISwapChain3."); return false;
+        }
+        if (FAILED(swapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&b.device))) || !b.device)
+        {
+            spdlog::error("MGS4: letterbox: the swap chain's device is not D3D12."); return false;
+        }
+        b.queue = g_PresentQueue;
+        b.queue->AddRef();
+
+        DXGI_SWAP_CHAIN_DESC desc {};
+        if (FAILED(b.swapChain->GetDesc(&desc)) || desc.BufferCount == 0) { spdlog::error("MGS4: letterbox: GetDesc failed."); return false; }
+        b.width = desc.BufferDesc.Width;
+        b.height = desc.BufferDesc.Height;
+
+        D3D12_DESCRIPTOR_HEAP_DESC heap {};
+        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap.NumDescriptors = desc.BufferCount;
+        if (FAILED(b.device->CreateDescriptorHeap(&heap, __uuidof(ID3D12DescriptorHeap), reinterpret_cast<void**>(&b.rtvHeap))))
+        {
+            spdlog::error("MGS4: letterbox: RTV heap creation failed."); return false;
+        }
+        b.rtvStride = b.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = b.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        for (UINT i = 0; i < desc.BufferCount; i++)
+        {
+            ID3D12Resource* buffer = nullptr;
+            if (FAILED(b.swapChain->GetBuffer(i, __uuidof(ID3D12Resource), reinterpret_cast<void**>(&buffer))) || !buffer)
+            {
+                spdlog::error("MGS4: letterbox: GetBuffer({}) failed.", i); return false;
+            }
+            b.buffers.push_back(buffer);
+            b.device->CreateRenderTargetView(buffer, nullptr, handle);
+            handle.ptr += b.rtvStride;
+
+            ID3D12CommandAllocator* allocator = nullptr;
+            if (FAILED(b.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), reinterpret_cast<void**>(&allocator))))
+            {
+                spdlog::error("MGS4: letterbox: allocator creation failed."); return false;
+            }
+            b.allocators.push_back(allocator);
+            b.fenceValues.push_back(0);
+        }
+        if (FAILED(b.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, b.allocators[0], nullptr, __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&b.list))))
+        {
+            spdlog::error("MGS4: letterbox: command list creation failed."); return false;
+        }
+        b.list->Close();
+        if (FAILED(b.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&b.fence))))
+        {
+            spdlog::error("MGS4: letterbox: fence creation failed."); return false;
+        }
+        b.fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        spdlog::info("MGS4: letterbox: band renderer ready on a {}x{} swap chain, {} buffers, format {}.",
+            b.width, b.height, desc.BufferCount, static_cast<int>(desc.BufferDesc.Format));
+        return true;
+    }
+
+    // The band rects for an output, in back-buffer pixels. Zero rects at 16:9.
+    UINT BandRects(UINT width, UINT height, D3D12_RECT rects[2])
+    {
+        const uint64_t wide = static_cast<uint64_t>(width) * 9;
+        const uint64_t tall = static_cast<uint64_t>(height) * 16;
+        if (wide > tall)
+        {
+            const LONG safeWidth = static_cast<LONG>(static_cast<uint64_t>(height) * 16 / 9);
+            const LONG left = (static_cast<LONG>(width) - safeWidth) / 2;
+            rects[0] = { 0, 0, left, static_cast<LONG>(height) };
+            rects[1] = { left + safeWidth, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+            return 2;
+        }
+        if (wide < tall)
+        {
+            const LONG safeHeight = static_cast<LONG>(static_cast<uint64_t>(width) * 9 / 16);
+            const LONG top = (static_cast<LONG>(height) - safeHeight) / 2;
+            rects[0] = { 0, 0, static_cast<LONG>(width), top };
+            rects[1] = { 0, top + safeHeight, static_cast<LONG>(width), static_cast<LONG>(height) };
+            return 2;
+        }
+        return 0;
+    }
+
+    bool BandsWanted()
+    {
+        switch (g_BandMode.load())
+        {
+            case 1: return true;
+            case 2: return false;
+            default: return CutsceneCameraLive() || ScreenLive();
+        }
+    }
+
+    void DrawBands(IDXGISwapChain* swapChain)
+    {
+        std::lock_guard lock(g_BandMutex);
+        BandRenderer& b = g_Band;
+        b.presents++;
+        if (b.failed) { return; }
+        if (!BandsWanted()) { return; }
+
+        if (!b.swapChain || b.swapChain != static_cast<void*>(swapChain))
+        {
+            // First use, or a different swap chain: (re)build against this one. Pointer
+            // identity is on the IUnknown-derived object, which is what GetBuffer etc. use.
+            IDXGISwapChain3* probe = nullptr;
+            const bool same = b.swapChain && SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&probe))) && probe == b.swapChain;
+            if (probe) { probe->Release(); }
+            if (!same && !BandSetup(b, swapChain))
+            {
+                b.failed = true;
+                BandRelease(b);
+                spdlog::error("MGS4: letterbox: bands disabled for this session.");
+                return;
+            }
+        }
+
+        // The painted region is the engine's window size at the buffer's origin, not the
+        // buffer itself: measured 2026-09-04, a 3840x1620 window presents from a 3840x2160
+        // swap chain (created at the desktop size, never resized) with the picture in the
+        // top 1620 rows.
+        int32_t windowWidth = 0, windowHeight = 0;
+        std::memcpy(&windowWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(windowWidth));
+        std::memcpy(&windowHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(windowHeight));
+        const UINT paintedWidth = windowWidth > 0 ? std::min(static_cast<UINT>(windowWidth), b.width) : b.width;
+        const UINT paintedHeight = windowHeight > 0 ? std::min(static_cast<UINT>(windowHeight), b.height) : b.height;
+
+        D3D12_RECT rects[2] {};
+        const UINT count = BandRects(paintedWidth, paintedHeight, rects);
+        if (count == 0) { return; }
+
+        const UINT index = b.swapChain->GetCurrentBackBufferIndex();
+        if (index >= b.buffers.size()) { return; }
+        if (b.fence->GetCompletedValue() < b.fenceValues[index])
+        {
+            b.fence->SetEventOnCompletion(b.fenceValues[index], b.fenceEvent);
+            WaitForSingleObject(b.fenceEvent, 1000);
+        }
+        if (FAILED(b.allocators[index]->Reset()) || FAILED(b.list->Reset(b.allocators[index], nullptr))) { return; }
+
+        D3D12_RESOURCE_BARRIER barrier {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = b.buffers[index];
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        b.list->ResourceBarrier(1, &barrier);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = b.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += static_cast<SIZE_T>(index) * b.rtvStride;
+        const float black[4] { 0.0f, 0.0f, 0.0f, 1.0f };
+        b.list->ClearRenderTargetView(rtv, black, count, rects);
+
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+        b.list->ResourceBarrier(1, &barrier);
+        if (FAILED(b.list->Close())) { return; }
+
+        ID3D12CommandList* lists[] { b.list };
+        b.queue->ExecuteCommandLists(1, lists);
+        b.fenceValues[index] = ++b.fenceCounter;
+        b.queue->Signal(b.fence, b.fenceCounter);
+        b.cleared++;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags)
+    {
+        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); }
+        return Present_hook.stdcall<HRESULT>(self, syncInterval, flags);
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags,
+        const DXGI_PRESENT_PARAMETERS* parameters)
+    {
+        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); }
+        return Present1_hook.stdcall<HRESULT>(self, syncInterval, flags, parameters);
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(IDXGISwapChain* self, UINT bufferCount, UINT width,
+        UINT height, DXGI_FORMAT format, UINT flags)
+    {
+        // Our back-buffer references would hold the old buffers and make the resize fail;
+        // drop everything and rebuild lazily at the next Present that wants bands.
+        {
+            std::lock_guard lock(g_BandMutex);
+            if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize to {}x{}, band renderer dropped.", width, height); }
+        }
+        return ResizeBuffers_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags);
+    }
+
+    void HookSwapChain(IUnknown* presenter, IUnknown* swapChain)
+    {
+        static bool hooked = false;
+        if (hooked || !swapChain) { return; }
+        hooked = true;
+
+        if (presenter)
+        {
+            ID3D12CommandQueue* queue = nullptr;
+            if (SUCCEEDED(presenter->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&queue))) && queue)
+            {
+                g_PresentQueue = queue;   // keeps its reference
+            }
+        }
+        void** vtable = *reinterpret_cast<void***>(swapChain);
+        Present_hook = safetyhook::create_inline(vtable[kSwapChainPresentSlot], reinterpret_cast<void*>(Hooked_Present));
+        ResizeBuffers_hook = safetyhook::create_inline(vtable[kSwapChainResizeBuffersSlot], reinterpret_cast<void*>(Hooked_ResizeBuffers));
+        IDXGISwapChain1* one = nullptr;
+        if (SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&one))) && one)
+        {
+            one->Release();
+            Present1_hook = safetyhook::create_inline(vtable[kSwapChain1Present1Slot], reinterpret_cast<void*>(Hooked_Present1));
+        }
+        spdlog::info("MGS4: letterbox: swap chain hooked (Present {}, Present1 {}, ResizeBuffers {}), queue {}.",
+            Present_hook ? "ok" : "FAILED", Present1_hook ? "ok" : "absent", ResizeBuffers_hook ? "ok" : "FAILED",
+            g_PresentQueue ? "captured" : "MISSING");
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device,
+        DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapChain)
+    {
+        const HRESULT result = CreateSwapChain_hook.stdcall<HRESULT>(self, device, desc, swapChain);
+        if (SUCCEEDED(result) && swapChain && *swapChain) { HookSwapChain(device, *swapChain); }
+        return result;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknown* device, HWND window,
+        const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen,
+        IDXGIOutput* restrictTo, IDXGISwapChain1** swapChain)
+    {
+        const HRESULT result = CreateSwapChainForHwnd_hook.stdcall<HRESULT>(self, device, window, desc, fullscreen, restrictTo, swapChain);
+        if (SUCCEEDED(result) && swapChain && *swapChain) { HookSwapChain(device, *swapChain); }
+        return result;
+    }
+
+    void HookFactory(IUnknown* factory)
+    {
+        static bool hooked = false;
+        if (hooked || !factory) { return; }
+        hooked = true;
+        void** vtable = *reinterpret_cast<void***>(factory);
+        CreateSwapChain_hook = safetyhook::create_inline(vtable[kFactoryCreateSwapChainSlot], reinterpret_cast<void*>(Hooked_CreateSwapChain));
+        IDXGIFactory2* two = nullptr;
+        if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory2), reinterpret_cast<void**>(&two))) && two)
+        {
+            two->Release();
+            CreateSwapChainForHwnd_hook = safetyhook::create_inline(vtable[kFactory2CreateSwapChainForHwndSlot], reinterpret_cast<void*>(Hooked_CreateSwapChainForHwnd));
+        }
+        spdlog::info("MGS4: letterbox: DXGI factory hooked (CreateSwapChain {}, CreateSwapChainForHwnd {}).",
+            CreateSwapChain_hook ? "ok" : "FAILED", CreateSwapChainForHwnd_hook ? "ok" : "absent");
+    }
+
+    HRESULT WINAPI Hooked_CreateDXGIFactory(REFIID riid, void** factory)
+    {
+        const HRESULT result = CreateDXGIFactory_hook.stdcall<HRESULT>(riid, factory);
+        if (SUCCEEDED(result) && factory && *factory) { HookFactory(static_cast<IUnknown*>(*factory)); }
+        return result;
+    }
+
+    HRESULT WINAPI Hooked_CreateDXGIFactory1(REFIID riid, void** factory)
+    {
+        const HRESULT result = CreateDXGIFactory1_hook.stdcall<HRESULT>(riid, factory);
+        if (SUCCEEDED(result) && factory && *factory) { HookFactory(static_cast<IUnknown*>(*factory)); }
+        return result;
+    }
+
+    HRESULT WINAPI Hooked_CreateDXGIFactory2(UINT flags, REFIID riid, void** factory)
+    {
+        const HRESULT result = CreateDXGIFactory2_hook.stdcall<HRESULT>(flags, riid, factory);
+        if (SUCCEEDED(result) && factory && *factory) { HookFactory(static_cast<IUnknown*>(*factory)); }
+        return result;
+    }
+
+    void InstallLetterbox()
+    {
+        auto* const base = reinterpret_cast<uint8_t*>(baseModule);
+        const auto checked = [base](uintptr_t rva, std::initializer_list<uint8_t> prologue, const char* what) -> uint8_t*
+            {
+                auto* at = base + rva;
+                if (!std::equal(prologue.begin(), prologue.end(), at))
+                {
+                    spdlog::error("MGS4: letterbox: {} at +{:X} does not start with the expected prologue - wrong executable build, not hooking.", what, rva);
+                    return nullptr;
+                }
+                return at;
+            };
+
+        // Camera side.
+        if (auto* at = checked(kRvaCameraBuilder, { 0x48, 0x8B, 0xC4, 0x53, 0x56, 0x57 }, "camera builder"))
+        {
+            CameraBuilder_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&BuildCamera));
+            LOG_HOOK(CameraBuilder_hook, "MGS4: letterbox camera builder")
+        }
+        if (auto* at = checked(kRvaCinematicOwner, { 0x40, 0x55, 0x53, 0x57, 0x41, 0x56, 0x48, 0x8D }, "cinematic camera owner"))
+        {
+            CinematicOwner_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&UpdateCinematicCamera));
+            LOG_HOOK(CinematicOwner_hook, "MGS4: letterbox cinematic owner")
+        }
+        if (auto* at = checked(kRvaProjectionSetter, { 0x48, 0x83, 0xEC, 0x68 }, "projection setter"))
+        {
+            ProjectionSetter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&SetProjection));
+            LOG_HOOK(ProjectionSetter_hook, "MGS4: letterbox projection setter")
+        }
+
+        // Band side: the DXGI exports, before the game resolves them.
+        const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+        if (!dxgi) { spdlog::error("MGS4: letterbox: dxgi.dll did not load."); return; }
+        if (void* fn = reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory")))
+        {
+            CreateDXGIFactory_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_CreateDXGIFactory));
+        }
+        if (void* fn = reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1")))
+        {
+            CreateDXGIFactory1_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_CreateDXGIFactory1));
+        }
+        if (void* fn = reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory2")))
+        {
+            CreateDXGIFactory2_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_CreateDXGIFactory2));
+        }
+        spdlog::info("MGS4: letterbox: DXGI factory hooks: CreateDXGIFactory {}, CreateDXGIFactory1 {}, CreateDXGIFactory2 {}. Factor {:.4f} x {:.4f}.",
+            CreateDXGIFactory_hook ? "ok" : "FAILED", CreateDXGIFactory1_hook ? "ok" : "FAILED", CreateDXGIFactory2_hook ? "ok" : "FAILED",
+            HorizontalSpreadFactor(), VerticalSpreadFactor());
+    }
+
     // ---- the HUD report (F11) --------------------------------------------------------------
     //
     // The one diagnostic a normal launch carries, behind the Config Tool's Debug Logging: F11
@@ -2461,6 +3077,44 @@ namespace AspectRatio
                         {
                             ArmSiteDump("live lab");
                         }
+                        else if (std::strncmp(line, "boxstat", 7) == 0)
+                        {
+                            std::lock_guard bandLock(g_BandMutex);
+                            spdlog::info("MGS4: live lab: letterbox: mode {} zoom {} divisor {:.4f} patches {} presents {} cleared {} failed {} cutscene-live {} screen-live {} (last {:08X}) swapchain {}x{}.",
+                                g_BandMode.load(), g_CutsceneZoom.load(), g_CutsceneDivisor.load(), g_CameraPatches.load(),
+                                g_Band.presents, g_Band.cleared, g_Band.failed, CutsceneCameraLive() ? "yes" : "no",
+                                ScreenLive() ? "yes" : "no", g_ScreenLastStrcode.load(), g_Band.width, g_Band.height);
+                        }
+                        else if (std::strncmp(line, "box", 3) == 0)
+                        {
+                            // box 0|1|2 - bands cutscene-gated, forced on, forced off.
+                            g_BandMode.store(static_cast<int>(std::strtol(line + 3, nullptr, 0)));
+                            spdlog::info("MGS4: live lab: letterbox band mode {}.", g_BandMode.load());
+                        }
+                        else if (std::strncmp(line, "cutzoom", 7) == 0)
+                        {
+                            // cutzoom 0|1 - the cinematic camera zoom-out.
+                            g_CutsceneZoom.store(static_cast<int>(std::strtol(line + 7, nullptr, 0)));
+                            spdlog::info("MGS4: live lab: cutscene zoom {}.", g_CutsceneZoom.load() ? "on" : "off");
+                        }
+                        else if (std::strncmp(line, "cutdiv", 6) == 0)
+                        {
+                            // cutdiv <f> - explicit scale divisor for the cinematic camera; 0 = the spread factor.
+                            g_CutsceneDivisor.store(std::strtof(line + 6, nullptr));
+                            spdlog::info("MGS4: live lab: cutscene divisor {:.4f} (factor {:.4f}).", g_CutsceneDivisor.load(), HorizontalSpreadFactor());
+                        }
+                        else if (std::strncmp(line, "camlog", 6) == 0)
+                        {
+                            const int n = static_cast<int>(std::strtol(line + 6, nullptr, 10));
+                            g_CameraLogBudget.store(n > 0 ? n : 60);
+                            spdlog::info("MGS4: live lab: camera build log armed ({}).", g_CameraLogBudget.load());
+                        }
+                        else if (std::strncmp(line, "projlog", 7) == 0)
+                        {
+                            const int n = static_cast<int>(std::strtol(line + 7, nullptr, 10));
+                            g_ProjectionLogBudget.store(n > 0 ? n : 60);
+                            spdlog::info("MGS4: live lab: projection log armed ({}).", g_ProjectionLogBudget.load());
+                        }
                         else if (std::strncmp(line, "list", 4) == 0)
                         {
                             for (size_t i = 0; i < g_Objects.size(); i++)
@@ -2618,6 +3272,10 @@ namespace AspectRatio
             StartLiveAnchorLab();
             InstallRectEmitLogging();
             InstallProducerProbe();
+            if (bAspectLetterbox)
+            {
+                InstallLetterbox();
+            }
         }
 
         // Debug Logging: the F11 HUD report, which needs the upload probe (the dump runs at

@@ -403,6 +403,11 @@ None of the numbers above came from reading disassembly alone. The workflow, all
   `vbfind.py`), `pooldump`.
 - **F11 hot dump** (`hotdump.ps1`, detached): the user presses F11 with the element in frame;
   the script captures, arms `sites`, and archives the log to `lab3\hotdump\NN\`.
+- **Screen-state census** (`state_census.ps1`, `sites_census.ps1`, 2026-09-04): walks the
+  pause menu / codec / title with synthesised input (`send_input.ps1`: Tab, Enter, Backspace,
+  Esc, `LClick`/`RClick` pseudo-keys for the UI's mouse bindings), dumps `sites` at each state,
+  and tabulates the dumps by identity with `-Against` for the diff. Details in
+  [letterbox.md](letterbox.md) section 4.
 - **Pixel diffs.** `uidiff.ps1` diffs each capture against an unbiased reference at half scale
   and prints the bounding box of what changed. One bias, one capture, one diff, one element.
 - **The user reads every capture.** No screenshot was treated as fact until the user confirmed
@@ -431,11 +436,12 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 ## 10. What is not done
 
 - **Other 16:9-sized backdrops.** The wheel backdrops are stretched (section 6), but the same
-  shape shows elsewhere; the pause menu and codec have not been looked at. Each is a strcode +
-  element read off a `sites` dump and one `kHudStretched` line; the user decides which ones
-  matter. The BASIC CONTROLS overlay's dark panel, which stops at the 16:9 edges (21:9, capture
-  2026-09-03; top/bottom at 4:3, 2026-09-04), is **not** one of them: it is a menu and keeps
-  its 16:9 position and size by design (user, 2026-09-04).
+  shape shows elsewhere. The pause menu and codec are now letterboxed whole
+  ([letterbox.md](letterbox.md), 2026-09-04) rather than stretched - their side strips are
+  black bands. The BASIC CONTROLS overlay's dark panel, which stops at the 16:9 edges (21:9,
+  capture 2026-09-03; top/bottom at 4:3, 2026-09-04), is neither stretched nor banded: it is a
+  menu and keeps its 16:9 position and size by design (user, 2026-09-04); the world shows past
+  its sides. The fade plate is banded (its strcode is in `kScreenIdentities`).
 - **The title screen's grey panel** (hot dump 03: "offset to the left and not centered") was
   reported against an earlier build; the user re-checked it on 2026-09-03 and it looked right
   ("you already fixed that"). No dedicated fix was made and the draw path was never identified,
@@ -451,10 +457,12 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
   armed delta comes from the previous frame). One frame; not visible.
 - **Channels 0x04 and 0x12 fire under the HUD owner during the title and save screens.** Logged
   every boot; not yet checked for a visible side effect on those screens.
-- **Only the Act 4 barrel-save loadout has been measured.** Other HUD states - alerts, codec,
-  boss HUDs, the expanded radar, Drebin's shop, cutscenes - need a channel census before
-  anything is claimed for them. A channel not in the table simply stays centred, so the failure
-  mode is a cosmetic gap, never a wrong jump.
+- **Only the Act 4 barrel-save loadout has been measured.** Other HUD states - alerts, boss
+  HUDs, the expanded radar, Drebin's shop - need a channel census before anything is claimed
+  for them (the codec, pause menu and cutscenes are letterboxed instead, see above; the
+  census tooling for that - `state_census.ps1`, `sites_census.ps1` - is the same one to use
+  here). A channel not in the table simply stays centred, so the failure mode is a cosmetic
+  gap, never a wrong jump.
 - **The 3D camera is still Vert-** at 21:9 (AR-002). Whether the 3D view at 4:3 is cropped or
   squashed has not been checked; only the HUD was verified there.
 - **4:3 has one loadout and one resolution behind it** (2880x2160, the Act 4 barrel save).

@@ -403,11 +403,13 @@ can show real widget artwork.
 
 ## Remaining work, in the order worth doing
 
-1. **Menus and cutscenes at 21:9** — walk the title menu, codec and a cutscene with both layers
-   on. Menus are allowed to letterbox but must not break; cutscenes have their own camera
-   routes and are the classic breakage site.
-2. **The 3D camera** (AR-002) — the world is still Vert- at 21:9. Squash vs crop first, then
-   the projection.
+1. ~~**Menus and cutscenes at 21:9**~~ — done 2026-09-04 (AR-010, [letterbox.md](letterbox.md)):
+   cutscenes, codec, pause menu and title are kept at 16:9 with bands, gated structurally.
+   Submenus and the D1 video are still unchecked.
+2. **The 3D camera in gameplay** (AR-002) — the world is Vert- at 21:9 (confirmed by the
+   cutscene measurement: m00 follows the window, m11 is the 16:9 value). Cutscenes are now
+   zoomed out to the 16:9 frame; gameplay is deliberately left Hor- pending a decision on
+   Hor+ (the gameplay route `+0x0BA3A3` is the same builder).
 3. ~~**4:3**~~ — done 2026-09-04 (AR-009). Left to check there: the 3D view (cropped or
    squashed?). The BASIC CONTROLS panel stopping at the 16:9 band is by design — it is a menu
    (user, 2026-09-04).
@@ -614,18 +616,22 @@ can show real widget artwork.
 
 ### AR-002 — the 3D camera appears to lose vertical FOV at 21:9 rather than gaining horizontal
 
-- **Status:** Active
-- **Evidence:** Inferred
+- **Status:** Active for gameplay; fixed for cutscenes by AR-010
+- **Evidence:** Observed, 2026-09-04 — projection matrices logged at the setter `+0x0E3410`
 - **Affects:** any output wider than 16:9
 - **Repro:** as AR-001; compare visible world extent against a 16:9 control of the same scene
-- **Evidence detail:** same captures as AR-001. The framing reads as the 16:9 image with top and
-  bottom lost, but **vertical squash has not been excluded**, and the user has not separately
-  confirmed this reading — hence Inferred, not Observed
-- **Screenshots:** same pair as AR-001
+- **Evidence detail:** at 3840x1620 the stock projection has m00 = 2.41421 and m11 = 4.29193;
+  m11 is the 16:9 value, m11/m00 = 2.3704 = the window's ratio. So the vertical field is the
+  16:9 one and the horizontal field is *narrower* than 16:9 would give at that width — Vert-,
+  no squash. The user's earlier read of the cutscene close-up (equal width, top and bottom
+  lost) agrees
+- **Screenshots:** same pair as AR-001; [AR-010 cutscene sheet](evidence/AR-010-cutscene-21-9.jpg)
 - **Popups:** none
-- **Cause:** unknown. Consistent with a projection built for 16:9 regardless of output;
-  mgs4Ultra120 rewriting `m00` for Hor+ supports that, but that is their finding, not ours
-- **Fix:** none. Needs question 3 answered first
+- **Cause:** the camera builder `+0x0B9BB0` derives the projection from a scale that does not
+  know the window; the aspect comes in separately
+- **Fix:** cutscenes: the builder's scale divided by the spread factor on the cinematic
+  routes (AR-010). Gameplay: none yet — the same builder via `+0x0BA3A3`, the same division
+  would give Hor+, but whether gameplay should be Hor+ or stay as authored is the user's call
 
 ---
 
@@ -681,6 +687,30 @@ can show real widget artwork.
   the identity-spread doc
 - **Verified:** one boot, one loadout (Act 4 barrel save), one resolution; the 5:4 entries
   (factor 1.4) have not been booted but use the same rule
+
+### AR-010 — cutscenes, codec, pause menu and title are letterboxed to 16:9
+
+- **Status:** Working in the lab, 2026-09-04 (`Aspect Letterbox=1`, lab settings only)
+- **Evidence:** Observed — 21:9 cutscene framing confirmed by the user; the menu and 4:3
+  captures are the lab's read, the user's pending
+- **Affects:** any output that is not 16:9
+- **Evidence detail:** [letterbox.md](letterbox.md). Cutscene at 3840x1620: camera scale
+  divided by 1.333 on the cinematic routes only (m00 2.41421 → 1.81066, m11 held), bands at
+  the sides. Pause menu, codec, title and main menu: bands whenever one of five tabled
+  layout elements is appended to the draw pool; gameplay between them shows none
+  (`boxstat`: `screen-live no`). 4:3: no zoom, bands 270 px top and bottom
+- **Screenshots:** [cutscene 21:9](evidence/AR-010-cutscene-21-9.jpg) /
+  [cutscene 4:3](evidence/AR-010-cutscene-4-3.jpg) /
+  [pause & codec 21:9](evidence/AR-010-pause-codec-21-9.jpg) /
+  [title 21:9](evidence/AR-010-title-21-9.jpg) / [pause 4:3](evidence/AR-010-pause-4-3.jpg)
+- **Popups:** none
+- **Cause:** the 3D projection is Vert- (AR-002) and the menus are 16:9 canvases drawn into a
+  wider window with the world showing past them
+- **Fix:** builder-scale division under the cinematic owner's scope + per-Present black
+  rects, gated on the cinematic camera tick or a tabled screen element within 150 ms
+- **Verified:** one stage's opening cutscene, the barrel save's pause menu and codec, the
+  title and main menu; 3840x1620 and 2880x2160. Submenus, the D1 video and the codec at 4:3
+  are not
 
 ---
 
