@@ -58,7 +58,17 @@ namespace mgs4e::tool
                     : "First run: showing the defaults. Save to create " MGS4E_NAME ".settings.";
             }
 
-            MainFrame* frame = new MainFrame(*root, std::move(settings), std::move(note));
+            // "--tab <title>" opens on that tab, for screenshots and support.
+            std::string openTab;
+            for (int i = 1; i + 1 < argc; ++i)
+            {
+                if (wxString(argv[i]) == "--tab")
+                {
+                    openTab = wxString(argv[i + 1]).ToStdString();
+                }
+            }
+
+            MainFrame* frame = new MainFrame(*root, std::move(settings), std::move(note), std::move(openTab));
             frame->Show();
             return true;
         }

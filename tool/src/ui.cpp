@@ -70,7 +70,7 @@ namespace mgs4e::tool
         }
     }
 
-    MainFrame::MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote)
+    MainFrame::MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab)
         : wxFrame(nullptr, wxID_ANY, wxString::Format("%s %s", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING),
                   wxDefaultPosition, wxDefaultSize,
                   wxDEFAULT_FRAME_STYLE & ~(wxRESIZE_BORDER | wxMAXIMIZE_BOX))
@@ -109,6 +109,16 @@ namespace mgs4e::tool
         {
             if (std::string_view(page.title) == "Troubleshooting")
             {
+                // Other mods' config files get a tab each, ahead of Troubleshooting. Only the
+                // files that exist: no mod, no tab.
+                for (const modconfig::Found& found : modconfig::Detect(m_GameRoot))
+                {
+                    auto mod = std::make_unique<ModPage>();
+                    mod->found = found;
+                    mod->file.Load(found.file);
+                    book->AddPage(BuildModPage(book, *mod), found.mod->name);
+                    m_ModPages.push_back(std::move(mod));
+                }
                 book->AddPage(BuildTroubleshootingPage(book, page), page.title);
             }
             else
@@ -118,6 +128,21 @@ namespace mgs4e::tool
         }
         book->AddPage(BuildAboutPage(book), "About");
         rootSizer->Add(book, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(10));
+        if (!openTab.empty())
+        {
+            // Once the frame is up: a selection made before the first show does not stick.
+            CallAfter([book, openTab]
+            {
+                for (size_t i = 0; i < book->GetPageCount(); ++i)
+                {
+                    if (book->GetPageText(i) == openTab)
+                    {
+                        book->SetSelection(i);
+                        break;
+                    }
+                }
+            });
+        }
 
         // Footer: status on the left, buttons on the right.
         wxBoxSizer* footer = new wxBoxSizer(wxHORIZONTAL);
@@ -229,6 +254,83 @@ namespace mgs4e::tool
         return panel;
     }
 
+    wxWindow* MainFrame::BuildModPage(wxWindow* parent, ModPage& page)
+    {
+        const modconfig::Mod& mod = *page.found.mod;
+        wxPanel* panel = new wxPanel(parent);
+        wxBoxSizer* outer = new wxBoxSizer(wxVERTICAL);
+
+        std::error_code ec;
+        const std::filesystem::path shown = std::filesystem::relative(page.found.file, m_GameRoot, ec);
+        wxStaticText* blurb = new wxStaticText(panel, wxID_ANY,
+            wxString::Format("%s\n\nFile: %s", mod.blurb, (ec || shown.empty() ? page.found.file : shown).wstring()));
+        blurb->Wrap(FromDIP(620));
+        outer->Add(blurb, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, mod.url, mod.url), 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+
+        if (!page.found.loadable)
+        {
+            wxStaticText* warn = new wxStaticText(panel, wxID_ANY,
+                wxString::Format("This copy of %s is not where the game loads mods from, so it is not running. mgs4.exe is in the "
+                                 "MGS4 folder and its loader only picks up .asi files in MGS4 and MGS4\\scripts. Move %s and %s "
+                                 "into MGS4\\scripts; MGS4\\winmm.dll is already the loader, and a wininet.dll in the install "
+                                 "folder does nothing there.",
+                                 mod.name, mod.asiFile, mod.fileName));
+            warn->Wrap(FromDIP(620));
+            warn->SetForegroundColour(wxColour(214, 128, 44));
+            outer->Add(warn, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        }
+
+        wxStaticBoxSizer* box = new wxStaticBoxSizer(wxVERTICAL, panel, "Settings");
+        wxWindow* boxParent = box->GetStaticBox();
+        wxFlexGridSizer* grid = new wxFlexGridSizer(2, FromDIP(6), FromDIP(10));
+        grid->AddGrowableCol(0, 1);
+        for (const modconfig::Key& key : mod.keys)
+        {
+            const Field& f = key.field;
+            ModRow row;
+            row.key = &key;
+            wxStaticText* label = new wxStaticText(boxParent, wxID_ANY, key.label);
+            switch (f.type)
+            {
+            case Field::Type::Bool:
+                row.control = new wxCheckBox(boxParent, wxID_ANY, wxEmptyString);
+                row.control->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) { ReadControls(); });
+                break;
+            case Field::Type::Int:
+            {
+                wxSpinCtrl* spin = new wxSpinCtrl(boxParent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(90), -1),
+                                                  wxSP_ARROW_KEYS, f.min, f.max, f.defaultInt);
+                spin->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent&) { ReadControls(); });
+                spin->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { ReadControls(); });
+                row.control = spin;
+                break;
+            }
+            case Field::Type::Choice:
+            {
+                wxChoice* choice = new wxChoice(boxParent, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(190), -1));
+                for (const char* c : f.choices)
+                {
+                    choice->Append(c);
+                }
+                choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { ReadControls(); });
+                row.control = choice;
+                break;
+            }
+            }
+            label->SetToolTip(f.help);
+            row.control->SetToolTip(f.help);
+            grid->Add(label, 0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(row.control, 0, wxALIGN_CENTER_VERTICAL);
+            page.rows.push_back(row);
+        }
+        box->Add(grid, 1, wxEXPAND | wxALL, FromDIP(8));
+        outer->Add(box, 0, wxEXPAND | wxALL, FromDIP(12));
+
+        panel->SetSizer(outer);
+        return panel;
+    }
+
     wxWindow* MainFrame::BuildAboutPage(wxWindow* parent)
     {
         wxPanel* panel = new wxPanel(parent);
@@ -258,8 +360,8 @@ namespace mgs4e::tool
                 "these settings, that mod's setting takes precedence and this tool says so. MGSPatriotFix is recognised "
                 "today; support for more mods will be added.\n"
                 "\n"
-                "Nothing here phones home. There is no updater and no telemetry; the only files touched are "
-                "%s.settings and the log.",
+                "Nothing here phones home. There is no updater and no telemetry. The files touched are %s.settings, "
+                "the log, and another mod's config file when you change it on that mod's tab.",
                 MGS4E_NAME, MGS4E_NAME));
         body->Wrap(FromDIP(620));
         outer->Add(body, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
@@ -467,6 +569,34 @@ namespace mgs4e::tool
             }
             m_Settings.Set(f->section, f->key, value);
         }
+        for (auto& mod : m_ModPages)
+        {
+            for (const ModRow& row : mod->rows)
+            {
+                const Field& f = row.key->field;
+                std::string value;
+                switch (f.type)
+                {
+                case Field::Type::Bool:
+                    value = static_cast<wxCheckBox*>(row.control)->GetValue() ? "1" : "0";
+                    break;
+                case Field::Type::Int:
+                    value = std::to_string(static_cast<wxSpinCtrl*>(row.control)->GetValue());
+                    break;
+                case Field::Type::Choice:
+                {
+                    const wxString sel = static_cast<wxChoice*>(row.control)->GetStringSelection();
+                    if (sel.empty())
+                    {
+                        continue;
+                    }
+                    value = sel.ToStdString();
+                    break;
+                }
+                }
+                mod->file.Set(f.section, f.key, value);
+            }
+        }
         UpdateDependencies();
     }
 
@@ -507,6 +637,32 @@ namespace mgs4e::tool
             }
             }
         }
+        for (auto& mod : m_ModPages)
+        {
+            for (const ModRow& row : mod->rows)
+            {
+                const Field& f = row.key->field;
+                const std::string value = mod->file.Get(f.section, f.key);
+                switch (f.type)
+                {
+                case Field::Type::Bool:
+                    static_cast<wxCheckBox*>(row.control)->SetValue(value.empty() ? f.defaultBool : IsTrue(value));
+                    break;
+                case Field::Type::Int:
+                    static_cast<wxSpinCtrl*>(row.control)->SetValue(f.Accepts(value) ? std::stoi(value) : f.defaultInt);
+                    break;
+                case Field::Type::Choice:
+                {
+                    wxChoice* choice = static_cast<wxChoice*>(row.control);
+                    if (!choice->SetStringSelection(value))
+                    {
+                        choice->SetStringSelection(f.defaultChoice);
+                    }
+                    break;
+                }
+                }
+            }
+        }
         m_Syncing = false;
     }
 
@@ -522,8 +678,39 @@ namespace mgs4e::tool
         }
         // Reload so Dirty() compares against what is now on disk.
         m_Settings.Load(m_File);
-        SetStatus(wxString::Format("Saved %s. Takes effect the next time the game starts.", m_File.filename().wstring()));
+        wxString saved = m_File.filename().wstring();
+        for (auto& mod : m_ModPages)
+        {
+            if (!mod->file.Dirty())
+            {
+                continue;
+            }
+            if (const auto error = mod->file.Save())
+            {
+                wxMessageBox(*error, "Could not save", wxOK | wxICON_ERROR, this);
+                return false;
+            }
+            saved += " and ";
+            saved += mod->file.Path().filename().wstring();
+        }
+        SetStatus(wxString::Format("Saved %s. Takes effect the next time the game starts.", saved));
         return true;
+    }
+
+    bool MainFrame::Dirty()
+    {
+        if (m_Settings.Dirty())
+        {
+            return true;
+        }
+        for (const auto& mod : m_ModPages)
+        {
+            if (mod->file.Dirty())
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     void MainFrame::OnResetToDefaults(wxCommandEvent&)
@@ -531,7 +718,8 @@ namespace mgs4e::tool
         m_Settings.ResetToDefaults();
         WriteControls();
         UpdateDependencies();
-        SetStatus("Defaults restored. Save to keep them.");
+        SetStatus(m_ModPages.empty() ? "Defaults restored. Save to keep them."
+                                     : "Defaults restored (this mod's settings only; other mods' tabs are untouched). Save to keep them.");
     }
 
     void MainFrame::OnSave(wxCommandEvent&)
@@ -555,7 +743,7 @@ namespace mgs4e::tool
     void MainFrame::OnClose(wxCloseEvent& event)
     {
         ReadControls();
-        if (event.CanVeto() && m_Settings.Dirty())
+        if (event.CanVeto() && Dirty())
         {
             const int answer = wxMessageBox("Save your changes before closing?", MGS4E_DISPLAY_NAME,
                                             wxYES_NO | wxCANCEL | wxICON_QUESTION, this);

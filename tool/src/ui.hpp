@@ -2,6 +2,7 @@
 
 #include "compat.hpp"
 #include "fields.hpp"
+#include "mod_config.hpp"
 #include "settings_io.hpp"
 
 #include <filesystem>
@@ -14,7 +15,7 @@ namespace mgs4e::tool
     class MainFrame : public wxFrame
     {
     public:
-        MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote);
+        MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab);
 
     private:
         // One line of a group: a label and a control. A "switched" row carries several
@@ -28,8 +29,22 @@ namespace mgs4e::tool
             std::optional<compat::Override> override;   // another mod controls this field; shown beside the label
         };
 
+        // Another mod's config file on its own tab: the file, and a row per listed key.
+        struct ModRow
+        {
+            const modconfig::Key* key = nullptr;
+            wxWindow* control = nullptr;
+        };
+        struct ModPage
+        {
+            modconfig::Found found;
+            modconfig::File file;
+            std::vector<ModRow> rows;
+        };
+
         wxWindow* BuildGraphicsPage(wxWindow* parent, const Page& page);
         wxWindow* BuildTroubleshootingPage(wxWindow* parent, const Page& page);
+        wxWindow* BuildModPage(wxWindow* parent, ModPage& page);
         wxWindow* BuildAboutPage(wxWindow* parent);
         wxSizer* BuildGroup(wxWindow* parent, const Group& group);
         void AddRow(wxWindow* parent, wxFlexGridSizer* grid, std::vector<const Field*> fields);
@@ -47,6 +62,7 @@ namespace mgs4e::tool
         void UpdateDependencies();
 
         bool Save();
+        bool Dirty();
         void OnResetToDefaults(wxCommandEvent&);
         void OnSave(wxCommandEvent&);
         void OnSaveAndExit(wxCommandEvent&);
@@ -60,6 +76,7 @@ namespace mgs4e::tool
         std::filesystem::path m_File;
         Settings m_Settings;
         std::vector<Row> m_Rows;
+        std::vector<std::unique_ptr<ModPage>> m_ModPages;   // stable addresses: rows bind to them
         wxStaticText* m_Status = nullptr;
         bool m_Syncing = false;
     };

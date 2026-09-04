@@ -134,6 +134,12 @@ rediscovered the hard way:
   manual launch is yours to clean up.
 - **Evidence levels are enforced.** Inferred is a hypothesis with a note attached, not a reason to
   change code. Promote to Observed or Measured first, or record that it could not be promoted.
+- **Other mods' config files get a tab in the tool when present** (	ool/src/mod_config.*): a table of
+  known files (MGSFPSUnlock.ini first) with the keys to expose; Detect looks beside mgs4.exe
+  (MGS4\, MGS4\scripts, plugins, update) and, flagged not-loadable, the same names under the
+  install folder. A save rewrites only the listed values in place. The compat table is a
+  different thing: settings both mods control. MGS4Enabler.exe --tab <title> opens on a tab,
+  for screenshots.
 - **Other mods' settings files are never written by the tool or the ASI** — they are read for
   the compat table and the one-time import, nothing else. The user's own settings live in
   `MGS4Enabler.settings`; leave that file alone unless they ask.

@@ -138,6 +138,17 @@ Recognised today:
 More will be added as they come up. The list lives in one table (`shared/compat_table.hpp`)
 that both the `.asi` and the tool read.
 
+Some mods have a small config file and no tool of their own. When one of those is installed,
+the tool grows a tab for it, and only then:
+
+| Mod | File | What the tab edits |
+| --- | --- | --- |
+| [MGSFPSUnlock](https://github.com/cipherxof/MGSFPSUnlock) (cipherxof) | `MGSFPSUnlock.ini` | Target frame rate |
+
+A save writes just those values back into the mod's file; comments and everything else in it
+stay as they were. If the mod's files are sitting somewhere the game does not load from (the
+install folder's own `scripts\` rather than `MGS4\scripts\`, a common slip), the tab says so.
+
 If you used an earlier build of these fixes that shipped inside another mod, the tool's first
 run imports your graphics settings from that mod's settings file. Do this before running that
 mod's own config tool, if it has one, since those tend to rewrite their file with only the
