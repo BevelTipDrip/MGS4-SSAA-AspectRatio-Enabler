@@ -95,9 +95,13 @@ resolution, shadow softness, FXAA, window resolution, the ultrawide and 4:3 fixe
 counterpart there and works regardless.
 
 If you used the earlier fork of MGSPatriotFix that carried these settings, the first run of
-the tool imports them from `MGSPatriotFix.settings` for you. Remove the fork's build of
-`MGSPatriotFix.asi` and its Config Tool, and install the current MGSPatriotFix release
-alongside this one.
+the tool imports them from `MGSPatriotFix.settings` for you. Do this **before** running the
+current MGSPatriotFix Config Tool: that tool rewrites the file with only its own keys, so
+the imported values would be gone. Then remove the fork's build of `MGSPatriotFix.asi` and
+its Config Tool, install the current MGSPatriotFix release alongside this one, and run its
+Config Tool once and save — its ASI stops loading (and takes anything after it in
+`MGS4\scripts` with it) if the settings file is missing any key it expects, which a
+fork-era file is.
 
 ---
 

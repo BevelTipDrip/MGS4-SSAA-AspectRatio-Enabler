@@ -40,8 +40,8 @@ namespace pfc::tool
                 // and kept their settings in its file; carry those across so nothing is lost.
                 const int imported = settings.ImportFrom(upstream::Current().settingsPath);
                 note = imported > 0
-                    ? "First run: imported " + std::to_string(imported) + " settings from " PFC_NEIGHBOUR_SETTINGS_FILE
-                      + " (not modified). Save to keep them."
+                    ? "Imported " + std::to_string(imported) + " settings from " PFC_NEIGHBOUR_SETTINGS_FILE
+                      + ". Save to keep them."
                     : "First run: showing the defaults. Save to create " PFC_NAME ".settings.";
             }
 

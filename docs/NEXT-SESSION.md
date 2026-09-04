@@ -87,6 +87,23 @@ rediscovered the hard way:
 - **MGSPatriotFix loads first and wins where both patch the same thing** (aniso: whenever its
   ASI is present; shadow resolution: when its `Custom Shadow Resolution` is non-zero). Both the
   ASI and the tool decide this from the same table; do not add a second source of truth.
+  Verified 2026-09-04 against upstream 0.2.1 built from the fork repo's `upstream` remote
+  (`git checkout --detach upstream/master`, build with `/p:PreBuildEventUseInBuild=false
+  /p:PostBuildEventUseInBuild=false` — its build events break on the spaced path and its
+  post-build copies into the game folder).
+- **Upstream's ASI aborts on a settings file missing any of its keys** (`FatalConfigError` →
+  `FreeLibraryAndExitThread`), and nothing after it in `MGS4\scripts` loads — so PF Companion
+  never logs and the run looks like a hang. A fork-era `MGSPatriotFix.settings` is exactly such
+  a file; run their Config Tool once (it rewrites the file with only its keys). Their tool's
+  buttons are `Save and Exit` / `Exit` / `Launch Game` — there is no plain `Save`.
+- **The harness gates on `Initialisation complete` outside lab mode.** Stage automation only
+  exists in lab mode, so `-LoadSave` and the `-StopAt*` paths work on a normal boot; a stage
+  request needs `-LabConfig` with `Stage Automation=1` (and `Stage Automation Stage` for a
+  specific stage). `close_game.ps1` closes a game left up by a `-StopAt*` run.
+- **The gameplay detector fails when the game does not fill its client area** (PiP monitor
+  modes, a 1920x1080 override drawn into the top-left of a 3840x2160 client): `in_game.ps1`
+  reads fractional regions of the capture, so the HUD is outside its window. The captures are
+  still fine; the log and the user's read are the evidence in that situation.
 
 ---
 
