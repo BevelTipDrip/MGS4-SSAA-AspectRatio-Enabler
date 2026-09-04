@@ -1,16 +1,69 @@
 # MGS4 SSAA and Aspect Ratio Enabler
 
-Graphics settings for **METAL GEAR SOLID 4** in the Master Collection: internal resolution
-scaling (supersampling), sharper shadows, anisotropic filtering, FXAA control, window
-resolution and aspect ratio selection, and an undistorted HUD, menus and cutscenes on
-ultrawide (21:9, 32:9) and 4:3 displays.
+A graphics mod for **METAL GEAR SOLID 4** in the Master Collection on PC. It adds supersampling,
+higher resolution shadows, anisotropic filtering and FXAA control, lets you pick the window
+resolution and aspect ratio, and fixes the HUD, menus and cutscenes so they look right on
+ultrawide (21:9, 32:9) and 4:3 displays instead of being stretched to fit.
 
----
+It comes as an `.asi` that patches the game in memory as it starts, plus a small settings tool.
+No game files are modified.
+
+## The HUD at three aspect ratios
+
+The game draws its entire interface in a 16:9 space and stretches that to whatever the window
+is. On a 21:9 monitor everything comes out wide and the compass turns into an oval; on 4:3 it
+all gets squashed. With the Expanded HUD setting, every element keeps its proper shape and the
+corner widgets sit at the edges of the actual screen, where they belong.
+
+**21:9 (3840x1620), Expanded HUD**
+
+![HUD at 21:9](docs/images/hud-21-9.jpg)
+
+**16:9 (3840x2160), the reference the game was made for**
+
+![HUD at 16:9](docs/images/hud-16-9.jpg)
+
+**4:3 (2880x2160), Expanded HUD**
+
+![HUD at 4:3](docs/images/hud-4-3.jpg)
+
+Menus, the codec, loading screens and cutscenes are handled too: they are shown as the 16:9
+picture they were designed as, centred, with black bars over the rest of the window rather than
+the world leaking past their edges. On an ultrawide the cutscene camera is zoomed back out so
+the full frame fits, because the engine otherwise keeps the 16:9 width and cuts the top and
+bottom off.
+
+## Features
+
+**Aspect ratio and HUD**
+- Window resolution and aspect ratio selection (16:9, 21:9, 32:9, 4:3) independent of the
+  game's own launcher settings.
+- Three HUD modes: Stretched (the game's behaviour), Centered (every widget at its proper shape,
+  interface centred in a 16:9 area) and Expanded (same, with the life bar, camo meter, weapon
+  and item panels moved out to the real screen edges; wheels and menus stay centred).
+- World-pinned labels (pickup names, Solid Eye stat blocks, targeting icons) stay on the
+  objects they mark.
+- 16:9 masking for menus, codec, loading screens and cutscenes, and a cutscene FOV fix for
+  wide windows. Each is its own switch.
+- Gameplay FOV adjustment, 50 to 200 percent. Cutscenes are not affected.
+
+**Image quality**
+- Internal resolution scaling up to 400 percent (supersampling). The window stays at your
+  chosen resolution; the game renders larger and scales down.
+- Shadow map resolution scaling and shadow filter sample count.
+- Anisotropic filtering up to 16x.
+- FXAA on/off and its quality level, which the game never exposes.
+
+**Housekeeping**
+- A settings tool that writes one file, `MGS4Enabler.settings`, with the defaults filled in.
+- Plays nicely with other mods: where another mod it knows about controls the same thing,
+  that mod's setting wins and the tool tells you so.
+- Nothing phones home. No updater, no telemetry.
 
 ## Installation
 
-Extract the zip into the game's **install folder** — the one that contains the `MGS4` folder
-(Steam: right-click the game → Manage → Browse local files):
+Extract the zip into the game's **install folder**, the one that contains the `MGS4` folder
+(Steam: right-click the game, Manage, Browse local files):
 
 ```
 METAL GEAR SOLID 4\
@@ -22,83 +75,73 @@ METAL GEAR SOLID 4\
    └─ scripts\MGS4Enabler.asi
 ```
 
-Then run **MGS4Enabler.exe** from that folder, pick your settings and save. That creates
-`MGS4Enabler.settings` next to it, which `MGS4Enabler.asi` reads every time the game starts.
-Changes take effect on the next launch.
+Run **MGS4Enabler.exe** from that folder, pick your settings and save. That creates
+`MGS4Enabler.settings` next to it, which the `.asi` reads every time the game starts. Changes
+take effect on the next launch.
 
 If another mod already gave you an `MGS4\winmm.dll`, it is the same loader; keep whichever is
 newer. The loader runs every `.asi` in `MGS4\scripts`.
 
-> Do not put an `.asi` file in the game's install folder itself. It is not loaded from there,
-> and some mods' config tools hang if they find one.
-
----
+Do not put an `.asi` in the game's install folder itself. It is not loaded from there, and
+some mods' config tools hang if they find one.
 
 ## Settings
 
-Everything lives on the **Graphics** tab. Hover a setting in the tool for the long version.
+Everything is on the **Graphics** tab. Hover a setting in the tool for a longer explanation.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape; leave it on Use Game Setting to keep whatever the game's own launcher selected. |
-| **Ultrawide HUD** | Expanded HUD | How the HUD is laid out on a window that is not 16:9 — ultrawide or 4:3. **Stretched HUD** leaves the game's own behaviour. **Centered HUD** gives every widget its proper shape and centres the whole interface in a 16:9 area. **Expanded HUD** does that and moves the life bar, camo meter, weapon and item panels out to the real edges (the sides on an ultrawide, the top and bottom on 4:3), with the wheels and menus staying centred. Keys off the actual window size, so it also works on a native ultrawide or 4:3 display with the aspect left on Use Game Setting. No effect at 16:9. |
-| **Solid Eye Overlay Fix** | on | With a Centered or Expanded HUD, keeps the labels that follow things in the world — pickup names, Solid Eye stat blocks and targeting icons — on the objects they mark instead of sliding toward the centre with the rest of the interface. Does nothing with a Stretched HUD. |
-| **Menu Masking** | on | The title screen, main menu, pause menu, codec and loading screens are drawn for 16:9. On a wider or taller window this keeps them at that shape and blacks out the rest — side bars on an ultrawide, top and bottom bars on 4:3 — instead of letting the world show past their edges. Needs a Centered or Expanded HUD. No effect at 16:9. |
-| **Cutscene Masking** | on | Shows cutscenes as the 16:9 picture centred in the window with black bars over the rest, so they are framed the way they were shot. Pair it with Cutscene FOV Compensation on an ultrawide, otherwise the bars just frame the game's own cropped picture. No effect at 16:9. |
-| **Cutscene FOV Compensation** | on | On a window wider than 16:9 the game's cutscene camera keeps the 16:9 width and cuts the top and bottom off. This zooms the camera back out so the full 16:9 frame fits, which is what Cutscene Masking then shows. Only matters wider than 16:9. |
-| **FOV Adjustment (%)** | 100 | How much of the world the gameplay camera shows, relative to stock. 120 shows 20% more in each direction, 80 shows less. Gameplay only — cutscenes are not affected. On a 21:9 window, 133 restores the vertical view you would have at 16:9, since the game otherwise crops it. |
-| **Internal Resolution Scale (%)** | 100 | Renders internally above your display resolution and scales down on output. Works even if your monitor cannot exceed its native resolution. Up to 400%, with the internal buffer capped at 8192 wide — so the useful maximum depends on your window: about 400% at 1080p, 200% at 4K. |
-| **Shadow Resolution Scale (%)** | 100 | Raises shadow map resolution beyond the game's highest Shadow Quality. 200 doubles it in each dimension; costs four times the shadow memory. |
-| **Shadow Softness (Samples)** | 0 (off) | How many samples the game takes filtering a shadow edge — smoother, less noisy shadows. Separate from resolution: this is edge quality, not detail. The game's highest preset uses 7. |
-| **Anisotropic Filtering** | 0 (off) | Maximum anisotropy for textures viewed at a steep angle — floors, walls, terrain seen edge-on. The game's highest texture setting asks for 8x; 16x is the hardware maximum and nearly free. |
-| **FXAA** | on | Post-process anti-aliasing. The game has its own toggle in its display menu; this overrides it, and either way the change needs a restart. |
-| **FXAA Quality** | Slow | Slow / Medium / Fast, where slower does more work and looks better. The game ships Medium and exposes this nowhere. Worth keeping on even with supersampling: extra resolution fixes geometry edges but not shader aliasing or specular sparkle. |
+| **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape. Leave it on Use Game Setting to keep whatever the game's launcher selected. |
+| **Ultrawide HUD** | Expanded HUD | How the HUD is laid out on a window that is not 16:9. **Stretched HUD** is the game's own behaviour. **Centered HUD** gives every widget its proper shape and centres the interface in a 16:9 area. **Expanded HUD** does that and moves the life bar, camo meter, weapon and item panels out to the real edges. Works from the actual window size, so it also applies on a native ultrawide or 4:3 display with the aspect left on Use Game Setting. No effect at 16:9. |
+| **Solid Eye Overlay Fix** | on | With a Centered or Expanded HUD, keeps the labels that follow things in the world on the objects they mark instead of sliding toward the centre with the rest of the interface. |
+| **Menu Masking** | on | Keeps the title screen, main menu, pause menu, codec and loading screens at 16:9 and blacks out the rest of the window. Needs a Centered or Expanded HUD. |
+| **Cutscene Masking** | on | Shows cutscenes as the 16:9 picture centred in the window with black bars over the rest. Pair it with Cutscene FOV Compensation on an ultrawide. |
+| **Cutscene FOV Compensation** | on | On a window wider than 16:9 the cutscene camera keeps the 16:9 width and crops the top and bottom. This zooms the camera back out so the full frame fits. |
+| **FOV Adjustment (%)** | 100 | How much of the world the gameplay camera shows, relative to stock. On a 21:9 window, 133 restores the vertical view you would have at 16:9. |
+| **Internal Resolution Scale (%)** | 100 | Renders internally above your display resolution and scales down. Up to 400, with the internal buffer capped at 8192 wide: roughly 400 at 1080p, 200 at 4K. |
+| **Shadow Resolution Scale (%)** | 100 | Raises shadow map resolution beyond the game's highest Shadow Quality. 200 doubles it in each dimension and costs four times the shadow memory. |
+| **Shadow Softness (Samples)** | 0 (off) | How many samples the game takes filtering a shadow edge. The game's highest preset uses 7. |
+| **Anisotropic Filtering** | 0 (off) | Maximum anisotropy for textures seen at a steep angle. The game's highest texture setting asks for 8x; 16x is the hardware maximum and nearly free. |
+| **FXAA** | on | Post-process anti-aliasing. Overrides the game's own toggle. Needs a restart either way. |
+| **FXAA Quality** | Slow | Slow, Medium or Fast, where slower looks better. The game ships Medium. Worth keeping on even with supersampling, since extra resolution does not fix shader aliasing. |
 
-### Notes
+Notes:
 
-- Internal Resolution Scale is **very** demanding — every 41% adds another whole screen's
-  worth of pixels. The internal buffer is capped at 8192 wide whatever you ask for; at a 4K
-  window 200% gives 7680×4320 and anything higher is clamped (the log says so).
+- Internal Resolution Scale is expensive. Every 41 percent adds another whole screen's worth
+  of pixels. At a 4K window 200 gives 7680x4320 and anything above that is clamped, which the
+  log will tell you.
 - Shadow scaling is applied on top of the game's own Shadow Quality option, so leave that at
-  its highest setting for the best result.
-- A **4:3** window squashes the interface horizontally with a Stretched HUD, because the game's
-  UI is authored for 16:9. Centered or Expanded HUD corrects it the same way it does on an
-  ultrawide.
-- The masking options and FOV Adjustment only apply when the window is not 16:9. They are on
-  by default because that is the framing the game was made for; turn Cutscene Masking off if
-  you would rather have cutscenes fill an ultrawide.
-- The aiming reticle stays put at any internal resolution. The game truncated a coordinate on
-  the way into its UI space, which sent the reticle off screen once the buffer was wider than
-  4095; `MGS4Enabler.asi` widens those conversions. Verified at 8192×4608. The cause was
-  identified by **drbermejor**'s [mgs4Ultra120](https://github.com/drbermejor/mgs4Ultra120);
-  the details are in [docs/mgs4-rendering-research.md](docs/mgs4-rendering-research.md).
-
----
+  its highest.
+- The masking options and FOV Adjustment do nothing at 16:9. They default on because that is
+  the framing the game was made for. Turn Cutscene Masking off if you would rather have
+  cutscenes fill an ultrawide.
+- The aiming reticle stays on screen at any internal resolution. The game truncated a
+  coordinate on the way into its UI space, which sent the reticle off screen once the buffer
+  was wider than 4095 pixels; the `.asi` widens those conversions. Verified at 8192x4608. The
+  cause was found by **drbermejor**'s [mgs4Ultra120](https://github.com/drbermejor/mgs4Ultra120);
+  details in [docs/mgs4-rendering-research.md](docs/mgs4-rendering-research.md).
 
 ## Mod compatibility
 
-This mod is designed to share the game with other mods. Where another mod it recognises
-changes the same thing as one of these settings, **that mod's setting is used** and this one
-stands aside: the tool greys the field out and shows the value the other mod has, and the ASI
-logs the same. Nothing else is affected, and the other mod's files are only ever read, never
-written.
+This mod is meant to share the game with others. Where another mod it recognises changes the
+same thing as one of these settings, **that mod's setting is used**: the tool greys the field
+out and shows the other mod's value, and the `.asi` logs the same. The other mod's files are
+only ever read, never written.
 
 Recognised today:
 
-| Mod | Setting here | Stands aside when the other mod… |
+| Mod | Setting here | Stands aside when the other mod... |
 | --- | --- | --- |
 | MGSPatriotFix | Anisotropic Filtering | is installed at all |
 | MGSPatriotFix | Shadow Resolution Scale (%) | has `Custom Shadow Resolution` set to anything but 0 |
 
-Support for more mods will be added as they come up; the list lives in one table
-(`shared/compat_table.hpp`) that both the ASI and the tool read.
+More will be added as they come up. The list lives in one table (`shared/compat_table.hpp`)
+that both the `.asi` and the tool read.
 
-If you used an earlier build of these fixes that shipped inside another mod, the first run of
-the tool imports your graphics settings from that mod's settings file. Do this before running
-that mod's own config tool, if it has one, since such tools tend to rewrite their file with
-only the keys they know.
-
----
+If you used an earlier build of these fixes that shipped inside another mod, the tool's first
+run imports your graphics settings from that mod's settings file. Do this before running that
+mod's own config tool, if it has one, since those tend to rewrite their file with only the
+keys they know.
 
 ## Reporting a problem
 
@@ -117,30 +160,26 @@ moment (Steam's F12) and attach both.
 
 Issues: <https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler/issues>
 
----
-
 ## Building
 
 Visual Studio 2026 Build Tools (v145, C++20), Windows SDK 10. Clone with submodules, then
-`build\build.cmd` builds Zydis and wxWidgets once and the solution after that; outputs land
-in `bin\Release`. `build\package.ps1` makes the release zip (it needs the
+`build\build.cmd` builds Zydis and wxWidgets once and the solution after that; output lands in
+`bin\Release`. `build\package.ps1` makes the release zip. It needs the
 [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases) zip, which
-is not in the repository).
+is not in the repository.
 
 The ultrawide and 4:3 layout code is a private submodule (`external/ultrawide`). Without it
 the project still builds, with a stub in its place: every setting works except the Ultrawide
-HUD family, which then does nothing. That component has its own licence (see Licence below).
+HUD family, which then does nothing. That component has its own licence (see below).
 
 Two configurations: **Release** is what ships. **Lab** (`build\build.cmd lab`, output in
 `bin\Lab`) compiles in the research instrumentation and the lab settings file that the test
-harness drives; a Release build contains none of it.
-
----
+harness drives. A Release build contains none of it.
 
 ## Credits
 
 ASI loading by [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
-(ThirteenAG) — see `UltimateASILoader_LICENSE.md`.
+(ThirteenAG), see `UltimateASILoader_LICENSE.md`.
 
 Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
 [Zydis](https://github.com/zyantific/zydis) (instruction decoding),
@@ -149,11 +188,11 @@ Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
 
 ## Licence
 
-This repository is under the MIT License — see `LICENSE.md`.
+This repository is under the MIT License, see `LICENSE.md`.
 
-The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the release
-binaries) is licensed separately, under a credit-required licence: you may use, modify and
-redistribute it, in your own mods too, but the fix must be credited **directly and visibly to
-BevelTipDrip** wherever it is used or distributed - on the mod page, in the README and in any
-about screen, with a link to this repository. Passing it off as your own ends that permission.
-The full text is in the submodule's `LICENSE.md`.
+The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the
+release binaries) is licensed separately, under a credit-required licence: you may use, modify
+and redistribute it, in your own mods too, but the fix must be credited **directly and visibly
+to BevelTipDrip** wherever it is used or distributed. That means the mod page, the README and
+any about screen, with a link to this repository. Passing it off as your own ends that
+permission. The full text is in the submodule's `LICENSE.md`.
