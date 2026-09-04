@@ -4,11 +4,11 @@
 #include "settings_keys.hpp"
 #include "version.hpp"
 
-namespace pfc::tool
+namespace mgs4e::tool
 {
     namespace
     {
-        namespace K = pfc::keys;
+        namespace K = mgs4e::keys;
 
         // --- Help text -------------------------------------------------------------------
 
@@ -152,14 +152,14 @@ namespace pfc::tool
             "Costs very little on a modern GPU. Has no effect when FXAA is off.";
 
         constexpr const char* kHelp_DebugLogging =
-            "Writes extra detail to logs\\" PFC_NAME "_Game.log in the game's install folder - every hook it installs, every pattern scan and the values it reads from this settings file. Costs nothing in-game.\n"
+            "Writes extra detail to logs\\" MGS4E_NAME "_Game.log in the game's install folder - every hook it installs, every pattern scan and the values it reads from this settings file. Costs nothing in-game.\n"
             "\n"
             "How to capture a log for a bug report:\n"
             "  1. Tick this box and save.\n"
             "  2. Launch the game from Steam and do whatever goes wrong. If it crashes or hangs, that is the moment to stop.\n"
             "  3. Quit the game (or end it in Task Manager if it hung).\n"
             "  4. Open the game's install folder (Steam: right-click the game > Manage > Browse local files) and go into the \"logs\" folder.\n"
-            "  5. Attach " PFC_NAME "_Game.log to your report.\n"
+            "  5. Attach " MGS4E_NAME "_Game.log to your report.\n"
             "\n"
             "Reporting a HUD element in the wrong place on an ultrawide screen: with this on and a Centered or Expanded HUD, press F11 in-game while the element is on screen. A record of every HUD element being drawn at that moment is written into the log. Take a screenshot at the same time (Steam's F12) and attach both.\n"
             "\n"

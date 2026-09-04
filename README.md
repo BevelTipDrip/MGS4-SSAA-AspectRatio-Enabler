@@ -1,12 +1,9 @@
-# PF Companion
+# MGS4 SSAA and Aspect Ratio Enabler
 
 Graphics settings for **METAL GEAR SOLID 4** in the Master Collection: internal resolution
 scaling (supersampling), sharper shadows, anisotropic filtering, FXAA control, window
 resolution and aspect ratio selection, and an undistorted HUD, menus and cutscenes on
 ultrawide (21:9, 32:9) and 4:3 displays.
-
-It is built to sit next to [MGSPatriotFix](https://github.com/ShizCalev/MGSPatriotFix), which
-handles the launcher, controller and mouse side of things. Use both, or this on its own.
 
 ---
 
@@ -17,23 +14,23 @@ Extract the zip into the game's **install folder** — the one that contains the
 
 ```
 METAL GEAR SOLID 4\
-├─ PF Companion.exe
+├─ MGS4Enabler.exe
 ├─ README.md
 ├─ UltimateASILoader_LICENSE.md
 └─ MGS4\
    ├─ winmm.dll                (Ultimate ASI Loader)
-   └─ scripts\PFCompanion.asi
+   └─ scripts\MGS4Enabler.asi
 ```
 
-Then run **PF Companion.exe** from that folder, pick your settings and save. That creates
-`PFCompanion.settings` next to it, which `PFCompanion.asi` reads every time the game starts.
+Then run **MGS4Enabler.exe** from that folder, pick your settings and save. That creates
+`MGS4Enabler.settings` next to it, which `MGS4Enabler.asi` reads every time the game starts.
 Changes take effect on the next launch.
 
-If MGSPatriotFix is already installed you will have its `MGS4\winmm.dll`; it is the same
-loader, so keep whichever is newer. The loader runs every `.asi` in `MGS4\scripts`.
+If another mod already gave you an `MGS4\winmm.dll`, it is the same loader; keep whichever is
+newer. The loader runs every `.asi` in `MGS4\scripts`.
 
 > Do not put an `.asi` file in the game's install folder itself. It is not loaded from there,
-> and MGSPatriotFix's Config Tool will hang if it finds one.
+> and some mods' config tools hang if they find one.
 
 ---
 
@@ -72,36 +69,34 @@ Everything lives on the **Graphics** tab. Hover a setting in the tool for the lo
   you would rather have cutscenes fill an ultrawide.
 - The aiming reticle stays put at any internal resolution. The game truncated a coordinate on
   the way into its UI space, which sent the reticle off screen once the buffer was wider than
-  4095; `PFCompanion.asi` widens those conversions. Verified at 8192×4608. The cause was
+  4095; `MGS4Enabler.asi` widens those conversions. Verified at 8192×4608. The cause was
   identified by **drbermejor**'s [mgs4Ultra120](https://github.com/drbermejor/mgs4Ultra120);
   the details are in [docs/mgs4-rendering-research.md](docs/mgs4-rendering-research.md).
 
 ---
 
-## Using it with MGSPatriotFix
+## Mod compatibility
 
-Both mods load from `MGS4\scripts` and both can be installed at once. MGSPatriotFix loads
-first (the loader goes alphabetically). Two of its settings change the same thing as two of
-these; when that happens **MGSPatriotFix wins** and PF Companion stands aside:
+This mod is designed to share the game with other mods. Where another mod it recognises
+changes the same thing as one of these settings, **that mod's setting is used** and this one
+stands aside: the tool greys the field out and shows the value the other mod has, and the ASI
+logs the same. Nothing else is affected, and the other mod's files are only ever read, never
+written.
 
-| PF Companion setting | Stands aside when MGSPatriotFix… | Why |
+Recognised today:
+
+| Mod | Setting here | Stands aside when the other mod… |
 | --- | --- | --- |
-| Anisotropic Filtering | is installed at all | Its aniso patch is always on, and the two would stack. |
-| Shadow Resolution Scale (%) | has `Custom Shadow Resolution` set to anything but 0 | Both write the shadow map size; its write lands last. |
+| MGSPatriotFix | Anisotropic Filtering | is installed at all |
+| MGSPatriotFix | Shadow Resolution Scale (%) | has `Custom Shadow Resolution` set to anything but 0 |
 
-The tool greys those fields out and shows the value MGSPatriotFix has; the ASI logs the
-same. `MGSPatriotFix.settings` is only ever read, never written. Everything else — internal
-resolution, shadow softness, FXAA, window resolution, the ultrawide and 4:3 fixes — has no
-counterpart there and works regardless.
+Support for more mods will be added as they come up; the list lives in one table
+(`shared/compat_table.hpp`) that both the ASI and the tool read.
 
-If you used the earlier fork of MGSPatriotFix that carried these settings, the first run of
-the tool imports them from `MGSPatriotFix.settings` for you. Do this **before** running the
-current MGSPatriotFix Config Tool: that tool rewrites the file with only its own keys, so
-the imported values would be gone. Then remove the fork's build of `MGSPatriotFix.asi` and
-its Config Tool, install the current MGSPatriotFix release alongside this one, and run its
-Config Tool once and save — its ASI stops loading (and takes anything after it in
-`MGS4\scripts` with it) if the settings file is missing any key it expects, which a
-fork-era file is.
+If you used an earlier build of these fixes that shipped inside another mod, the first run of
+the tool imports your graphics settings from that mod's settings file. Do this before running
+that mod's own config tool, if it has one, since such tools tend to rewrite their file with
+only the keys they know.
 
 ---
 
@@ -109,10 +104,10 @@ fork-era file is.
 
 A report is only useful with a log:
 
-1. In PF Companion, **Troubleshooting** tab, tick **Debug Logging** and save.
+1. In the tool, **Troubleshooting** tab, tick **Debug Logging** and save.
 2. Launch the game from Steam and reproduce the problem. If it crashes or hangs, stop there.
 3. Quit the game (Task Manager if it hung).
-4. Attach `logs\PFCompanion_Game.log` from the game's install folder. The log is rewritten
+4. Attach `logs\MGS4Enabler_Game.log` from the game's install folder. The log is rewritten
    on every launch, so copy it before starting the game again.
 
 **A HUD element in the wrong place on an ultrawide or 4:3 screen:** with Debug Logging on and
@@ -120,7 +115,7 @@ a Centered or Expanded HUD, press **F11** in-game while the element is on screen
 every HUD element being drawn at that moment goes into the log. Take a screenshot at the same
 moment (Steam's F12) and attach both.
 
-Issues: <https://github.com/BevelTipDrip/PFCompanion/issues>
+Issues: <https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler/issues>
 
 ---
 

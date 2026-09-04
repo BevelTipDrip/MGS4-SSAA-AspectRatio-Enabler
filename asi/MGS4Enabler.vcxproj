@@ -10,8 +10,8 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{7e0c4f2a-3b8d-4c61-9f5e-2a1d6b8c0e11}</ProjectGuid>
-    <RootNamespace>PFCompanion</RootNamespace>
-    <ProjectName>PFCompanion</ProjectName>
+    <RootNamespace>MGS4Enabler</RootNamespace>
+    <ProjectName>MGS4Enabler</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -24,12 +24,12 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="PropertySheets">
-    <Import Project="..\PFCompanion.props" />
+    <Import Project="..\MGS4Enabler.props" />
   </ImportGroup>
   <PropertyGroup>
-    <TargetName>PFCompanion</TargetName>
+    <TargetName>MGS4Enabler</TargetName>
     <TargetExt>.asi</TargetExt>
-    <ExternalIncludePath>$(PfcExternal)spdlog\include;$(PfcExternal)zydis\include;$(PfcExternal)zydis\dependencies\zycore\include;$(PfcExternal)safetyhook\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
+    <ExternalIncludePath>$(EnablerExternal)spdlog\include;$(EnablerExternal)zydis\include;$(EnablerExternal)zydis\dependencies\zycore\include;$(EnablerExternal)safetyhook\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -43,7 +43,7 @@
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(PfcExternal)zydis\msvc\bin\ReleaseX64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(EnablerExternal)zydis\msvc\bin\ReleaseX64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Zydis.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImportLibrary />
       <AdditionalOptions>/NOIMPLIB %(AdditionalOptions)</AdditionalOptions>
@@ -58,35 +58,35 @@
     <ClCompile Include="src\core\game.cpp" />
     <ClCompile Include="src\core\log.cpp" />
     <ClCompile Include="src\core\mem.cpp" />
-    <ClCompile Include="src\core\upstream.cpp" />
+    <ClCompile Include="src\core\compat.cpp" />
     <ClCompile Include="src\features\graphics_settings.cpp" />
     <ClCompile Include="src\features\render_pipeline.cpp" />
     <ClCompile Include="src\features\stage_automation.cpp" />
     <!-- The ultrawide module is a private submodule: built when it is checked out, replaced by a logging stub when it is not. -->
-    <ClCompile Include="$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(PfcExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="$(PfcExternal)safetyhook\src\allocator.cpp">
+    <ClCompile Include="$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\easy.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\easy.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\inline_hook.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\inline_hook.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\mid_hook.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\mid_hook.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\os.linux.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\os.linux.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\os.windows.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\os.windows.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\utility.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\utility.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="$(PfcExternal)safetyhook\src\vmt_hook.cpp">
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\vmt_hook.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
@@ -96,19 +96,19 @@
     <ClInclude Include="src\core\game.hpp" />
     <ClInclude Include="src\core\log.hpp" />
     <ClInclude Include="src\core\mem.hpp" />
-    <ClInclude Include="src\core\upstream.hpp" />
+    <ClInclude Include="src\core\compat.hpp" />
     <ClInclude Include="src\features\aspect_ratio.hpp" />
     <ClInclude Include="src\features\graphics_settings.hpp" />
     <ClInclude Include="src\features\render_pipeline.hpp" />
     <ClInclude Include="src\features\stage_automation.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
-    <ClInclude Include="..\shared\overlap_table.hpp" />
+    <ClInclude Include="..\shared\compat_table.hpp" />
     <ClInclude Include="..\shared\settings_keys.hpp" />
     <ClInclude Include="..\shared\version.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="res\PFCompanion.rc" />
-    <Image Include="res\PFCompanion.ico" />
+    <ResourceCompile Include="res\MGS4Enabler.rc" />
+    <Image Include="res\MGS4Enabler.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

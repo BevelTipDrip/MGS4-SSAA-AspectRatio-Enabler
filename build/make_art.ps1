@@ -1,8 +1,8 @@
-# Generates PF Companion's icon and banner from code, so the art has no external source
+# Generates the MGS4 SSAA and Aspect Ratio Enabler icon and banner from code, so the art has no external source
 # and can be regenerated after a rename or a palette change.
 #
-#   asi\res\PFCompanion.ico     16/32/48 as DIB entries, 256 as PNG
-#   tool\res\PFCompanion.ico    same file
+#   asi\res\MGS4Enabler.ico     16/32/48 as DIB entries, 256 as PNG
+#   tool\res\MGS4Enabler.ico    same file
 #   tool\res\banner.png         700x100, the settings tool's header
 #
 # Run from anywhere: paths are relative to this script.
@@ -30,8 +30,8 @@ function New-RoundedRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) 
     return $p
 }
 
-# The mark: a rounded slate tile, a brass orbit ring open at the top right (the companion),
-# and a bone "PF" set in the tile. Drawn at any size from proportions.
+# The mark: a rounded slate tile, a brass ultrawide frame (the aspect ratio) and a bone "4"
+# set inside it. Drawn at any size from proportions.
 function Draw-Mark([System.Drawing.Graphics]$g, [float]$x, [float]$y, [float]$size) {
     $g.SmoothingMode = 'AntiAlias'
     $g.TextRenderingHint = 'AntiAliasGridFit'
@@ -44,26 +44,20 @@ function Draw-Mark([System.Drawing.Graphics]$g, [float]$x, [float]$y, [float]$si
         $groundHi, $ground)
     $g.FillPath($tileBrush, $tile)
 
-    # Orbit ring, 300 degrees, gap at the top right where the companion dot sits.
-    $inset = $size * 0.16
-    $ringPen = New-Object System.Drawing.Pen($brass, [Math]::Max(1.0, $size * 0.075))
-    $ringPen.StartCap = 'Round'; $ringPen.EndCap = 'Round'
-    $g.DrawArc($ringPen, [float]($x + $inset), [float]($y + $inset), [float]($size - 2 * $inset), [float]($size - 2 * $inset), [float]-30, [float]300)
+    # Ultrawide frame: a 21:9 rounded rectangle centred in the tile.
+    $fw = $size * 0.74; $fh = $fw * 9 / 21
+    $fx = $x + ($size - $fw) / 2; $fy = $y + ($size - $fh) / 2
+    $framePen = New-Object System.Drawing.Pen($brass, [Math]::Max(1.0, $size * 0.065))
+    $framePen.LineJoin = 'Round'
+    $g.DrawPath($framePen, (New-RoundedRect $fx $fy $fw $fh ($fh * 0.18)))
 
-    # The companion: a dot in the ring's gap.
-    $cx = $x + $size / 2; $cy = $y + $size / 2; $rad = ($size - 2 * $inset) / 2
-    $ang = -60 * [Math]::PI / 180
-    $dx = $cx + $rad * [Math]::Cos($ang); $dy = $cy + $rad * [Math]::Sin($ang)
-    $dot = $size * 0.09
-    $g.FillEllipse((New-Object System.Drawing.SolidBrush($bone)), [float]($dx - $dot), [float]($dy - $dot), [float]($dot * 2), [float]($dot * 2))
-
-    # Monogram.
-    $fontSize = $size * 0.36
+    # The numeral, sized to sit inside the frame.
+    $fontSize = $fh * 0.78
     $font = New-Object System.Drawing.Font('Bahnschrift', $fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $fmt = New-Object System.Drawing.StringFormat
     $fmt.Alignment = 'Center'; $fmt.LineAlignment = 'Center'
-    $rect = New-Object System.Drawing.RectangleF([float]$x, [float]($y + $size * 0.02), [float]$size, [float]$size)
-    $g.DrawString('PF', $font, (New-Object System.Drawing.SolidBrush($bone)), $rect, $fmt)
+    $rect = New-Object System.Drawing.RectangleF([float]$fx, [float]($fy + $fh * 0.03), [float]$fw, [float]$fh)
+    $g.DrawString('4', $font, (New-Object System.Drawing.SolidBrush($bone)), $rect, $fmt)
 }
 
 function New-MarkBitmap([int]$size) {
@@ -147,9 +141,9 @@ function Write-Banner([string]$path) {
     # spans the whole window; the PNG's right edge fades to the strip's ground colour.
     Draw-Mark $g 18 14 72
 
-    $title = New-Object System.Drawing.Font('Bahnschrift', 34, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $title = New-Object System.Drawing.Font('Bahnschrift', 27, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $sub = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
-    $g.DrawString('PF COMPANION', $title, (New-Object System.Drawing.SolidBrush($bone)), 108, 20)
+    $g.DrawString('MGS4 SSAA AND ASPECT RATIO ENABLER', $title, (New-Object System.Drawing.SolidBrush($bone)), 108, 24)
     $g.DrawString('Graphics settings for METAL GEAR SOLID 4', $sub, (New-Object System.Drawing.SolidBrush($muted)), 110, 62)
 
     $g.Dispose()
@@ -162,7 +156,7 @@ $toolRes = Join-Path $root 'tool\res'
 New-Item -ItemType Directory -Force $asiRes | Out-Null
 New-Item -ItemType Directory -Force $toolRes | Out-Null
 
-Write-Ico (Join-Path $asiRes 'PFCompanion.ico') @(16, 32, 48, 256)
-Copy-Item (Join-Path $asiRes 'PFCompanion.ico') (Join-Path $toolRes 'PFCompanion.ico') -Force
+Write-Ico (Join-Path $asiRes 'MGS4Enabler.ico') @(16, 32, 48, 256)
+Copy-Item (Join-Path $asiRes 'MGS4Enabler.ico') (Join-Path $toolRes 'MGS4Enabler.ico') -Force
 Write-Banner (Join-Path $toolRes 'banner.png')
-Write-Host "Wrote $asiRes\PFCompanion.ico, $toolRes\PFCompanion.ico and $toolRes\banner.png"
+Write-Host "Wrote $asiRes\MGS4Enabler.ico, $toolRes\MGS4Enabler.ico and $toolRes\banner.png"

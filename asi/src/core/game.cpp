@@ -1,7 +1,7 @@
 #include "pch.hpp"
 #include "game.hpp"
 
-namespace pfc::game
+namespace mgs4e::game
 {
     namespace
     {

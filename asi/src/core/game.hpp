@@ -2,12 +2,12 @@
 
 #include <filesystem>
 
-// The process PF Companion is loaded into.
+// The process MGS4 SSAA and Aspect Ratio Enabler is loaded into.
 //
-// Only mgs4.exe is supported. The exe lives in <root>\MGS4\, and everything PF Companion
+// Only mgs4.exe is supported. The exe lives in <root>\MGS4\, and everything MGS4 SSAA and Aspect Ratio Enabler
 // reads or writes on disk - the settings file, the lab marker, the log - is relative to
 // <root>, the folder Steam installs the game into.
-namespace pfc::game
+namespace mgs4e::game
 {
     // Resolves the exe path and its parents. Called once, first thing in initialisation;
     // safe to call again.

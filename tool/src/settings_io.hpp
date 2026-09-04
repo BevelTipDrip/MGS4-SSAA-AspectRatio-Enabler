@@ -6,12 +6,12 @@
 #include <string>
 #include <vector>
 
-// PFCompanion.settings: the values the tool edits plus anything else found in the file.
+// MGS4Enabler.settings: the values the tool edits plus anything else found in the file.
 //
 // Keys the tool knows are validated against their field on load and reset to the default
 // when malformed. Keys it does not know (the undocumented ones, lab keys, a user's own
 // notes in unknown sections) are carried through a save untouched, so hand edits survive.
-namespace pfc::tool
+namespace mgs4e::tool
 {
     class Settings
     {
@@ -25,8 +25,8 @@ namespace pfc::tool
         // Sets every known field to its default; unknown keys are kept.
         void ResetToDefaults();
 
-        // Pulls our keys out of another settings file (the fork of MGSPatriotFix that carried
-        // these graphics settings wrote them into its own file). Only keys the tool knows are
+        // Pulls our keys out of another mod's settings file (earlier builds of these graphics
+        // settings shipped inside another mod and wrote them into its file). Only keys the tool knows are
         // taken; the other file is never modified. Returns how many values were imported.
         int ImportFrom(const std::filesystem::path& otherFile);
 

@@ -10,8 +10,8 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{9b3d2e60-5a7f-4d18-8c42-6e0f1a2b3c4d}</ProjectGuid>
-    <RootNamespace>PFCompanionTool</RootNamespace>
-    <ProjectName>PFCompanionTool</ProjectName>
+    <RootNamespace>MGS4EnablerTool</RootNamespace>
+    <ProjectName>MGS4EnablerTool</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -24,11 +24,11 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="PropertySheets">
-    <Import Project="..\PFCompanion.props" />
+    <Import Project="..\MGS4Enabler.props" />
   </ImportGroup>
   <PropertyGroup>
-    <TargetName>PF Companion</TargetName>
-    <ExternalIncludePath>$(PfcExternal)wxWidgets\lib\vc_x64_lib\mswu;$(PfcExternal)wxWidgets\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
+    <TargetName>MGS4Enabler</TargetName>
+    <ExternalIncludePath>$(EnablerExternal)wxWidgets\lib\vc_x64_lib\mswu;$(EnablerExternal)wxWidgets\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -41,11 +41,11 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>wxUSE_DPI_AWARE_MANIFEST=2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)res;$(PfcExternal)wxWidgets\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)res;$(EnablerExternal)wxWidgets\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(PfcExternal)wxWidgets\lib\vc_x64_lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(EnablerExternal)wxWidgets\lib\vc_x64_lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>wxmsw33u_core.lib;wxbase33u.lib;wxpng.lib;wxzlib.lib;wxregexu.lib;comctl32.lib;rpcrt4.lib;uxtheme.lib;oleacc.lib;shlwapi.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -58,7 +58,7 @@
     <ClCompile Include="src\paths.cpp" />
     <ClCompile Include="src\settings_io.cpp" />
     <ClCompile Include="src\ui.cpp" />
-    <ClCompile Include="src\upstream.cpp" />
+    <ClCompile Include="src\compat.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\pch.hpp" />
@@ -66,15 +66,15 @@
     <ClInclude Include="src\paths.hpp" />
     <ClInclude Include="src\settings_io.hpp" />
     <ClInclude Include="src\ui.hpp" />
-    <ClInclude Include="src\upstream.hpp" />
+    <ClInclude Include="src\compat.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
-    <ClInclude Include="..\shared\overlap_table.hpp" />
+    <ClInclude Include="..\shared\compat_table.hpp" />
     <ClInclude Include="..\shared\settings_keys.hpp" />
     <ClInclude Include="..\shared\version.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="res\PFCompanionTool.rc" />
-    <Image Include="res\PFCompanion.ico" />
+    <ResourceCompile Include="res\MGS4EnablerTool.rc" />
+    <Image Include="res\MGS4Enabler.ico" />
     <Image Include="res\banner.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,7 +1,7 @@
 #include "pch.hpp"
 #include "paths.hpp"
 
-namespace pfc::tool
+namespace mgs4e::tool
 {
     std::optional<std::filesystem::path> FindGameRoot()
     {

@@ -1,12 +1,13 @@
 #include "pch.hpp"
 #include "ui.hpp"
 
-#include "upstream.hpp"
+#include "compat.hpp"
+#include "compat_table.hpp"
 #include "ini.hpp"
 #include "settings_keys.hpp"
 #include "version.hpp"
 
-namespace pfc::tool
+namespace mgs4e::tool
 {
     namespace
     {
@@ -34,7 +35,7 @@ namespace pfc::tool
 
         bool IsTrue(const std::string& text)
         {
-            const auto b = pfc::Ini::Convert<bool>(text);
+            const auto b = mgs4e::Ini::Convert<bool>(text);
             return b && *b;
         }
 
@@ -70,7 +71,7 @@ namespace pfc::tool
     }
 
     MainFrame::MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote)
-        : wxFrame(nullptr, wxID_ANY, wxString::Format("%s %s", PFC_DISPLAY_NAME, PFC_VERSION_STRING),
+        : wxFrame(nullptr, wxID_ANY, wxString::Format("%s %s", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING),
                   wxDefaultPosition, wxDefaultSize,
                   wxDEFAULT_FRAME_STYLE & ~(wxRESIZE_BORDER | wxMAXIMIZE_BOX))
         , m_GameRoot(gameRoot)
@@ -155,11 +156,17 @@ namespace pfc::tool
         wxPanel* panel = new wxPanel(parent);
         wxBoxSizer* outer = new wxBoxSizer(wxVERTICAL);
 
-        if (upstream::Current().asiInstalled)
+        const auto installed = compat::Installed();
+        if (!installed.empty())
         {
+            wxString names;
+            for (const compat::Status* s : installed)
+            {
+                names += (names.empty() ? "" : ", ") + wxString(mgs4e::compat::kMods[s->mod].name);
+            }
             wxStaticText* note = new wxStaticText(panel, wxID_ANY,
-                wxString::Format("%s is installed. Where both mods change the same thing, its setting is used: "
-                                 "those fields are greyed out below and show the value it has.", PFC_NEIGHBOUR_NAME));
+                wxString::Format("Mod compatibility: %s is installed. Where both mods change the same thing, the other "
+                                 "mod's setting is used: those fields are greyed out below and show the value it has.", names));
             note->Wrap(FromDIP(900));
             outer->Add(note, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
         }
@@ -212,7 +219,7 @@ namespace pfc::tool
                 "screen; a record of every HUD element being drawn at that moment goes into the log. Take a screenshot "
                 "at the same time (Steam's F12) and attach both.\n"
                 "\n"
-                "Report problems at %s.", PFC_NAME, PFC_REPO_URL));
+                "Report problems at %s.", MGS4E_NAME, MGS4E_REPO_URL));
         steps->Wrap(FromDIP(620));
         outer->Add(steps, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
 
@@ -234,7 +241,7 @@ namespace pfc::tool
             head->Add(new wxStaticBitmap(panel, wxID_ANY, wxBitmap(mark)), 0, wxRIGHT, FromDIP(12));
         }
         wxBoxSizer* titles = new wxBoxSizer(wxVERTICAL);
-        wxStaticText* title = new wxStaticText(panel, wxID_ANY, wxString::Format("%s %s", PFC_DISPLAY_NAME, PFC_VERSION_STRING));
+        wxStaticText* title = new wxStaticText(panel, wxID_ANY, wxString::Format("%s %s", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING));
         title->SetFont(title->GetFont().Scaled(1.5f).Bold());
         titles->Add(title, 0, wxBOTTOM, FromDIP(2));
         titles->Add(new wxStaticText(panel, wxID_ANY, "Graphics settings for METAL GEAR SOLID 4 (Master Collection)"), 0);
@@ -247,20 +254,21 @@ namespace pfc::tool
                 "filtering, FXAA control, and an undistorted HUD on ultrawide and 4:3 displays. This tool writes the "
                 "settings it reads.\n"
                 "\n"
-                "It is built to run alongside %s, which handles the launcher, controller and mouse fixes. Install both; "
-                "where the two change the same thing, %s takes precedence and this tool says so.\n"
+                "It shares the game with other mods. Where another mod it knows about changes the same thing as one of "
+                "these settings, that mod's setting takes precedence and this tool says so. MGSPatriotFix is recognised "
+                "today; support for more mods will be added.\n"
                 "\n"
                 "Nothing here phones home. There is no updater and no telemetry; the only files touched are "
                 "%s.settings and the log.",
-                PFC_NAME, PFC_NEIGHBOUR_NAME, PFC_NEIGHBOUR_NAME, PFC_NAME));
+                MGS4E_NAME, MGS4E_NAME));
         body->Wrap(FromDIP(620));
         outer->Add(body, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
-        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, PFC_REPO_URL, PFC_REPO_URL), 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, MGS4E_REPO_URL, MGS4E_REPO_URL), 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
         wxStaticText* credits = new wxStaticText(panel, wxID_ANY,
             "Built with safetyhook, Zydis, spdlog and wxWidgets. ASI loading by ThirteenAG's Ultimate ASI Loader.\n"
-            PFC_COPYRIGHT);
+            MGS4E_COPYRIGHT);
         credits->Wrap(FromDIP(620));
         outer->Add(credits, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
@@ -289,7 +297,7 @@ namespace pfc::tool
         Row row;
         row.fields = std::move(fields);
         const Field& first = *row.fields.front();
-        row.override = upstream::Overrides(first.section, first.key);
+        row.override = compat::Overrides(first.section, first.key);
 
         row.label = new wxStaticText(parent, wxID_ANY, wxEmptyString);
 
@@ -363,10 +371,7 @@ namespace pfc::tool
         wxString label = row.fields.size() == 1 ? wxString(row.fields.front()->key) : CommonLabel(row.fields);
         if (row.override)
         {
-            const std::string& text = *row.override;
-            const size_t eq = text.rfind(" = ");
-            const std::string value = eq == std::string::npos ? text : text.substr(eq + 3);
-            label += wxString::Format("  (%s: %s)", PFC_NEIGHBOUR_NAME, value);
+            label += wxString::Format("  (%s: %s)", row.override->modName, row.override->value);
         }
         return label;
     }
@@ -378,9 +383,10 @@ namespace pfc::tool
         wxString tip = shown->help;
         if (row.override)
         {
-            tip = wxString::Format("%s is installed and sets this itself (%s). %s ignores the value here while that is so; "
+            tip = wxString::Format("%s is installed and sets this itself (%s = %s). %s ignores the value here while that is so; "
                                    "change it in %s's own settings.\n\n",
-                                   PFC_NEIGHBOUR_NAME, *row.override, PFC_DISPLAY_NAME, PFC_NEIGHBOUR_NAME) + tip;
+                                   row.override->modName, row.override->theirKey, row.override->value, MGS4E_DISPLAY_NAME,
+                                   row.override->modName) + tip;
         }
         return tip;
     }
@@ -551,7 +557,7 @@ namespace pfc::tool
         ReadControls();
         if (event.CanVeto() && m_Settings.Dirty())
         {
-            const int answer = wxMessageBox("Save your changes before closing?", PFC_DISPLAY_NAME,
+            const int answer = wxMessageBox("Save your changes before closing?", MGS4E_DISPLAY_NAME,
                                             wxYES_NO | wxCANCEL | wxICON_QUESTION, this);
             if (answer == wxCANCEL)
             {

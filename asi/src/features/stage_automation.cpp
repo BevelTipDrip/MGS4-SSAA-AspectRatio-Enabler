@@ -97,16 +97,16 @@ namespace
 
     bool ResolveTextSection()
     {
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(pfc::game::Module());
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(mgs4e::game::Module());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            reinterpret_cast<const uint8_t*>(pfc::game::Module()) + dos->e_lfanew);
+            reinterpret_cast<const uint8_t*>(mgs4e::game::Module()) + dos->e_lfanew);
 
         const auto* section = IMAGE_FIRST_SECTION(nt);
         for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
         {
             if (std::memcmp(section->Name, ".text", 5) == 0)
             {
-                g_TextBegin = reinterpret_cast<uint8_t*>(pfc::game::Module()) + section->VirtualAddress;
+                g_TextBegin = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + section->VirtualAddress;
                 g_TextSize = section->Misc.VirtualSize;
                 return true;
             }
@@ -163,7 +163,7 @@ namespace
 
     uintptr_t Rva(uintptr_t address)
     {
-        return address - reinterpret_cast<uintptr_t>(pfc::game::Module());
+        return address - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
     }
 
     uintptr_t Rva(const void* address)
@@ -188,7 +188,7 @@ namespace
             std::memcpy(&source, node->nameStorage, sizeof(source));
         }
 
-        if (!pfc::mem::Readable(source, node->nameSize + 1) || source[node->nameSize] != '\0')
+        if (!mgs4e::mem::Readable(source, node->nameSize + 1) || source[node->nameSize] != '\0')
         {
             return false;
         }
@@ -204,7 +204,7 @@ namespace
         {
             return true;
         }
-        if (!pfc::mem::Readable(node, sizeof(*node)))
+        if (!mgs4e::mem::Readable(node, sizeof(*node)))
         {
             return false;
         }
@@ -240,7 +240,7 @@ namespace
         }
 
         StageMapNode* head = *StageMapHeadStorage;
-        if (!pfc::mem::Readable(head, sizeof(*head)) || head->isNil == 0)
+        if (!mgs4e::mem::Readable(head, sizeof(*head)) || head->isNil == 0)
         {
             return false;
         }
@@ -726,28 +726,28 @@ namespace StageAutomation
         }
 
         StageMapHeadStorage = reinterpret_cast<StageMapNode**>(
-            pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(fastLoadStage + 0x88)));
+            mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(fastLoadStage + 0x88)));
         FastLoadStageId = reinterpret_cast<uint32_t*>(
-            pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(fastLoadStage + 0x124)));
+            mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(fastLoadStage + 0x124)));
         FastLoadMode = FastLoadStageId + 1;
 
         // The flags live one dword past the operand of the `cmp dword [rip+d], 1` at +0xAD;
         // that instruction tests the neighbouring field, not the flags themselves.
         StageRequestFlags = reinterpret_cast<uint32_t*>(
-            pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(stageRequestHandler + 0xAF)) + 1);
+            mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(stageRequestHandler + 0xAF)) + 1);
 
         StageRequestBlocked = reinterpret_cast<StageRequestBlockedDelegate>(
-            pfc::mem::CallTarget(stageRequestHandler + 0x04));
+            mgs4e::mem::CallTarget(stageRequestHandler + 0x04));
         SetStageName = reinterpret_cast<SetStageNameDelegate>(
-            pfc::mem::CallTarget(stageRequestHandler + 0xA8));
+            mgs4e::mem::CallTarget(stageRequestHandler + 0xA8));
         FinalizeStageRequest = reinterpret_cast<FinalizeStageRequestDelegate>(
-            pfc::mem::CallTarget(stageRequestHandler + 0xD2));
+            mgs4e::mem::CallTarget(stageRequestHandler + 0xD2));
 
         // Optional - only drives the on-screen status line.
         if (stageNameOverlay && stageNameOverlay[0x77] == 0xE8)
         {
             DebugText = reinterpret_cast<DebugTextDelegate>(
-                pfc::mem::CallTarget(stageNameOverlay + 0x77));
+                mgs4e::mem::CallTarget(stageNameOverlay + 0x77));
         }
 
         spdlog::info("MGS4: Stage automation: uiFrame +{:X}, fastLoadStage +{:X}, "

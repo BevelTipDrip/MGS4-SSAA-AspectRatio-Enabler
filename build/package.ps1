@@ -1,11 +1,11 @@
 # Packages a release zip from bin\Release:
 #
-#   PFCompanion_<version>.zip
-#     PF Companion.exe
+#   MGS4Enabler_<version>.zip
+#     MGS4Enabler.exe
 #     README.md
 #     UltimateASILoader_LICENSE.md
 #     MGS4\winmm.dll                  Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
-#     MGS4\scripts\PFCompanion.asi
+#     MGS4\scripts\MGS4Enabler.asi
 #
 # The loader is not in this repository. Pass -LoaderZip with the Ultimate-ASI-Loader_x64.zip
 # from https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases (or drop it in build\loader\).
@@ -22,13 +22,13 @@ $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
 # Version from the shared header, so the zip name cannot drift from the binaries.
 $versionHeader = Get-Content (Join-Path $root 'shared\version.hpp') -Raw
 $parts = 'MAJOR', 'MINOR', 'PATCH' | ForEach-Object {
-    [regex]::Match($versionHeader, "#define\s+PFC_VERSION_$_\s+(\d+)").Groups[1].Value
+    [regex]::Match($versionHeader, "#define\s+MGS4E_VERSION_$_\s+(\d+)").Groups[1].Value
 }
 $version = $parts -join '.'
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Could not read the version from shared\version.hpp (got '$version')." }
 
-$asi = Join-Path $root 'bin\Release\PFCompanion.asi'
-$exe = Join-Path $root 'bin\Release\PF Companion.exe'
+$asi = Join-Path $root 'bin\Release\MGS4Enabler.asi'
+$exe = Join-Path $root 'bin\Release\MGS4Enabler.exe'
 foreach ($f in $asi, $exe) {
     if (-not (Test-Path $f)) { throw "Missing $f - run build\build.cmd first." }
 }
@@ -54,12 +54,12 @@ if (-not $loaderDll) { throw "No DLL inside $LoaderZip." }
 $loaderVersion = (Get-Item $loaderDll.FullName).VersionInfo.ProductVersion
 Copy-Item $loaderDll.FullName (Join-Path $stage 'MGS4\winmm.dll')
 
-Copy-Item $asi (Join-Path $stage 'MGS4\scripts\PFCompanion.asi')
-Copy-Item $exe (Join-Path $stage 'PF Companion.exe')
+Copy-Item $asi (Join-Path $stage 'MGS4\scripts\MGS4Enabler.asi')
+Copy-Item $exe (Join-Path $stage 'MGS4Enabler.exe')
 Copy-Item (Join-Path $root 'README.md') (Join-Path $stage 'README.md')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
 
-$zip = Join-Path $out "PFCompanion_$version.zip"
+$zip = Join-Path $out "MGS4Enabler_$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Push-Location $stage
 try {
@@ -71,6 +71,6 @@ Remove-Item $stage -Recurse -Force
 Remove-Item $loaderDir -Recurse -Force
 
 Write-Host "Packaged $zip"
-Write-Host "  PFCompanion.asi  $((Get-Item $asi).Length) bytes"
-Write-Host "  PF Companion.exe $((Get-Item $exe).Length) bytes"
+Write-Host "  MGS4Enabler.asi  $((Get-Item $asi).Length) bytes"
+Write-Host "  MGS4Enabler.exe $((Get-Item $exe).Length) bytes"
 Write-Host "  Ultimate ASI Loader $loaderVersion as MGS4\winmm.dll"

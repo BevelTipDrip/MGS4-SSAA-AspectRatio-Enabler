@@ -1,6 +1,6 @@
 # Tooling
 
-**Settings:** none user-facing. Everything here is off by default and absent from `PF Companion.exe`
+**Settings:** none user-facing. Everything here is off by default and absent from `MGS4Enabler.exe`
 **Implements:** `asi/src/features/stage_automation.cpp`, `asi/src/features/render_pipeline.cpp`,
 `asi/src/core/config.cpp` (`ChooseFile`), `C:\mgspf_tools\*.ps1`
 
@@ -9,11 +9,11 @@ mode**, so a normal install never touches any of it.
 
 ## Lab mode
 
-The research keys are only read from `PFCompanion.lab.settings` in the game root, and only when
-the harness has dropped a `PFCompanion.lab` marker next to it less than fifteen minutes before
+The research keys are only read from `MGS4Enabler.lab.settings` in the game root, and only when
+the harness has dropped a `MGS4Enabler.lab` marker next to it less than fifteen minutes before
 the game came up. The ASI deletes the marker as it reads it, so a lab boot cannot leak into the
 user's next normal launch; a stale marker is ignored and cleared the same way. The user's own
-`PFCompanion.settings` is never touched or swapped. The log says `LAB MODE` right after the
+`MGS4Enabler.settings` is never touched or swapped. The log says `LAB MODE` right after the
 settings-file line when it is in effect.
 
 ## The test loop
@@ -44,7 +44,7 @@ kill is itself one way that flag gets stuck.
   `mgs4.exe` Steam's environment, so its DRM stub asks Steam to relaunch and exits 53. Steam then
   shows a custom-arguments prompt drawn *inside* its own client window — not a top-level window,
   so it cannot be found by enumeration and Enter does not reach its Continue button.
-- **Kill `launcher_original.exe` too.** With MGSPatriotFix installed, its launcher bypass falls
+- **Kill `launcher_original.exe` too.** With a launcher-bypass mod installed, its bypass falls
   back to that executable when `CreateProcessW` fails, but the fallback can never work: Unity
   derives its data folder from the executable name. It puts up a modal instead, and that modal
   keeps Steam's `Running` flag set, which makes every later `steam://rungameid` silently do
@@ -108,7 +108,7 @@ capture would additionally need the process made DPI-aware.
 
 ## UI research diagnostics
 
-Behind `[Graphics]` keys in `PFCompanion.lab.settings` (lab mode only; see above). The useful ones:
+Behind `[Graphics]` keys in `MGS4Enabler.lab.settings` (lab mode only; see above). The useful ones:
 
 | Key | What it does |
 | --- | --- |
@@ -171,7 +171,7 @@ Both of these block a run and neither comes from the game, so neither appears in
 > There should be a 'launcher_original_Data' folder next to the executable
 
 - **Owner:** `launcher_original.exe`, a normal top-level window
-- **When:** MGSPatriotFix's launcher bypass (not part of PF Companion) falls back to the renamed
+- **When:** a launcher-bypass mod (not part of this one) falls back to the renamed
   original after `CreateProcessW` on the game fails
 - **Why it matters:** the fallback can never succeed, because Unity derives its data folder from
   the executable name and the folder is still `launcher_Data`. Worse, the modal keeps Steam's

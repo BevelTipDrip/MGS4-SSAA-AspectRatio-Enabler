@@ -1,8 +1,8 @@
 #pragma once
 
-// Section, key and option names in PFCompanion.settings. Shared by the ASI, which reads them,
+// Section, key and option names in MGS4Enabler.settings. Shared by the ASI, which reads them,
 // and the settings tool, which writes them. Change a string here and both sides follow.
-namespace pfc::keys
+namespace mgs4e::keys
 {
     constexpr const char* Graphics = "Graphics";
     constexpr const char* Debugging = "Debugging";

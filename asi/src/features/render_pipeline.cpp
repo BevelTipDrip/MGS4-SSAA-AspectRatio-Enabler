@@ -7,7 +7,7 @@
 #include "mem.hpp"
 #include "graphics_settings.hpp"
 #include "log.hpp"
-#include "upstream.hpp"
+#include "compat.hpp"
 #include "settings_keys.hpp"
 
 #include <d3d12.h>
@@ -65,7 +65,7 @@ namespace
 
             HMODULE owner = nullptr;
             if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCSTR>(address), &owner) || owner != pfc::game::Module())
+                reinterpret_cast<LPCSTR>(address), &owner) || owner != mgs4e::game::Module())
             {
                 continue;
             }
@@ -94,7 +94,7 @@ namespace
 
             HMODULE owner = nullptr;
             if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCSTR>(address), &owner) || owner != pfc::game::Module())
+                reinterpret_cast<LPCSTR>(address), &owner) || owner != mgs4e::game::Module())
             {
                 continue;
             }
@@ -120,7 +120,7 @@ namespace
 
     int32_t* GameInt(uintptr_t rva)
     {
-        return reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + rva);
+        return reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + rva);
     }
 
     // Watches the render size globals and reports every change with a timestamp, so we
@@ -222,7 +222,7 @@ namespace
     void ScanForResolutionGlobals(int width, int height)
     {
         MODULEINFO moduleInfo {};
-        if (!GetModuleInformation(GetCurrentProcess(), pfc::game::Module(), &moduleInfo, sizeof(moduleInfo)))
+        if (!GetModuleInformation(GetCurrentProcess(), mgs4e::game::Module(), &moduleInfo, sizeof(moduleInfo)))
         {
             spdlog::error("MGS4: Resolution scan: GetModuleInformation failed.");
             return;
@@ -278,7 +278,7 @@ namespace
                         for (int i = -8; i <= 12; i++)
                         {
                             const auto* neighbour = reinterpret_cast<const int32_t*>(scan) + i;
-                            if (!pfc::mem::Readable(neighbour, sizeof(int32_t)))
+                            if (!mgs4e::mem::Readable(neighbour, sizeof(int32_t)))
                             {
                                 continue;
                             }
@@ -303,7 +303,7 @@ namespace
     void ScanForSingleInt(int value, const char* label)
     {
         MODULEINFO moduleInfo {};
-        if (!GetModuleInformation(GetCurrentProcess(), pfc::game::Module(), &moduleInfo, sizeof(moduleInfo)))
+        if (!GetModuleInformation(GetCurrentProcess(), mgs4e::game::Module(), &moduleInfo, sizeof(moduleInfo)))
         {
             return;
         }
@@ -363,7 +363,7 @@ namespace
     std::string ReadAsciiAt(uintptr_t pointer)
     {
         const auto* text = reinterpret_cast<const char*>(pointer);
-        if (pointer < 0x10000 || !pfc::mem::Readable(text, 4))
+        if (pointer < 0x10000 || !mgs4e::mem::Readable(text, 4))
         {
             return {};
         }
@@ -371,7 +371,7 @@ namespace
         std::string name;
         for (int c = 0; c < 64; c++)
         {
-            if (!pfc::mem::Readable(text + c, 1))
+            if (!mgs4e::mem::Readable(text + c, 1))
             {
                 break;
             }
@@ -400,7 +400,7 @@ namespace
         for (int i = -12; i <= 2; i++)
         {
             const auto* slot = reinterpret_cast<const int32_t*>(at) + i;
-            if (!pfc::mem::Readable(slot, sizeof(uintptr_t)))
+            if (!mgs4e::mem::Readable(slot, sizeof(uintptr_t)))
             {
                 continue;
             }
@@ -422,7 +422,7 @@ namespace
     // Stride-agnostic, so it works without having to pin down the exact struct layout.
     void DumpNamedTable(uintptr_t startRva, uintptr_t endRva)
     {
-        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
         int printed = 0;
 
         spdlog::info("MGS4: Named table dump, mgs4.exe+0x{:X}..+0x{:X}:", startRva, endRva);
@@ -430,7 +430,7 @@ namespace
         for (uintptr_t offset = startRva; offset + 16 <= endRva && printed < 120; offset += 4)
         {
             const auto* slot = base + offset;
-            if (!pfc::mem::Readable(slot, 16))
+            if (!mgs4e::mem::Readable(slot, 16))
             {
                 continue;
             }
@@ -1339,10 +1339,10 @@ namespace
     // Read-only: it never writes to the image.
     void ScanNarrowingConversions()
     {
-        const auto imageBase = reinterpret_cast<uintptr_t>(pfc::game::Module());
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(pfc::game::Module());
+        const auto imageBase = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(mgs4e::game::Module());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            reinterpret_cast<const uint8_t*>(pfc::game::Module()) + dos->e_lfanew);
+            reinterpret_cast<const uint8_t*>(mgs4e::game::Module()) + dos->e_lfanew);
 
         uint8_t* textStart = nullptr;
         size_t textSize = 0;
@@ -2348,7 +2348,7 @@ namespace
         std::vector<std::pair<uint8_t*, uint8_t*>> ranges;
 
         MODULEINFO moduleInfo {};
-        if (!GetModuleInformation(GetCurrentProcess(), pfc::game::Module(), &moduleInfo, sizeof(moduleInfo)))
+        if (!GetModuleInformation(GetCurrentProcess(), mgs4e::game::Module(), &moduleInfo, sizeof(moduleInfo)))
         {
             return ranges;
         }
@@ -2443,7 +2443,7 @@ namespace
                 {
                     if (q[0] == 0x89 && q[1] == 0x05) // MOV [rip+disp32], EAX
                     {
-                        return reinterpret_cast<int*>(pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(q) + 2));
+                        return reinterpret_cast<int*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(q) + 2));
                     }
                 }
             }
@@ -2526,9 +2526,9 @@ namespace
     // disassembler agreeing on a base address.
     void LogDisassembly(uintptr_t rva, size_t length)
     {
-        auto* const start = reinterpret_cast<uint8_t*>(pfc::game::Module()) + rva;
+        auto* const start = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + rva;
 
-        if (!pfc::mem::Readable(start, length))
+        if (!mgs4e::mem::Readable(start, length))
         {
             spdlog::error("MGS4: Disassembly: mgs4.exe+{:X} (+{} bytes) is not readable.", rva, length);
             return;
@@ -2588,7 +2588,7 @@ namespace
 
     void ScanFixedPointSites()
     {
-        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
         const auto* sections = IMAGE_FIRST_SECTION(nt);
@@ -3276,8 +3276,8 @@ namespace
 
             for (const uintptr_t rva : g_FixedPointCandidates)
             {
-                const uintptr_t address = reinterpret_cast<uintptr_t>(pfc::game::Module()) + rva;
-                if (!pfc::mem::Readable(reinterpret_cast<void*>(address), 1))
+                const uintptr_t address = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + rva;
+                if (!mgs4e::mem::Readable(reinterpret_cast<void*>(address), 1))
                 {
                     continue;
                 }
@@ -3347,7 +3347,7 @@ namespace
         int armed = 0;
         for (auto& site : g_TrapSites)
         {
-            if (WriteByteAt(reinterpret_cast<uintptr_t>(pfc::game::Module()) + site.rva, 0xCC))
+            if (WriteByteAt(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva, 0xCC))
             {
                 site.armed = true;
                 armed++;
@@ -3367,7 +3367,7 @@ namespace
         {
             if (site.armed)
             {
-                WriteByteAt(reinterpret_cast<uintptr_t>(pfc::game::Module()) + site.rva, site.original);
+                WriteByteAt(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva, site.original);
                 site.armed = false;
                 restored++;
             }
@@ -3428,7 +3428,7 @@ namespace
             // here it has not - RIP is the INT3 itself, so that lookup was always one byte off
             // and never matched, which is what sent these into the game's crash handler.
             const auto hit = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
-            const uintptr_t rva = hit - reinterpret_cast<uintptr_t>(pfc::game::Module());
+            const uintptr_t rva = hit - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
             // No lock: the site list is fixed once built, and only the flags inside it change.
             for (size_t i = 0; i < g_TrapSites.size(); i++)
@@ -3448,7 +3448,7 @@ namespace
                         const auto address = static_cast<uintptr_t>(
                             base64 + static_cast<uint64_t>(site.displacement));
 
-                        if (pfc::mem::Readable(reinterpret_cast<void*>(address), 4))
+                        if (mgs4e::mem::Readable(reinterpret_cast<void*>(address), 4))
                         {
                             int32_t full {};
                             std::memcpy(&full, reinterpret_cast<void*>(address), sizeof(full));
@@ -3539,7 +3539,7 @@ namespace
             if (g_TrapActive.load() && index < static_cast<int>(g_TrapSites.size()))
             {
                 auto& site = g_TrapSites[index];
-                if (!site.armed && WriteByteAt(reinterpret_cast<uintptr_t>(pfc::game::Module()) + site.rva, 0xCC))
+                if (!site.armed && WriteByteAt(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva, 0xCC))
                 {
                     site.armed = true;
                 }
@@ -3553,7 +3553,7 @@ namespace
             const bool isWrite = info->ExceptionRecord->ExceptionInformation[0] == 1;
             const auto address = static_cast<uintptr_t>(info->ExceptionRecord->ExceptionInformation[1]);
             const uintptr_t rip = info->ContextRecord->Rip;
-            const uintptr_t rva = rip - reinterpret_cast<uintptr_t>(pfc::game::Module());
+            const uintptr_t rva = rip - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
             // An upload buffer we guarded at creation.
             //
@@ -3573,7 +3573,7 @@ namespace
 
                     if (isWrite)
                     {
-                        guard.writer = rip - reinterpret_cast<uintptr_t>(pfc::game::Module());
+                        guard.writer = rip - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
                         guard.guarded = false;
                     }
                     else
@@ -3646,7 +3646,7 @@ namespace
 
                 if (site.isRenderSizeWatch)
                 {
-                    const uintptr_t caller = ctx->Rip - reinterpret_cast<uintptr_t>(pfc::game::Module());
+                    const uintptr_t caller = ctx->Rip - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
                     bool isNew = false;
                     {
@@ -3792,7 +3792,7 @@ namespace
                     for (int i = 0; i < g_BreakpointCount; i++)
                     {
                         const uintptr_t address =
-                            reinterpret_cast<uintptr_t>(pfc::game::Module()) + g_BreakpointSites[i].rva;
+                            reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + g_BreakpointSites[i].rva;
 
                         const uintptr_t target = g_BreakpointSites[i].isWatch
                             ? g_BreakpointSites[i].watchAddress : address;
@@ -4115,7 +4115,7 @@ namespace
 
             if (delta > -256 && delta < 256)
             {
-                const uintptr_t rva = g_GuardLog[i].rip - reinterpret_cast<uintptr_t>(pfc::game::Module());
+                const uintptr_t rva = g_GuardLog[i].rip - reinterpret_cast<uintptr_t>(mgs4e::game::Module());
                 spdlog::info("MGS4: Guard: write at {:+d} bytes by {}",
                     delta, (rva > 0x241BE000)
                         ? std::format("a module other than mgs4.exe (rip 0x{:X})", g_GuardLog[i].rip)
@@ -4200,7 +4200,7 @@ namespace
             for (intptr_t delta = -kBefore; delta < kAfter; delta += 16)
             {
                 const uintptr_t line = found + delta;
-                if (!pfc::mem::Readable(reinterpret_cast<void*>(line), 16))
+                if (!mgs4e::mem::Readable(reinterpret_cast<void*>(line), 16))
                 {
                     continue;
                 }
@@ -4374,7 +4374,7 @@ namespace
     {
         const auto descriptor = reinterpret_cast<uint8_t*>(ctx.rdx);
         uint16_t count = 0;
-        if (pfc::mem::Readable(descriptor + 0x12, sizeof(count)))
+        if (mgs4e::mem::Readable(descriptor + 0x12, sizeof(count)))
         {
             std::memcpy(&count, descriptor + 0x12, sizeof(count));
         }
@@ -4394,7 +4394,7 @@ namespace
     {
         const auto descriptor = reinterpret_cast<uint8_t*>(ctx.r8);
         uint16_t count = 0;
-        if (pfc::mem::Readable(descriptor + 0x10, sizeof(count)))
+        if (mgs4e::mem::Readable(descriptor + 0x10, sizeof(count)))
         {
             std::memcpy(&count, descriptor + 0x10, sizeof(count));
         }
@@ -4409,7 +4409,7 @@ namespace
     {
         static std::atomic<bool> done { false };
         if (done.load() || !source || span == 0 || span > (1u << 20)
-            || !pfc::mem::Readable(source, span))
+            || !mgs4e::mem::Readable(source, span))
         {
             return;
         }
@@ -4450,7 +4450,7 @@ namespace
         }
 
         const size_t span = static_cast<size_t>(count) * array.stride;
-        if (count == 0 || !pfc::mem::Readable(source, span))
+        if (count == 0 || !mgs4e::mem::Readable(source, span))
         {
             spdlog::info("MGS4: UI array {}: source 0x{:X}, count {} - not readable.",
                 array.label, reinterpret_cast<uintptr_t>(source), count);
@@ -5094,7 +5094,7 @@ namespace
 
             BreakpointSite site { rva, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_NONE, 0 };
 
-            auto* const at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + rva;
+            auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + rva;
             if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, 16, &instruction, operands))
                 && instruction.operand_count_visible >= 2)
             {
@@ -5220,7 +5220,7 @@ namespace
 
         for (size_t i = 0; i < std::size(kFixedPointStores); i++)
         {
-            auto* const at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + kFixedPointStores[i];
+            auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kFixedPointStores[i];
 
             if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, 16, &instruction, operands))
                 || instruction.operand_count_visible < 2
@@ -5324,7 +5324,7 @@ namespace
         std::memcpy(after, reinterpret_cast<const void*>(object + kDumpBase), sizeof(after));
 
         const auto caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
-        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
         spdlog::info("MGS4: UI layout #{}: obj={:X} rect=({},{} {}x{}) ret={} from {}{:X}",
             count, object, x, y, width, height, result,
             (caller >= base) ? "+" : "@",
@@ -5356,7 +5356,7 @@ namespace
 
     void InstallUiLayoutProbe()
     {
-        auto* const at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + kUiLayoutConverterRva;
+        auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kUiLayoutConverterRva;
 
         // Verify before trusting: the RVA comes from another project's research against one
         // specific executable build, and .text is encrypted on disk so this is the only place
@@ -5413,7 +5413,7 @@ namespace
     // from the live process rather than the file matters here: .text is encrypted on disk.
     void LogStringReferences(const std::string& needle)
     {
-        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
         const auto* sections = IMAGE_FIRST_SECTION(nt);
@@ -5553,7 +5553,7 @@ namespace
     // shapes - which is how the last several attempts went wrong.
     void LogDisplacementReferences(int64_t displacement)
     {
-        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
         const auto* sections = IMAGE_FIRST_SECTION(nt);
@@ -5678,8 +5678,8 @@ namespace
                         const int x = atWindowSize ? *pWindowResX : bufferX;
                         const int y = atWindowSize ? *pWindowResY : bufferY;
 
-                        pfc::mem::Poke<int>(reinterpret_cast<uintptr_t>(pInternalResX), x);
-                        pfc::mem::Poke<int>(reinterpret_cast<uintptr_t>(pInternalResY), y);
+                        mgs4e::mem::Poke<int>(reinterpret_cast<uintptr_t>(pInternalResX), x);
+                        mgs4e::mem::Poke<int>(reinterpret_cast<uintptr_t>(pInternalResY), y);
 
                         spdlog::info("MGS4: UI coordinate probe: bufferSize globals now {}x{} ({}).",
                             x, y, atWindowSize ? "window size" : "render buffer size");
@@ -5736,7 +5736,7 @@ namespace
                     if (isDown && !wasDown && g_PixCaptureNextFrame)
                     {
                         const std::filesystem::path target =
-                            pfc::game::Root() / std::format("mgs4_capture_{}.wpix", ++captureIndex);
+                            mgs4e::game::Root() / std::format("mgs4_capture_{}.wpix", ++captureIndex);
 
                         const HRESULT result = g_PixCaptureNextFrame(target.wstring().c_str(), 1);
 
@@ -5798,7 +5798,7 @@ namespace
     // to the expected source, rather than assuming an instruction length.
     bool RepointGlobalRead(uintptr_t readRva, uintptr_t fromRva, uintptr_t toRva)
     {
-        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
         uint8_t* const instruction = base + readRva;
 
         const auto fromAddress = reinterpret_cast<uintptr_t>(base + fromRva);
@@ -5812,7 +5812,7 @@ namespace
         for (int offset = 2; offset <= 6; offset++)
         {
             uint8_t* const field = instruction + offset;
-            if (!pfc::mem::Readable(field, sizeof(int32_t)))
+            if (!mgs4e::mem::Readable(field, sizeof(int32_t)))
             {
                 continue;
             }
@@ -5837,7 +5837,7 @@ namespace
                     return false;
                 }
 
-                pfc::mem::Poke<int32_t>(reinterpret_cast<uintptr_t>(field), static_cast<int32_t>(updated));
+                mgs4e::mem::Poke<int32_t>(reinterpret_cast<uintptr_t>(field), static_cast<int32_t>(updated));
                 return true;
             }
         }
@@ -5932,7 +5932,7 @@ namespace
         // The neighbour rewrites every anisotropic sampler's MaxAnisotropy whenever it is
         // loaded, so our CreateSampler hook would only ever stack on top of it.
         if (iAnisotropicFiltering > 0
-            && pfc::upstream::Yields(pfc::keys::Graphics, pfc::keys::AnisotropicFiltering))
+            && mgs4e::compat::Yields(mgs4e::keys::Graphics, mgs4e::keys::AnisotropicFiltering))
         {
             iAnisotropicFiltering = 0;
         }
@@ -6078,8 +6078,8 @@ namespace
 
         forEachRva(sDumpFloats, "Constant dump", [](uintptr_t rva)
             {
-                auto* const at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + rva;
-                if (!pfc::mem::Readable(at, sizeof(float)))
+                auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + rva;
+                if (!mgs4e::mem::Readable(at, sizeof(float)))
                 {
                     spdlog::error("MGS4: Constant dump: mgs4.exe+{:X} is not readable.", rva);
                     return;
@@ -6113,11 +6113,11 @@ namespace
                 // wrapped anchor can be found in a stable allocation rather than in the
                 // per-frame D3D12 ring the vertex buffers rotate through.
                 UiInstanceSource_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pfc::game::Module())
+                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
                         + kRvaUiInstanceSourceLoad),
                     UiInstanceSourceProbe);
                 UiInstanceSourceB_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pfc::game::Module())
+                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
                         + kRvaUiInstanceSourceLoadB),
                     UiInstanceSourceProbeB);
                 spdlog::info("MGS4: UI instance source probes: A at +{:X} {}, B at +{:X} {}.",
@@ -6153,7 +6153,7 @@ namespace
         // the match whose third store actually writes that global.
         uint8_t* RenderConfigResult = nullptr;
         {
-            const auto imageStart = reinterpret_cast<uintptr_t>(pfc::game::Module());
+            const auto imageStart = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             int* const bufferSizeX = ResolveRenderConfigGlobal("render.bufferSizeX");
             int* const windowSizeX = ResolveRenderConfigGlobal("render.windowSizeX");
 
@@ -6163,20 +6163,20 @@ namespace
             }
             else
             {
-                for (uint8_t* candidate : pfc::mem::FindAll(pfc::game::Module(),
+                for (uint8_t* candidate : mgs4e::mem::FindAll(mgs4e::game::Module(),
                     "E8 ?? ?? ?? ?? 89 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 89 05 ?? ?? ?? ?? E8 ?? ?? ?? ??"))
                 {
-                    auto* w = reinterpret_cast<int*>(pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x07));
-                    auto* h = reinterpret_cast<int*>(pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x12));
-                    auto* x = reinterpret_cast<int*>(pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x1D));
-                    auto* y = reinterpret_cast<int*>(pfc::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x28));
+                    auto* w = reinterpret_cast<int*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x07));
+                    auto* h = reinterpret_cast<int*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x12));
+                    auto* x = reinterpret_cast<int*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x1D));
+                    auto* y = reinterpret_cast<int*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(candidate) + 0x28));
 
                     // All four stores must be the globals we expect, each pair adjacent:
                     // windowSizeX/Y first, then bufferSizeX/Y.
                     if (w != windowSizeX || h != w + 1
                         || x != bufferSizeX || y != x + 1
-                        || !pfc::mem::Writable(w, sizeof(int) * 2)
-                        || !pfc::mem::Writable(x, sizeof(int) * 2))
+                        || !mgs4e::mem::Writable(w, sizeof(int) * 2)
+                        || !mgs4e::mem::Writable(x, sizeof(int) * 2))
                     {
                         continue;
                     }
@@ -6194,7 +6194,7 @@ namespace
                     spdlog::error("MGS4: Internal Resolution: render.bufferSizeX is at mgs4.exe+{:X}, but no signature match writes it. Skipping.",
                         reinterpret_cast<uintptr_t>(bufferSizeX) - imageStart);
                 }
-                else if (pfc::log::Verbose())
+                else if (mgs4e::log::Verbose())
                 {
                     spdlog::info("MGS4: Internal Resolution: matched at mgs4.exe+{:X}, windowSize at +{:X}/+{:X}, bufferSize at +{:X}/+{:X}.",
                         reinterpret_cast<uintptr_t>(RenderConfigResult) - imageStart,
@@ -6285,7 +6285,7 @@ namespace
                     *pInternalResX = targetX;
                     *pInternalResY = targetY;
                 });
-            PFC_LOG_HOOK(InternalResolutionMidHook, "MGS4: Internal Resolution")
+            MGS4E_LOG_HOOK(InternalResolutionMidHook, "MGS4: Internal Resolution")
 
             // Armed here rather than on a hotkey: the UI geometry is built during load, well
             // before anything could be pressed, so the consumer we are looking for has already
@@ -6305,11 +6305,11 @@ namespace
                 // wrapped anchor can be found in a stable allocation rather than in the
                 // per-frame D3D12 ring the vertex buffers rotate through.
                 UiInstanceSource_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pfc::game::Module())
+                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
                         + kRvaUiInstanceSourceLoad),
                     UiInstanceSourceProbe);
                 UiInstanceSourceB_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pfc::game::Module())
+                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
                         + kRvaUiInstanceSourceLoadB),
                     UiInstanceSourceProbeB);
                 spdlog::info("MGS4: UI instance source probes: A at +{:X} {}, B at +{:X} {}.",

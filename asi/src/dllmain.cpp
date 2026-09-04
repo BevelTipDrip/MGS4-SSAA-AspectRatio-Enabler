@@ -3,7 +3,7 @@
 #include "core/config.hpp"
 #include "core/game.hpp"
 #include "core/log.hpp"
-#include "core/upstream.hpp"
+#include "core/compat.hpp"
 #include "version.hpp"
 
 #include "features/render_pipeline.hpp"
@@ -14,11 +14,11 @@ namespace
     HANDLE g_InitMutex = nullptr;
     bool g_SecondCopy = false;
 
-    // One copy of PF Companion per process. A second copy (a stray .asi in another folder the
+    // One copy of MGS4 SSAA and Aspect Ratio Enabler per process. A second copy (a stray .asi in another folder the
     // loader also scans) would install every hook twice; it sees the mutex and stays inert.
     bool AnotherCopyIsLoaded()
     {
-        const std::wstring name = std::format(L"Local\\{}_Init_{}", L"" PFC_NAME, GetCurrentProcessId());
+        const std::wstring name = std::format(L"Local\\{}_Init_{}", L"" MGS4E_NAME, GetCurrentProcessId());
         g_InitMutex = CreateMutexW(nullptr, FALSE, name.c_str());
         return g_InitMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS;
     }
@@ -28,17 +28,17 @@ namespace
         static std::once_flag once;
         std::call_once(once, []
         {
-            pfc::game::Detect();
-            pfc::log::Initialize();
+            mgs4e::game::Detect();
+            mgs4e::log::Initialize();
 
-            if (!pfc::game::IsMgs4())
+            if (!mgs4e::game::IsMgs4())
             {
                 spdlog::warn("Not mgs4.exe - nothing to do.");
                 return;
             }
 
-            pfc::config::Load();
-            pfc::upstream::Detect();
+            mgs4e::config::Load();
+            mgs4e::compat::Detect();
 
             // Render pipeline first: it resolves the render size globals the aspect fixes
             // read, and calls GraphicsSettings and AspectRatio itself in the order they need.

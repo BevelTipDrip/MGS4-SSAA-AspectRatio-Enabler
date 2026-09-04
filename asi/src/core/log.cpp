@@ -7,7 +7,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/null_sink.h>
 
-namespace pfc::log
+namespace mgs4e::log
 {
     namespace
     {
@@ -19,14 +19,14 @@ namespace pfc::log
     {
         try
         {
-            const std::filesystem::path folder = pfc::game::Root() / "logs";
+            const std::filesystem::path folder = mgs4e::game::Root() / "logs";
             std::filesystem::create_directories(folder);
-            const std::filesystem::path file = folder / (std::string(PFC_NAME) + "_Game.log");
-            g_Logger = spdlog::basic_logger_mt("pfc", file.string(), /*truncate*/ true);
+            const std::filesystem::path file = folder / (std::string(MGS4E_NAME) + "_Game.log");
+            g_Logger = spdlog::basic_logger_mt("mgs4e", file.string(), /*truncate*/ true);
         }
         catch (const std::exception&)
         {
-            g_Logger = spdlog::null_logger_mt("pfc");
+            g_Logger = spdlog::null_logger_mt("mgs4e");
         }
 
         g_Logger->set_pattern("[%H:%M:%S.%e] [%l] %v");
@@ -34,8 +34,8 @@ namespace pfc::log
         g_Logger->flush_on(spdlog::level::info);
         spdlog::set_default_logger(g_Logger);
 
-        spdlog::info("{} {} loaded into {}.", PFC_DISPLAY_NAME, PFC_VERSION_STRING, pfc::game::ExePath().filename().string());
-        spdlog::info("Game root: {}", pfc::game::Root().string());
+        spdlog::info("{} {} loaded into {}.", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING, mgs4e::game::ExePath().filename().string());
+        spdlog::info("Game root: {}", mgs4e::game::Root().string());
     }
 
     bool Verbose()

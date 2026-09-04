@@ -11,11 +11,11 @@ Companion to `mgs4-rendering-research.md`, which holds the settled background on
 where active issues live. This file is the narrative of one investigation, kept for the
 record; it is not a status page.
 
-The investigation was done while this code lived inside a fork of MGSPatriotFix, so the file
-names, settings file and log it mentions are that fork's (`src/fixes/…`, `MGSPatriotFix.settings`,
-`MGSPatriotFix_Game.log`, its Config Tool). In PF Companion the same code is under
-`asi/src/features/`, the research keys are read from `PFCompanion.lab.settings` in lab mode
-(see [features/tooling.md](features/tooling.md)) and the log is `logs\PFCompanion_Game.log`.
+The investigation was done in an earlier build of this code that lived inside another mod, so
+the file names, settings file and log it mentions are that build's (`src/fixes/…`, the host
+mod's `.settings` file, its `_Game.log`, its Config Tool). Here the same code is under
+`asi/src/features/`, the research keys are read from `MGS4Enabler.lab.settings` in lab mode
+(see [features/tooling.md](features/tooling.md)) and the log is `logs\MGS4Enabler_Game.log`.
 
 **Status: SOLVED, AND FIXED AT THE SOURCE.** The producer is four `movsx` instructions that keep
 only the low 16 bits of a 32-bit coordinate; patching them removes the limit entirely. See §0a.
@@ -256,7 +256,7 @@ VCRUNTIME140.dll memcpy <- mgs4.exe+0x68A938 <- +0x666485 <- +0x666729 <- +0xE62
 ### Two gotchas worth keeping
 
 - **A read-or-write watch fires on our own diagnostics.** The anchor dump memcpys the same
-  address every frame, so every hit reported `MGSPatriotFix.asi` as the accessor. Anything the
+  address every frame, so every hit reported our own ASI as the accessor. Anything the
   diagnostics themselves read must be watched **write-only** (DR7 type 01, not 11).
 - **A still crosshair is never rewritten.** The wrapped coordinate is written once when the
   reticle is built. Holding aim - however long, and however much the view is moved - produces no
@@ -953,7 +953,7 @@ Each was tested, not assumed.
 ## 6. Tooling (all behind undocumented settings keys)
 
 All are read with `getValueOptional`, absent from the Config Tool, and **stripped if the Config
-Tool is opened** — edit `MGSPatriotFix.settings` by hand.
+Tool is opened** — edit the settings file by hand.
 
 | Key | What it does |
 | --- | --- |
@@ -1021,8 +1021,8 @@ Concrete instances:
 - Build: `MSBuild` at
   `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe`;
   needs `C:\Program Files\CMake\bin` on `PATH` for the Config Tool
-- Deploy: copy `x64\Release\MGSPatriotFix.asi` to `<game>\MGS4\`
-- Log: `<game>\logs\MGSPatriotFix_Game.log`, recreated per launch
+- Deploy: copy the built `.asi` to `<game>\MGS4\`
+- Log: `<game>\logs\<mod>_Game.log`, recreated per launch
 - **Launcher bypass installed**: `Launcher\launcher.exe` is a wrapper that goes straight into the
   game; the original is `launcher_original.exe`. Turnaround is seconds
 - Test config for this hunt: `Fix UI At High Resolutions=0`, `Internal Resolution Scale (%)=200`,

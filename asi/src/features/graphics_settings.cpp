@@ -6,7 +6,7 @@
 #include "mem.hpp"
 #include "log.hpp"
 #include "render_pipeline.hpp"
-#include "upstream.hpp"
+#include "compat.hpp"
 #include "settings_keys.hpp"
 
 #include <Zydis/Zydis.h>
@@ -134,10 +134,10 @@ namespace
         // game - 605MB of one-byte probes - and doing it here stalled startup badly enough that
         // the game never finished loading. The section header gives the executable range
         // directly, and it is committed for the life of the process.
-        const auto imageBase = reinterpret_cast<uintptr_t>(pfc::game::Module());
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(pfc::game::Module());
+        const auto imageBase = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(mgs4e::game::Module());
         const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            reinterpret_cast<const uint8_t*>(pfc::game::Module()) + dos->e_lfanew);
+            reinterpret_cast<const uint8_t*>(mgs4e::game::Module()) + dos->e_lfanew);
 
         uint8_t* textStart = nullptr;
         size_t textSize = 0;
@@ -370,7 +370,7 @@ namespace
         for (const auto& site : sites)
         {
             auto* const at = reinterpret_cast<uint8_t*>(
-                reinterpret_cast<uintptr_t>(pfc::game::Module()) + site.rva);
+                reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva);
 
             // Verify the bytes have not changed since the scan. The scan and this write are
             // separated by decoding work, and .text is being decrypted underneath us, so
@@ -444,9 +444,9 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
         // The group id in the instruction discriminates this from the otherwise identical
         // ShadowSampleCount (group 4) branch immediately above it.
         if (fShadowResolutionScale > 1.0
-            && !pfc::upstream::Yields(pfc::keys::Graphics, pfc::keys::ShadowResolutionScale))
+            && !mgs4e::compat::Yields(mgs4e::keys::Graphics, mgs4e::keys::ShadowResolutionScale))
         {
-            if (uint8_t* ShadowBufferSizeResult = pfc::mem::FindPattern(pfc::game::Module(),
+            if (uint8_t* ShadowBufferSizeResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
                 "48 8D 4B 30 E8 ?? ?? ?? ?? C7 45 ?? 05 00 00 00 49 8B 55 08",
                 "MGS4: Shadow Resolution"))
             {
@@ -483,7 +483,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
 
                         ctx.rax = (ctx.rax & ~0xFFFFFFFFull) | static_cast<uint32_t>(target);
                     });
-                PFC_LOG_HOOK(ShadowResolutionMidHook, "MGS4: Shadow Resolution")
+                MGS4E_LOG_HOOK(ShadowResolutionMidHook, "MGS4: Shadow Resolution")
             }
         }
 
@@ -498,7 +498,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
         // The game exposes FXAA in its own menu, but only as an on/off that needs a restart.
         if (iFxaaOverride >= 0)
         {
-            if (uint8_t* FxaaResult = pfc::mem::FindPattern(pfc::game::Module(),
+            if (uint8_t* FxaaResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
                 "0F B6 C3 48 8B 5C 24 ?? 48 8B 7C 24 ?? 48 83 C4 50 5D C3",
                 "MGS4: FXAA"))
             {
@@ -521,7 +521,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
                         }
                         ctx.rax = (ctx.rax & ~0xFFFFFFFFull) | wanted;
                     });
-                PFC_LOG_HOOK(FxaaMidHook, "MGS4: FXAA")
+                MGS4E_LOG_HOOK(FxaaMidHook, "MGS4: FXAA")
             }
         }
 
@@ -533,7 +533,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
         // best-looking setting rather than the worst.
         if (iFxaaQuality >= 0)
         {
-            if (uint8_t* FxaaParamResult = pfc::mem::FindPattern(pfc::game::Module(),
+            if (uint8_t* FxaaParamResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
                 "0F 5A C8 F3 0F 11 0D ?? ?? ?? ?? 48 83 C4 28 C3",
                 "MGS4: FXAA Quality"))
             {
@@ -559,7 +559,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
                         }
                         ctx.xmm1.f32[0] = wanted;
                     });
-                PFC_LOG_HOOK(FxaaQualityMidHook, "MGS4: FXAA Quality")
+                MGS4E_LOG_HOOK(FxaaQualityMidHook, "MGS4: FXAA Quality")
             }
         }
 
@@ -569,7 +569,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
         // and useful on its own: the highest preset ships 7.
         if (iShadowSampleCount > 0)
         {
-            if (uint8_t* ShadowSampleCountResult = pfc::mem::FindPattern(pfc::game::Module(),
+            if (uint8_t* ShadowSampleCountResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
                 "48 8D 4B 30 E8 ?? ?? ?? ?? C7 45 ?? 04 00 00 00",
                 "MGS4: Shadow Samples"))
             {
@@ -587,7 +587,7 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
                             base, iShadowSampleCount);
                         ctx.rax = (ctx.rax & ~0xFFFFFFFFull) | static_cast<uint32_t>(iShadowSampleCount);
                     });
-                PFC_LOG_HOOK(ShadowSampleCountMidHook, "MGS4: Shadow Samples")
+                MGS4E_LOG_HOOK(ShadowSampleCountMidHook, "MGS4: Shadow Samples")
             }
         }
 }

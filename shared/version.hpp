@@ -1,29 +1,27 @@
 #pragma once
 
-// PF Companion version and naming. Shared by the ASI and the settings tool.
+// MGS4 SSAA and Aspect Ratio Enabler: version and naming. Shared by the ASI and the settings
+// tool.
 //
-// PFC_NAME drives file names: PFCompanion.asi, PFCompanion.settings, PFCompanion.lab and the
-// log. PFC_DISPLAY_NAME is what people see in window titles and file properties.
+// MGS4E_NAME drives file names: MGS4Enabler.asi, MGS4Enabler.settings, MGS4Enabler.lab, the
+// log and the tool's exe. MGS4E_DISPLAY_NAME is what people see in window titles and file
+// properties.
 
-#define PFC_NAME          "PFCompanion"
-#define PFC_DISPLAY_NAME  "PF Companion"
-#define PFC_REPO_URL      "https://github.com/BevelTipDrip/PFCompanion"
+#define MGS4E_NAME          "MGS4Enabler"
+#define MGS4E_DISPLAY_NAME  "MGS4 SSAA and Aspect Ratio Enabler"
+#define MGS4E_REPO_URL      "https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler"
 
-#define PFC_VERSION_MAJOR 0
-#define PFC_VERSION_MINOR 0
-#define PFC_VERSION_PATCH 1
+#define MGS4E_VERSION_MAJOR 0
+#define MGS4E_VERSION_MINOR 0
+#define MGS4E_VERSION_PATCH 1
 
-#define PFC_STRINGIFY_(x) #x
-#define PFC_STRINGIFY(x) PFC_STRINGIFY_(x)
-#define PFC_VERSION_STRING PFC_STRINGIFY(PFC_VERSION_MAJOR) "." PFC_STRINGIFY(PFC_VERSION_MINOR) "." PFC_STRINGIFY(PFC_VERSION_PATCH)
+#define MGS4E_STRINGIFY_(x) #x
+#define MGS4E_STRINGIFY(x) MGS4E_STRINGIFY_(x)
+#define MGS4E_VERSION_STRING MGS4E_STRINGIFY(MGS4E_VERSION_MAJOR) "." MGS4E_STRINGIFY(MGS4E_VERSION_MINOR) "." MGS4E_STRINGIFY(MGS4E_VERSION_PATCH)
 
 // Resource metadata
-#define PFC_COMPANY_NAME     "BevelTipDrip"
-#define PFC_COPYRIGHT        "\xA9 2026 BevelTipDrip. MIT License."
-#define PFC_FILE_VERSION_RC  PFC_VERSION_MAJOR,PFC_VERSION_MINOR,PFC_VERSION_PATCH,0
+#define MGS4E_COMPANY_NAME     "BevelTipDrip"
+#define MGS4E_COPYRIGHT        "\xA9 2026 BevelTipDrip. MIT License."
+#define MGS4E_FILE_VERSION_RC  MGS4E_VERSION_MAJOR,MGS4E_VERSION_MINOR,MGS4E_VERSION_PATCH,0
 
-// The other mod PF Companion runs alongside. Its ASI loads before ours (alphabetical), and
-// where both patch the same thing its setting wins - see overlap_table.hpp.
-#define PFC_NEIGHBOUR_NAME          "MGSPatriotFix"
-#define PFC_NEIGHBOUR_ASI           "MGSPatriotFix.asi"
-#define PFC_NEIGHBOUR_SETTINGS_FILE "MGSPatriotFix.settings"
+// Other mods this one knows how to share the game with are listed in compat_table.hpp.

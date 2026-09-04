@@ -6,7 +6,7 @@
 #include "settings_keys.hpp"
 #include "version.hpp"
 
-namespace pfc::tool
+namespace mgs4e::tool
 {
     namespace
     {
@@ -15,10 +15,10 @@ namespace pfc::tool
         {
             if (field.type == Field::Type::Bool)
             {
-                const auto b = pfc::Ini::Convert<bool>(text);
+                const auto b = mgs4e::Ini::Convert<bool>(text);
                 return (b && *b) ? "true" : "false";
             }
-            return std::string(pfc::Ini::Trim(text));
+            return std::string(mgs4e::Ini::Trim(text));
         }
 
         // Choice values and anything with spaces are quoted so the line reads unambiguously.
@@ -32,25 +32,25 @@ namespace pfc::tool
 
     std::filesystem::path Settings::FileFor(const std::filesystem::path& gameRoot)
     {
-        return gameRoot / (PFC_NAME ".settings");
+        return gameRoot / (MGS4E_NAME ".settings");
     }
 
     bool Settings::Load(const std::filesystem::path& file)
     {
         m_Values.clear();
-        pfc::Ini ini;
+        mgs4e::Ini ini;
         const bool exists = ini.Load(file);
         m_Values = ini.Sections();
 
         // The setting's first shape was a plain on/off; carry its meaning into the choice.
-        auto& graphics = m_Values[pfc::keys::Graphics];
-        if (!graphics.contains(pfc::keys::UltrawideHud))
+        auto& graphics = m_Values[mgs4e::keys::Graphics];
+        if (!graphics.contains(mgs4e::keys::UltrawideHud))
         {
-            const auto legacy = graphics.find(pfc::keys::UltrawideHudFix);
+            const auto legacy = graphics.find(mgs4e::keys::UltrawideHudFix);
             if (legacy != graphics.end())
             {
-                const auto on = pfc::Ini::Convert<bool>(legacy->second);
-                graphics[pfc::keys::UltrawideHud] = (on && *on) ? pfc::keys::UltrawideHud_Expanded : pfc::keys::UltrawideHud_Stretched;
+                const auto on = mgs4e::Ini::Convert<bool>(legacy->second);
+                graphics[mgs4e::keys::UltrawideHud] = (on && *on) ? mgs4e::keys::UltrawideHud_Expanded : mgs4e::keys::UltrawideHud_Stretched;
                 graphics.erase(legacy);
             }
         }
@@ -66,7 +66,7 @@ namespace pfc::tool
         {
             auto& section = m_Values[f->section];
             const auto it = section.find(f->key);
-            if (it == section.end() || !f->Accepts(std::string(pfc::Ini::Trim(it->second))))
+            if (it == section.end() || !f->Accepts(std::string(mgs4e::Ini::Trim(it->second))))
             {
                 section[f->key] = f->DefaultText();
             }
@@ -87,7 +87,7 @@ namespace pfc::tool
 
     int Settings::ImportFrom(const std::filesystem::path& otherFile)
     {
-        pfc::Ini other;
+        mgs4e::Ini other;
         if (!other.Load(otherFile))
         {
             return 0;
@@ -96,11 +96,11 @@ namespace pfc::tool
         int imported = 0;
 
         // The legacy on/off, only when the choice itself is not there.
-        if (!other.Has(pfc::keys::Graphics, pfc::keys::UltrawideHud))
+        if (!other.Has(mgs4e::keys::Graphics, mgs4e::keys::UltrawideHud))
         {
-            if (const auto on = other.Get<bool>(pfc::keys::Graphics, pfc::keys::UltrawideHudFix))
+            if (const auto on = other.Get<bool>(mgs4e::keys::Graphics, mgs4e::keys::UltrawideHudFix))
             {
-                m_Values[pfc::keys::Graphics][pfc::keys::UltrawideHud] = *on ? pfc::keys::UltrawideHud_Expanded : pfc::keys::UltrawideHud_Stretched;
+                m_Values[mgs4e::keys::Graphics][mgs4e::keys::UltrawideHud] = *on ? mgs4e::keys::UltrawideHud_Expanded : mgs4e::keys::UltrawideHud_Stretched;
                 ++imported;
             }
         }
@@ -112,7 +112,7 @@ namespace pfc::tool
             {
                 continue;
             }
-            const std::string text(pfc::Ini::Trim(*raw));
+            const std::string text(mgs4e::Ini::Trim(*raw));
             if (!f->Accepts(text))
             {
                 continue;
@@ -122,11 +122,11 @@ namespace pfc::tool
         }
 
         // The two undocumented graphics keys travel too, so a tuned setup keeps working.
-        for (const char* key : { pfc::keys::FixReticleTruncation, pfc::keys::MaxInternalBufferWidth })
+        for (const char* key : { mgs4e::keys::FixReticleTruncation, mgs4e::keys::MaxInternalBufferWidth })
         {
-            if (const auto raw = other.Raw(pfc::keys::Graphics, key))
+            if (const auto raw = other.Raw(mgs4e::keys::Graphics, key))
             {
-                m_Values[pfc::keys::Graphics][key] = std::string(pfc::Ini::Trim(*raw));
+                m_Values[mgs4e::keys::Graphics][key] = std::string(mgs4e::Ini::Trim(*raw));
                 ++imported;
             }
         }
@@ -136,8 +136,8 @@ namespace pfc::tool
     std::optional<std::string> Settings::Save(const std::filesystem::path& file) const
     {
         std::string out;
-        out += "; " PFC_DISPLAY_NAME " " PFC_VERSION_STRING " settings. Edit with \"" PFC_DISPLAY_NAME ".exe\" or by hand;\n";
-        out += "; unknown keys are kept. Read by " PFC_NAME ".asi when the game starts.\n";
+        out += "; " MGS4E_DISPLAY_NAME " " MGS4E_VERSION_STRING " settings. Edit with \"" MGS4E_DISPLAY_NAME ".exe\" or by hand;\n";
+        out += "; unknown keys are kept. Read by " MGS4E_NAME ".asi when the game starts.\n";
 
         // Known sections first, in table order, each with its known keys in table order and
         // then whatever else the section held.

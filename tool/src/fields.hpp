@@ -5,11 +5,11 @@
 
 // The settings the tool edits, in the order they appear on screen.
 //
-// Every entry names a section and key in PFCompanion.settings (the strings come from
+// Every entry names a section and key in MGS4Enabler.settings (the strings come from
 // shared/settings_keys.hpp so the ASI reads what the tool writes), its type and default,
 // and the text shown as its tooltip. A field may depend on another in the same section:
 // it is only usable while the parent holds one of the listed values.
-namespace pfc::tool
+namespace mgs4e::tool
 {
     struct Field
     {

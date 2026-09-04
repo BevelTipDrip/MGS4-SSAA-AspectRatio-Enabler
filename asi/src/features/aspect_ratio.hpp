@@ -3,7 +3,7 @@
 // Aspect ratio correction for the game's UI.
 //
 // The implementation is a separate, private module checked out at external/ultrawide. When it
-// is present its own header is the one included here and PFCompanion.vcxproj compiles its
+// is present its own header is the one included here and MGS4Enabler.vcxproj compiles its
 // source; when it is absent this file declares the same interface and aspect_ratio_absent.cpp
 // provides an ApplyFixes() that only logs, so the project builds and runs without the ultrawide
 // fixes. The settings keys are read either way and are simply inert without the module.

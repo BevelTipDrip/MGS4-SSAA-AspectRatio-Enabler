@@ -2,7 +2,7 @@
 #include "aspect_ratio.hpp"
 #include "log.hpp"
 
-// Compiled only when external/ultrawide is not checked out (see PFCompanion.vcxproj). The
+// Compiled only when external/ultrawide is not checked out (see MGS4Enabler.vcxproj). The
 // module's header is then also absent, so the interface declared in aspect_ratio.hpp's
 // fallback branch is what the rest of the ASI links against.
 namespace AspectRatio

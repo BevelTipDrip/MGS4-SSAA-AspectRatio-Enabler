@@ -2,8 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
-// Logging goes to <root>\logs\PFCompanion_Game.log, truncated on every launch.
-namespace pfc::log
+// Logging goes to <root>\logs\MGS4Enabler_Game.log, truncated on every launch.
+namespace mgs4e::log
 {
     // Opens the log file and installs it as spdlog's default logger. Falls back to a
     // null logger if the file cannot be created, so callers never have to check.
@@ -20,11 +20,11 @@ namespace pfc::log
 
 // Reports whether a safetyhook hook (or anything convertible to bool) was installed.
 // A plain block, so it reads as a statement with or without a trailing semicolon.
-#define PFC_LOG_HOOK(hook, tag)                                        \
+#define MGS4E_LOG_HOOK(hook, tag)                                        \
     {                                                                  \
         if (hook)                                                      \
         {                                                              \
-            if (pfc::log::Verbose())                                   \
+            if (mgs4e::log::Verbose())                                   \
             {                                                          \
                 spdlog::info("{}: hook installed.", tag);              \
             }                                                          \

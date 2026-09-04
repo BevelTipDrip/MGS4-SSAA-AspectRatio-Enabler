@@ -4,7 +4,7 @@
 #include "game.hpp"
 #include "log.hpp"
 
-namespace pfc::mem
+namespace mgs4e::mem
 {
     namespace
     {
@@ -110,10 +110,10 @@ namespace pfc::mem
             spdlog::error("{}: pattern not found.", tag);
             return nullptr;
         }
-        if (pfc::log::Verbose())
+        if (mgs4e::log::Verbose())
         {
             const auto rva = reinterpret_cast<uintptr_t>(hit) - reinterpret_cast<uintptr_t>(module);
-            spdlog::info("{}: pattern found at {}+{:X}.", tag, pfc::game::ExePath().filename().string(), rva);
+            spdlog::info("{}: pattern found at {}+{:X}.", tag, mgs4e::game::ExePath().filename().string(), rva);
             if (FindAll(module, signature).size() > 1)
             {
                 spdlog::warn("{}: pattern is not unique; using the first match.", tag);

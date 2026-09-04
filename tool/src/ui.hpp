@@ -1,5 +1,6 @@
 #pragma once
 
+#include "compat.hpp"
 #include "fields.hpp"
 #include "settings_io.hpp"
 
@@ -8,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace pfc::tool
+namespace mgs4e::tool
 {
     class MainFrame : public wxFrame
     {
@@ -24,7 +25,7 @@ namespace pfc::tool
             std::vector<const Field*> fields;
             wxStaticText* label = nullptr;
             wxWindow* control = nullptr;
-            std::optional<std::string> override;   // MGSPatriotFix sets this; text shown beside the label
+            std::optional<compat::Override> override;   // another mod controls this field; shown beside the label
         };
 
         wxWindow* BuildGraphicsPage(wxWindow* parent, const Page& page);

@@ -11,7 +11,7 @@
 #include "render_pipeline.hpp"
 #include "stage_automation.hpp"
 
-namespace pfc::config
+namespace mgs4e::config
 {
     namespace
     {
@@ -22,14 +22,14 @@ namespace pfc::config
         // A present-but-malformed value is reported, since silently ignoring it would make
         // the user think the setting took.
         template<typename T>
-        void Read(const pfc::Ini& ini, const char* section, const char* key, T& out)
+        void Read(const mgs4e::Ini& ini, const char* section, const char* key, T& out)
         {
             const auto raw = ini.Raw(section, key);
             if (!raw)
             {
                 return;
             }
-            const auto value = pfc::Ini::Convert<T>(*raw);
+            const auto value = mgs4e::Ini::Convert<T>(*raw);
             if (!value)
             {
                 spdlog::warn("[{}] {}: could not read '{}', keeping the default.", section, key, *raw);
@@ -41,14 +41,14 @@ namespace pfc::config
         template<typename T>
         void Report(const char* section, const char* key, const T& value)
         {
-            if (pfc::log::Verbose())
+            if (mgs4e::log::Verbose())
             {
                 spdlog::info("Config: [{}] {} = {}", section, key, value);
             }
         }
 
-        // Which file to read. A lab boot is signalled by the harness dropping PFCompanion.lab
-        // next to a PFCompanion.lab.settings right before launch; if the marker is there and
+        // Which file to read. A lab boot is signalled by the harness dropping MGS4Enabler.lab
+        // next to a MGS4Enabler.lab.settings right before launch; if the marker is there and
         // fresh, that file is read instead and the research keys are honoured. The marker is
         // consumed here, so a lab boot cannot leak into the user's next normal launch, and the
         // user's own settings file is never rewritten or swapped. A marker older than fifteen
@@ -56,17 +56,17 @@ namespace pfc::config
         // cleared the same way.
         std::filesystem::path ChooseFile()
         {
-            const std::filesystem::path root = pfc::game::Root();
-            std::filesystem::path file = root / (std::string(PFC_NAME) + ".settings");
+            const std::filesystem::path root = mgs4e::game::Root();
+            std::filesystem::path file = root / (std::string(MGS4E_NAME) + ".settings");
 
-            const std::filesystem::path marker = root / (std::string(PFC_NAME) + ".lab");
+            const std::filesystem::path marker = root / (std::string(MGS4E_NAME) + ".lab");
             std::error_code ec;
             if (std::filesystem::exists(marker, ec))
             {
                 const auto written = std::filesystem::last_write_time(marker, ec);
                 const bool fresh = !ec
                     && (std::filesystem::file_time_type::clock::now() - written) < std::chrono::minutes(15);
-                const std::filesystem::path labFile = root / (std::string(PFC_NAME) + ".lab.settings");
+                const std::filesystem::path labFile = root / (std::string(MGS4E_NAME) + ".lab.settings");
                 if (fresh && std::filesystem::exists(labFile, ec))
                 {
                     g_LabMode = true;
@@ -82,9 +82,9 @@ namespace pfc::config
             return file;
         }
 
-        void ReadWindowSize(const pfc::Ini& ini)
+        void ReadWindowSize(const mgs4e::Ini& ini)
         {
-            using namespace pfc::keys;
+            using namespace mgs4e::keys;
 
             // An aspect ratio picks which resolution key applies; the chosen entry is a
             // "WIDTHxHEIGHT" string.
@@ -137,9 +137,9 @@ namespace pfc::config
 
         // The research keys, read only from the lab file. A normal launch ignores them even if
         // someone has copied them into the user's file.
-        void ReadLabKeys(const pfc::Ini& ini)
+        void ReadLabKeys(const mgs4e::Ini& ini)
         {
-            using namespace pfc::keys;
+            using namespace mgs4e::keys;
             namespace RP = RenderPipeline;
 
             Read(ini, Graphics, "Enable PIX Capture", RP::bEnablePixCapture);
@@ -227,9 +227,9 @@ namespace pfc::config
         }
 
         // The shipping aspect keys.
-        void ReadAspectKeys(const pfc::Ini& ini)
+        void ReadAspectKeys(const mgs4e::Ini& ini)
         {
-            using namespace pfc::keys;
+            using namespace mgs4e::keys;
 
             // Centered is layer 1 alone, Expanded is both layers. Read as text so an absent key
             // can be told apart from a chosen one: a settings file written before the option
@@ -286,9 +286,9 @@ namespace pfc::config
             Report(Graphics, FovAdjustment, fov);
         }
 
-        void ReadGraphicsKeys(const pfc::Ini& ini)
+        void ReadGraphicsKeys(const mgs4e::Ini& ini)
         {
-            using namespace pfc::keys;
+            using namespace mgs4e::keys;
             namespace RP = RenderPipeline;
 
             // Up to 4x. The buffer width clamp is what actually limits this - 400% of a 1080p
@@ -317,7 +317,7 @@ namespace pfc::config
             Read(ini, Graphics, Fxaa, fxaa);
             if (!fxaa.empty())
             {
-                if (const auto on = pfc::Ini::Convert<bool>(fxaa))
+                if (const auto on = mgs4e::Ini::Convert<bool>(fxaa))
                 {
                     RP::iFxaaOverride = *on ? 1 : 0;
                     Report(Graphics, Fxaa, *on);
@@ -355,11 +355,11 @@ namespace pfc::config
     {
         g_File = ChooseFile();
 
-        pfc::Ini ini;
+        mgs4e::Ini ini;
         if (!ini.Load(g_File))
         {
             spdlog::warn("No settings file at {} - running with defaults. Run {}.exe from the game folder to create one.",
-                g_File.string(), PFC_DISPLAY_NAME);
+                g_File.string(), MGS4E_DISPLAY_NAME);
             return;
         }
 
@@ -370,9 +370,9 @@ namespace pfc::config
         }
 
         bool verbose = false;
-        Read(ini, pfc::keys::Debugging, pfc::keys::DebugLogging, verbose);
-        pfc::log::SetVerbose(verbose);
-        Report(pfc::keys::Debugging, pfc::keys::DebugLogging, verbose);
+        Read(ini, mgs4e::keys::Debugging, mgs4e::keys::DebugLogging, verbose);
+        mgs4e::log::SetVerbose(verbose);
+        Report(mgs4e::keys::Debugging, mgs4e::keys::DebugLogging, verbose);
 
         ReadWindowSize(ini);
         ReadGraphicsKeys(ini);

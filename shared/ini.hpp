@@ -17,7 +17,7 @@
 // are case-sensitive; whitespace around keys and values is trimmed. Duplicate keys keep the
 // last value. Shared by the ASI and the settings tool, and used for the neighbour's settings
 // file as well as our own - it never writes.
-namespace pfc
+namespace mgs4e
 {
     class Ini
     {

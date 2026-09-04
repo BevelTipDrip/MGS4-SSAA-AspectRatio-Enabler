@@ -839,13 +839,13 @@ of the 32 MB dump takes about five minutes.
 
 ## 7. Gotchas
 
-**MGSPatriotFix's Config Tool rewrites its settings file** and does not preserve keys it does
-not know about. While this code lived inside a fork of that mod, any undocumented or
+**Another mod's config tool rewrites its settings file** and does not preserve keys it does
+not know about. While this code lived inside that mod, any undocumented or
 experimental key was silently dropped the moment the tool was used, which invalidated one round
-of testing before it was noticed. PF Companion's tool keeps unknown keys, and the research keys
-now live in a separate `PFCompanion.lab.settings` anyway (see `features/tooling.md`).
+of testing before it was noticed. MGS4 SSAA and Aspect Ratio Enabler's tool keeps unknown keys, and the research keys
+now live in a separate `MGS4Enabler.lab.settings` anyway (see `features/tooling.md`).
 
-**A stray `.asi` in the game root deadlocks MGSPatriotFix's Config Tool.** Its ASI is loaded into
+**A stray `.asi` in the game root deadlocks a config tool that sits there.** The ASI is loaded into
 the tool's process, hooks `memset` in its import table, and spawns its init thread; game
 detection fails there, so that thread exits without signalling, and wxWidgets' static
 initialiser blocks forever on the `memset` hook. The tool appears in Task Manager with no window

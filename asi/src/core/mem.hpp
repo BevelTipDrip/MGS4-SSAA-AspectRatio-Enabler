@@ -4,7 +4,7 @@
 #include <vector>
 
 // Process-memory helpers: signature scanning, probing and small writes.
-namespace pfc::mem
+namespace mgs4e::mem
 {
     // Finds the first occurrence of an IDA-style byte signature ("48 8B ?? 10", where "?" or
     // "??" is a wildcard) inside a loaded module's image. Logs the hit (under verbose
