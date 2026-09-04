@@ -691,26 +691,49 @@ can show real widget artwork.
 ### AR-010 — cutscenes, codec, pause menu and title are letterboxed to 16:9
 
 - **Status:** Working in the lab, 2026-09-04 (`Aspect Letterbox=1`, lab settings only)
-- **Evidence:** Observed — 21:9 cutscene framing confirmed by the user; the menu and 4:3
-  captures are the lab's read, the user's pending
+- **Evidence:** Observed — 21:9 cutscene framing confirmed by the user; the load path at
+  21:9 and 4:3 confirmed by the user (2026-09-04, watched live); the menu captures are the
+  lab's read
 - **Affects:** any output that is not 16:9
 - **Evidence detail:** [letterbox.md](letterbox.md). Cutscene at 3840x1620: camera scale
   divided by 1.333 on the cinematic routes only (m00 2.41421 → 1.81066, m11 held), bands at
   the sides. Pause menu, codec, title and main menu: bands whenever one of five tabled
   layout elements is appended to the draw pool; gameplay between them shows none
-  (`boxstat`: `screen-live no`). 4:3: no zoom, bands 270 px top and bottom
+  (`boxstat`: `screen-live no`). 4:3: no zoom, bands 270 px top and bottom. Boot phase:
+  bands from launch to the key press on the loaded-save plate (the plate's show nodes and
+  the dismissal's two channels are one-shot HUD-owner identities), then a post-load grace
+  mutes the cutscene signal over the level's intro pan so the bands drop at the press
 - **Screenshots:** [cutscene 21:9](evidence/AR-010-cutscene-21-9.jpg) /
   [cutscene 4:3](evidence/AR-010-cutscene-4-3.jpg) /
   [pause & codec 21:9](evidence/AR-010-pause-codec-21-9.jpg) /
-  [title 21:9](evidence/AR-010-title-21-9.jpg) / [pause 4:3](evidence/AR-010-pause-4-3.jpg)
+  [title 21:9](evidence/AR-010-title-21-9.jpg) / [pause 4:3](evidence/AR-010-pause-4-3.jpg) /
+  [load path 21:9](evidence/AR-010-load-21-9.jpg) / [load path 4:3](evidence/AR-010-load-4-3.jpg)
 - **Popups:** none
 - **Cause:** the 3D projection is Vert- (AR-002) and the menus are 16:9 canvases drawn into a
   wider window with the world showing past them
 - **Fix:** builder-scale division under the cinematic owner's scope + per-Present black
-  rects, gated on the cinematic camera tick or a tabled screen element within 150 ms
+  rects, gated on the cinematic camera tick or a tabled screen element within 150 ms, or
+  the boot-phase ladder (Armed → PlateUp → Over) with camera-alone fallbacks
 - **Verified:** one stage's opening cutscene, the barrel save's pause menu and codec, the
-  title and main menu; 3840x1620 and 2880x2160. Submenus, the D1 video and the codec at 4:3
-  are not
+  title and main menu, the LOAD GAME path into the barrel save; 3840x1620 and 2880x2160.
+  Submenus, the D1 video, the codec at 4:3, NEW GAME and other saves are not
+
+### AR-011 — the loading spinner stretches with the window and sits outside the 16:9 frame
+
+- **Status:** Fixed in the lab, 2026-09-04 (under `Aspect Pool Spread`)
+- **Evidence:** Observed — user ("it's stretched ... obviously its own object we are not
+  forcing to conform to the 16:9 space"); fix confirmed by the user on the load-path sheets
+- **Affects:** the top-right spinner on the boot and save-load plates, any non-16:9 window
+- **Evidence detail:** [letterbox.md §2.2](letterbox.md). Its record carries the rect as
+  window fractions (x 0.9068, y 0.8815, w 0.05, h 0.0889), so it is a 183x132 px oval in
+  the 21:9 corner at 3840x1620
+- **Screenshots:** [load path 21:9](evidence/AR-010-load-21-9.jpg) /
+  [load path 4:3](evidence/AR-010-load-4-3.jpg)
+- **Cause:** a 48-byte record appended from `+B5830` / `+B58E7` by the static object
+  `module+0x23CF7E88`, not a layout node - the identity spread never saw it
+- **Fix:** `LoadIconAppend` keys on that object (frame-1 rbp 0, rsi = the object) and maps
+  the rect into the centred 16:9 frame on the spread axis (x' = (1 − 1/f)/2 + x/f, w' = w/f)
+- **Verified:** 21:9 → (0.8051, 0.8815, 0.0375x0.0889); 4:3 → (0.9068, 0.7861, 0.05x0.0667)
 
 ---
 

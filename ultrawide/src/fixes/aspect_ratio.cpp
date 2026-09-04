@@ -1058,6 +1058,8 @@ namespace AspectRatio
         bool hasElem;
         uintptr_t elem;     // frame-2 rbx - frame-1 r14, see kHudElements
         uint32_t strcode;   // the node's element strcode, 0 when the node is not opcode 0x0D
+        uint8_t opcode;     // lab (screenlog): the node's opcode and its operand qword, for
+        uint64_t operand;   // nodes with no strcode
     };
 
     bool UnwindOnce(CONTEXT& c)
@@ -1080,10 +1082,10 @@ namespace AspectRatio
         BuildAppendContext(ctx, c);
         if (!UnwindOnce(c))
         {
-            return { 0, -1, false, 0 };
+            return { 0, -1, false, 0, 0, 0, 0 };
         }
         AppendIdentity id { static_cast<uintptr_t>(c.Rbp),
-            c.Rsi < static_cast<DWORD64>(kChannelCount) ? static_cast<int>(c.Rsi) : -1, false, 0, 0 };
+            c.Rsi < static_cast<DWORD64>(kChannelCount) ? static_cast<int>(c.Rsi) : -1, false, 0, 0, 0, 0 };
         if (wantElem && id.channel >= 0)
         {
             const uintptr_t script = static_cast<uintptr_t>(c.R14);
@@ -1109,6 +1111,8 @@ namespace AspectRatio
                 if (readable)
                 {
                     const auto* bytes = reinterpret_cast<const uint8_t*>(node);
+                    id.opcode = bytes[0];
+                    std::memcpy(&id.operand, bytes + 8, sizeof(id.operand));
                     if (bytes[0] == 0x0D)
                     {
                         std::memcpy(&id.strcode, bytes + 8, sizeof(id.strcode));
@@ -1208,13 +1212,305 @@ namespace AspectRatio
         return false;
     }
 
+    // The screen gate is a latch on pool frames, not a timer: bands stay while the last
+    // completed pool frame (and the one being built) contained a listed element. The title
+    // boot showed why a timer is not enough - while the graveyard stage loads behind the
+    // fade plate the UI stalls for stretches longer than any sensible window (gate_t2,
+    // 2026-09-04: 23% of presents unbanded over 10 s with the plate up, the world visible
+    // past its sides in the capture), yet the pool is simply not rebuilt during a stall, so
+    // the latch holds. The 150 ms tick stays OR'd in to bridge the moment a frame boundary
+    // is seen before that frame's element arrives.
+    uintptr_t g_ScreenFrameLastDst = 0;
+    std::atomic<bool> g_ScreenInThisFrame { false };
+    std::atomic<bool> g_ScreenInLastFrame { false };
+
+    bool ScreenFrameNote(uintptr_t dst, bool listed)
+    {
+        const bool fresh = dst < g_ScreenFrameLastDst || dst > g_ScreenFrameLastDst + 0x10000;
+        g_ScreenFrameLastDst = dst;
+        if (fresh)
+        {
+            g_ScreenInLastFrame.store(g_ScreenInThisFrame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            g_ScreenInThisFrame.store(false, std::memory_order_relaxed);
+        }
+        if (listed)
+        {
+            g_ScreenInThisFrame.store(true, std::memory_order_relaxed);
+        }
+        return fresh;
+    }
+
     bool ScreenLive()
     {
-        return GetTickCount64() - g_ScreenBuiltTick.load(std::memory_order_relaxed) <= 150;
+        return g_ScreenInThisFrame.load(std::memory_order_relaxed)
+            || g_ScreenInLastFrame.load(std::memory_order_relaxed)
+            || GetTickCount64() - g_ScreenBuiltTick.load(std::memory_order_relaxed) <= 150;
+    }
+
+    // The boot phase: bands are forced from the first present until the player is in the
+    // game, which is where the tabled screens leave gaps that no element names. Between the
+    // fade plate and PRESS ANY BUTTON the title fades through ~2 s of an untabled black quad
+    // with the world visible past it (fade_g43, 2026-09-04), and the loaded-save plate (Outer
+    // Haven skull, PRESS ANY BUTTON) is a full-window quad without a strcode that the HUD
+    // draws over at the window edges once the stage is up (load43e/g).
+    //
+    // The pool at +68A933 is a change stream, not a per-frame draw list: a static screen
+    // appends nothing. The skull plate shows that plainly - after the loading-done burst
+    // (the level's HUD channels 12-43 initialised in one upload) the pool is silent for the
+    // whole 20+ s the plate waits for a key (spin219b, 2026-09-04). So the phase cannot be
+    // keyed on nodes staying "live"; it is keyed on two one-shot events, both with an
+    // identity of their own and both seen identically in six runs at 4:3 and 21:9 (boot43a/
+    // b/c, load43g, spin219a/b):
+    //
+    //   plate up   - two channel-1 nodes of the HUD owner's script, +0x105F0 (opcode 0x13,
+    //                operand 1) and +0x10710 (opcode 0x13, operand 0), appended once when the
+    //                skull fades in; the "Load complete" plates use +0x10F0 / +0x28D0, the
+    //                logos +0x300, and nothing else in the boot path runs channel 1 without
+    //                a strcode. Script offsets are constant across boots.
+    //   dismissed  - the continue press: the first appends after the silence are two new
+    //                channels of the HUD owner, 38 with strcode 0071FC3E and 37 with
+    //                0008F2D7 (opcode 0x0D), ~0.6 s after the key and before the world
+    //                camera is rebuilt. (Only the rusted-barrel save has been measured; if
+    //                another save's script names different channels there, the press still
+    //                ends the phase by the camera rung below, a few seconds later.)
+    //
+    // The user's directive (2026-09-04): the bands come off at the press, not when the
+    // world camera is back - a camera rung kept them up through the fade and the camera's
+    // snap to the player, and at 21:9 the load's brief camera flicker ended the phase
+    // before the skull was even up (spin219a). The world camera only serves the fallbacks
+    // now: armed, a long stretch of it alone - no cutscene, no tabled screen - ends the
+    // phase, so a path with no plate (NEW GAME) can never keep the bands up in gameplay;
+    // plate-up, a short stretch does, since the camera is idle while the plate waits. The
+    // title re-arms the phase (quit to title).
+    enum class BootStage : int { Armed, PlateUp, Over };
+    std::atomic<int> g_BootStage { static_cast<int>(BootStage::Armed) };
+    std::atomic<bool> g_TitleSeen { false };
+    std::atomic<bool> g_PlateUpEvent { false };           // the skull plate's show nodes were appended
+    std::atomic<bool> g_PlateDismissEvent { false };      // the continue press's channels were appended
+    std::atomic<ULONGLONG> g_PlateSeenTick { 0 };        // last append of a skull plate node
+    std::atomic<ULONGLONG> g_GameplayBuiltTick { 0 };    // last time the gameplay camera was built
+    std::atomic<uint32_t> g_GameplayBuilds { 0 };
+    ULONGLONG g_BootAloneSince = 0;                       // start of the current camera-alone stretch
+    constexpr ULONGLONG kBootAloneLimitMs = 15000;
+    constexpr ULONGLONG kBootPlateCameraLimitMs = 3000;
+    constexpr uintptr_t kSkullPlateElems[] = { 0x105F0, 0x10710 };
+    constexpr uint32_t kPlateDismissStrcodes[] = { 0x0071FC3E, 0x0008F2D7 };
+
+    bool SkullPlateNode(const AppendIdentity& id, bool hudOwner)
+    {
+        if (!hudOwner || id.channel != 1 || !id.hasElem || id.strcode) { return false; }
+        for (const uintptr_t elem : kSkullPlateElems)
+        {
+            if (id.elem == elem) { return true; }
+        }
+        return false;
+    }
+
+    bool PlateDismissNode(const AppendIdentity& id, bool hudOwner)
+    {
+        if (!hudOwner || !id.strcode) { return false; }
+        for (const uint32_t strcode : kPlateDismissStrcodes)
+        {
+            if (id.strcode == strcode) { return true; }
+        }
+        return false;
+    }
+
+    void PlateNote(const AppendIdentity& id, bool hudOwner)
+    {
+        if (SkullPlateNode(id, hudOwner))
+        {
+            g_PlateSeenTick.store(GetTickCount64(), std::memory_order_relaxed);
+            g_PlateUpEvent.store(true, std::memory_order_relaxed);
+        }
+        else if (PlateDismissNode(id, hudOwner))
+        {
+            g_PlateDismissEvent.store(true, std::memory_order_relaxed);
+        }
+    }
+
+    bool GameplayCameraLive()
+    {
+        return GetTickCount64() - g_GameplayBuiltTick.load(std::memory_order_relaxed) <= 150;
+    }
+
+    bool CutsceneCameraLive();
+
+    // The press is followed by the level's intro camera - a scripted pan that snaps to the
+    // player after ~4 s and runs through the cinematic route, so the cutscene rung kept the
+    // bands up for exactly the stretch the user called awkward (spin219c, 2026-09-04). The
+    // grace mutes that rung from the dismissal until the first present the cinematic camera
+    // is not built, so a real cutscene that follows the intro still gets its bands; a save
+    // that opens straight into a cutscene gives that scene's opening up to the cap.
+    ULONGLONG g_PostLoadGraceUntil = 0;
+    bool g_PostLoadGraceSawCamera = false;   // the intro camera has started (it may lag the dismissal)
+    constexpr ULONGLONG kPostLoadGraceMs = 10000;
+
+    bool PostLoadGrace()
+    {
+        if (g_PostLoadGraceUntil == 0) { return false; }
+        const bool cinematic = CutsceneCameraLive();
+        if (cinematic) { g_PostLoadGraceSawCamera = true; }
+        if (GetTickCount64() > g_PostLoadGraceUntil || (g_PostLoadGraceSawCamera && !cinematic))
+        {
+            g_PostLoadGraceUntil = 0;
+            spdlog::info("MGS4: letterbox: post-load grace over ({}); cutscene bands follow the camera.",
+                g_PostLoadGraceSawCamera ? "intro camera done" : "no intro camera");
+            return false;
+        }
+        return true;
+    }
+
+    // Called per present under the band mutex; the ladder's transitions live here.
+    bool BootPhaseLive()
+    {
+        const auto stage = static_cast<BootStage>(g_BootStage.load(std::memory_order_relaxed));
+        if (stage == BootStage::Over) { return false; }
+        const ULONGLONG now = GetTickCount64();
+        const bool cameraAlone = GameplayCameraLive() && !CutsceneCameraLive() && !ScreenLive();
+        if (stage == BootStage::Armed)
+        {
+            g_PlateDismissEvent.store(false, std::memory_order_relaxed);
+            if (g_PlateUpEvent.exchange(false, std::memory_order_relaxed))
+            {
+                g_BootAloneSince = 0;
+                g_BootStage.store(static_cast<int>(BootStage::PlateUp), std::memory_order_relaxed);
+                spdlog::info("MGS4: letterbox: boot phase: loaded-save plate up.");
+                return true;
+            }
+        }
+        else if (g_PlateDismissEvent.exchange(false, std::memory_order_relaxed))
+        {
+            g_BootAloneSince = 0;
+            g_PostLoadGraceUntil = now + kPostLoadGraceMs;
+            g_PostLoadGraceSawCamera = false;
+            g_BootStage.store(static_cast<int>(BootStage::Over), std::memory_order_relaxed);
+            spdlog::info("MGS4: letterbox: boot phase over (loaded-save plate dismissed); bands follow the gate.");
+            return false;
+        }
+        // Fallback: the world camera alone, for 15 s while armed, 3 s once the plate is up.
+        if (!cameraAlone)
+        {
+            g_BootAloneSince = 0;
+            return true;
+        }
+        const ULONGLONG limit = stage == BootStage::Armed ? kBootAloneLimitMs : kBootPlateCameraLimitMs;
+        if (g_BootAloneSince == 0) { g_BootAloneSince = now; }
+        else if (now - g_BootAloneSince > limit)
+        {
+            g_BootAloneSince = 0;
+            g_BootStage.store(static_cast<int>(BootStage::Over), std::memory_order_relaxed);
+            spdlog::info("MGS4: letterbox: boot phase over (world camera alone for {} s, {}); bands follow the gate.",
+                limit / 1000, stage == BootStage::Armed ? "no plate seen" : "plate up, no dismissal seen");
+            return false;
+        }
+        return true;
+    }
+
+    void RearmBootPhase()
+    {
+        int over = static_cast<int>(BootStage::Over);
+        if (g_BootStage.compare_exchange_strong(over, static_cast<int>(BootStage::Armed)))
+        {
+            spdlog::info("MGS4: letterbox: title seen; boot phase re-armed.");
+        }
+    }
+
+    // Lab: "screenlog N" logs the next N distinct (owner, channel, strcode) identities the
+    // gate reads, tabled or not, so a screen can be censused without a sites dump - and so
+    // a tabled element that fails to fire shows what the gate saw instead.
+    std::atomic<int> g_ScreenLogBudget { 0 };
+    struct ScreenLogSeen { uintptr_t owner; int channel; uint32_t strcode; uint8_t opcode; uint64_t operand; };
+    ScreenLogSeen g_ScreenLogSeen[512] {};
+    int g_ScreenLogCount = 0;
+    std::atomic<bool> g_ScreenLogAll { false };   // "screenlog N all": HUD-owner nodes without a strcode too
+
+    void ScreenLogAppend(const AppendIdentity& id)
+    {
+        if (g_ScreenLogBudget.load(std::memory_order_relaxed) <= 0) { return; }
+        // Nodes without a strcode are logged for the HUD owner only (with their opcode and
+        // operand, the identity they do have); the main menu's ~50 heap owners without one
+        // exhausted a 60-entry budget before the save list was reached (load_43).
+        const bool hud = id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner;
+        if (!id.strcode && !(hud && g_ScreenLogAll)) { return; }
+        for (int i = 0; i < g_ScreenLogCount; i++)
+        {
+            const auto& s = g_ScreenLogSeen[i];
+            if (s.owner == id.owner && s.channel == id.channel && s.strcode == id.strcode
+                && s.opcode == id.opcode && s.operand == id.operand) { return; }
+        }
+        if (g_ScreenLogCount >= static_cast<int>(std::size(g_ScreenLogSeen)))
+        {
+            // The seen table is full: stop rather than log repeats (load43f logged one node
+            // 40 times a second once it filled).
+            g_ScreenLogBudget.store(0);
+            spdlog::info("MGS4: letterbox: screenlog seen table full; log stopped.");
+            return;
+        }
+        g_ScreenLogSeen[g_ScreenLogCount++] = { id.owner, id.channel, id.strcode, id.opcode, id.operand };
+        g_ScreenLogBudget.fetch_sub(1);
+        spdlog::info("MGS4: letterbox: screenlog owner {:X} ch {} elem {:X} strcode {:08X} op {:02X} operand {:016X}{}",
+            id.owner, id.channel, id.hasElem ? id.elem : 0, id.strcode, id.opcode, id.operand,
+            id.hasElem ? "" : " (no element frame)");
+    }
+
+    // The loading spinner (the ring in the top-right corner of the loading plates) is not a
+    // layout-script widget: it has no owner, no channel and no strcode, and its record is
+    // not a 96-byte anchor. It is a 48-byte record appended twice per frame from +B5830 and
+    // +B58E7 (via +B5FC2 / +B5F98 under +B4FB3), with the frame-1 rsi pointing at one static
+    // object of the module - its identity - and floats 4..7 holding its rectangle as a
+    // fraction of the *window*: x 0.9068, y 0.8815, w 0.05, h 0.0889, a 64x64 px sprite in
+    // 1280x720 terms (spin219b sites dump, 2026-09-04). Fractions of the window are why it
+    // stretches with it: at 3840x1620 that came out 183x132 px and sat at the window's
+    // corner, outside the 16:9 frame the rest of the interface keeps (user's read of
+    // spin219a; the user asked for it scaled and placed inside that frame). The treatment
+    // maps the rectangle into the centred 16:9 frame along the axis with spare room: x' =
+    // (1 - 1/f)/2 + x/f, w' = w/f on a wide output, the same in y on a tall one - the ring
+    // is round again and lands where a 16:9 output puts it.
+    constexpr uintptr_t kRvaLoadIconObject = 0x23CF7E88;
+    constexpr uint32_t kLoadIconRecordSize = 48;
+    std::atomic<uint32_t> g_LoadIconLogged { 0 };
+
+    void LoadIconAppend(SafetyHookContext& ctx)
+    {
+        CONTEXT c;
+        BuildAppendContext(ctx, c);
+        if (!UnwindOnce(c) || c.Rbp != 0 || c.Rsi != reinterpret_cast<uintptr_t>(baseModule) + kRvaLoadIconObject)
+        {
+            return;
+        }
+        auto* src = reinterpret_cast<uint8_t*>(ctx.rdx);
+        float rect[4] {};
+        std::memcpy(rect, src + 16, sizeof(rect));
+        // The rectangle as measured, or nothing: a record of this object with another
+        // shape is not the sprite this was written for.
+        if (rect[0] < 0.0f || rect[0] > 1.0f || rect[1] < 0.0f || rect[1] > 1.0f
+            || rect[2] <= 0.0f || rect[2] > 0.5f || rect[3] <= 0.0f || rect[3] > 0.5f)
+        {
+            return;
+        }
+        const float factorX = HorizontalSpreadFactor();
+        const float factorY = VerticalSpreadFactor();
+        const float before[4] = { rect[0], rect[1], rect[2], rect[3] };
+        rect[0] = (1.0f - 1.0f / factorX) * 0.5f + rect[0] / factorX;
+        rect[2] /= factorX;
+        rect[1] = (1.0f - 1.0f / factorY) * 0.5f + rect[1] / factorY;
+        rect[3] /= factorY;
+        std::memcpy(src + 16, rect, sizeof(rect));
+        if (g_LoadIconLogged.fetch_add(1) == 0)
+        {
+            spdlog::info("MGS4: UI Aspect: loading spinner rect ({:.4f},{:.4f} {:.4f}x{:.4f}) -> ({:.4f},{:.4f} {:.4f}x{:.4f}) (factors {:.4f}/{:.4f}).",
+                before[0], before[1], before[2], before[3], rect[0], rect[1], rect[2], rect[3], factorX, factorY);
+        }
     }
 
     void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias, bool screens)
     {
+        if (spread && (ctx.r8 & 0xFFFF) == kLoadIconRecordSize)
+        {
+            LoadIconAppend(ctx);
+            return;
+        }
         if ((ctx.r8 & 0xFFFF) != kAnchorBlockSize)
         {
             return;
@@ -1232,7 +1528,16 @@ namespace AspectRatio
         }
         if (screens)
         {
-            NoteScreenElement(id.strcode);
+            const bool listed = NoteScreenElement(id.strcode);
+            const bool hud = id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner;
+            ScreenFrameNote(ctx.rcx, listed);
+            PlateNote(id, hud);
+            if (id.strcode == 0x00042FAA)
+            {
+                g_TitleSeen.store(true, std::memory_order_relaxed);
+                RearmBootPhase();
+            }
+            ScreenLogAppend(id);
         }
         if (!spread && !bias)
         {
@@ -1629,10 +1934,15 @@ namespace AspectRatio
         // backing plates were on no anchor channel (item-wheel diff sweep, 2026-09-02), so
         // they must travel in one of these. Head bytes as floats and as hex, with the frame-1
         // owner/channel the anchor path uses for identity.
+        // Appends that landed outside the pool being uploaded are listed the same way, with
+        // their destination: the loading screens append into neither of the ping-pong pools
+        // (25 events, 0 inside; spin219a 05:24:04, 2026-09-04), so whatever draws there -
+        // the loading spinner is the suspect - has a third buffer.
         int others = 0;
         for (const auto& e : events)
         {
-            if (e.dst < source || e.dst >= source + bytes || e.size == 96 || others >= 400)
+            const bool outside = e.dst < source || e.dst >= source + bytes;
+            if ((!outside && e.size == 96) || others >= 400)
             {
                 continue;
             }
@@ -1655,10 +1965,11 @@ namespace AspectRatio
                 chain += (i ? "<+" : "+");
                 chain += (e.frames[i] == 0xFFFFFFFFu) ? std::string("ext") : std::format("{:X}", e.frames[i]);
             }
-            spdlog::info("MGS4: sites: rec +{:05X}/{} owner={:X} ch={:X} f=[{}] hex={} {}",
-                e.dst - source, e.size, e.regs[1][1], e.regs[1][2], floats, hex, chain);
+            spdlog::info("MGS4: sites: rec {}/{} owner={:X} ch={:X} f=[{}] hex={} {}",
+                outside ? std::format("out@{:X}", e.dst) : std::format("+{:05X}", e.dst - source),
+                e.size, e.regs[1][1], e.regs[1][2], floats, hex, chain);
         }
-        spdlog::info("MGS4: sites: {} non-anchor records listed.", others);
+        spdlog::info("MGS4: sites: {} non-anchor / outside records listed.", others);
     }
 
     // ---- producer attribution probe --------------------------------------------------------
@@ -2443,6 +2754,11 @@ namespace AspectRatio
             && std::fabs(projectionScale - g_CinematicInputScale) <= tolerance;
 
         float scale = projectionScale;
+        if (rva == kRvaCameraGameplayReturn)
+        {
+            g_GameplayBuiltTick.store(now, std::memory_order_relaxed);
+            g_GameplayBuilds.fetch_add(1, std::memory_order_relaxed);
+        }
         if (cinematicSource || cinematicFinal)
         {
             g_CinematicBuiltTick.store(now);
@@ -2543,8 +2859,76 @@ namespace AspectRatio
     BandRenderer g_Band;
     std::mutex g_BandMutex;
     ID3D12CommandQueue* g_PresentQueue = nullptr;
+    // Lab: what the last wanted present painted (boxstat), for reading a capture against it.
+    UINT g_BandLastPainted[2] {};
+    D3D12_RECT g_BandLastRects[2] {};
+    UINT g_BandLastIndex = 0;
 
     template <typename T> void SafeRelease(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+    // ---- draw census (lab: "drawlog N") ---------------------------------------------------
+    //
+    // The loading spinner is drawn by nothing the pool append sees - 0-1 appends per upload
+    // while it spins (spin219a, 2026-09-04) - yet it sits in the 16:9 logical space like any
+    // widget: a 60-unit ring at (1192, 53) of 1280x720, stretched with the window, measured
+    // the same at 4:3 and 21:9. So it is looked for one level down, at the command list:
+    // every DrawInstanced / DrawIndexedInstanced while the budget lasts, with the present
+    // it belongs to and the game frames that issued it. The fork's public module already
+    // holds inline hooks on these two slots; ours go on top (the trampoline relocates the
+    // jmp the first hook left), so the chain is ours -> the fork's -> D3D12.
+    SafetyHookInline DrawInstanced_hook {};
+    SafetyHookInline DrawIndexedInstanced_hook {};
+    constexpr size_t kListDrawInstancedSlot = 12;
+    constexpr size_t kListDrawIndexedInstancedSlot = 13;
+    std::atomic<int> g_DrawLogBudget { 0 };
+    std::atomic<uint32_t> g_DrawLogPresent { 0 };
+
+    __declspec(noinline) void DrawLog(const char* kind, UINT count, UINT instances, UINT start, INT base, UINT startInstance)
+    {
+        if (g_DrawLogBudget.fetch_sub(1) <= 0)
+        {
+            g_DrawLogBudget.store(0);
+            return;
+        }
+        void* frames[12] {};
+        const USHORT n = RtlCaptureStackBackTrace(2, 12, frames, nullptr);
+        const auto module = reinterpret_cast<uintptr_t>(baseModule);
+        std::string chain;
+        for (USHORT i = 0; i < n; i++)
+        {
+            const auto p = reinterpret_cast<uintptr_t>(frames[i]);
+            chain += i ? "<" : "";
+            chain += (p >= module && p < module + 0x8000000) ? std::format("+{:X}", p - module) : std::string("ext");
+        }
+        spdlog::info("MGS4: drawlog: p{} {} {} x{} start {} base {} inst {} {}",
+            g_DrawLogPresent.load(std::memory_order_relaxed), kind, count, instances, start, base, startInstance, chain);
+    }
+
+    void STDMETHODCALLTYPE Hooked_DrawInstancedCensus(ID3D12GraphicsCommandList* self,
+        UINT vertexCountPerInstance, UINT instanceCount, UINT startVertexLocation, UINT startInstanceLocation)
+    {
+        DrawLog("draw", vertexCountPerInstance, instanceCount, startVertexLocation, 0, startInstanceLocation);
+        DrawInstanced_hook.stdcall<void>(self, vertexCountPerInstance, instanceCount, startVertexLocation, startInstanceLocation);
+    }
+
+    void STDMETHODCALLTYPE Hooked_DrawIndexedInstancedCensus(ID3D12GraphicsCommandList* self,
+        UINT indexCountPerInstance, UINT instanceCount, UINT startIndexLocation, INT baseVertexLocation, UINT startInstanceLocation)
+    {
+        DrawLog("idx", indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
+        DrawIndexedInstanced_hook.stdcall<void>(self, indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
+    }
+
+    void InstallDrawCensus(ID3D12GraphicsCommandList* list)
+    {
+        static bool installed = false;
+        if (installed || !list) { return; }
+        installed = true;
+        void** vtable = *reinterpret_cast<void***>(list);
+        DrawInstanced_hook = safetyhook::create_inline(vtable[kListDrawInstancedSlot], reinterpret_cast<void*>(Hooked_DrawInstancedCensus));
+        DrawIndexedInstanced_hook = safetyhook::create_inline(vtable[kListDrawIndexedInstancedSlot], reinterpret_cast<void*>(Hooked_DrawIndexedInstancedCensus));
+        spdlog::info("MGS4: letterbox: draw census hooks (DrawInstanced {}, DrawIndexedInstanced {}).",
+            DrawInstanced_hook ? "ok" : "FAILED", DrawIndexedInstanced_hook ? "ok" : "FAILED");
+    }
 
     void BandWaitIdle(BandRenderer& b)
     {
@@ -2628,6 +3012,7 @@ namespace AspectRatio
             spdlog::error("MGS4: letterbox: command list creation failed."); return false;
         }
         b.list->Close();
+        if (bLabMode) { InstallDrawCensus(b.list); }
         if (FAILED(b.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&b.fence))))
         {
             spdlog::error("MGS4: letterbox: fence creation failed."); return false;
@@ -2668,7 +3053,13 @@ namespace AspectRatio
         {
             case 1: return true;
             case 2: return false;
-            default: return CutsceneCameraLive() || ScreenLive();
+            default:
+            {
+                // The grace is stepped every present: it ends on the first present without
+                // the intro camera, whether or not the rung would have fired.
+                const bool grace = PostLoadGrace();
+                return BootPhaseLive() || (CutsceneCameraLive() && !grace) || ScreenLive();
+            }
         }
     }
 
@@ -2708,9 +3099,14 @@ namespace AspectRatio
 
         D3D12_RECT rects[2] {};
         const UINT count = BandRects(paintedWidth, paintedHeight, rects);
+        g_BandLastPainted[0] = paintedWidth;
+        g_BandLastPainted[1] = paintedHeight;
+        g_BandLastRects[0] = rects[0];
+        g_BandLastRects[1] = rects[1];
         if (count == 0) { return; }
 
         const UINT index = b.swapChain->GetCurrentBackBufferIndex();
+        g_BandLastIndex = index;
         if (index >= b.buffers.size()) { return; }
         if (b.fence->GetCompletedValue() < b.fenceValues[index])
         {
@@ -2745,14 +3141,14 @@ namespace AspectRatio
 
     HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags)
     {
-        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); }
+        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed); }
         return Present_hook.stdcall<HRESULT>(self, syncInterval, flags);
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags,
         const DXGI_PRESENT_PARAMETERS* parameters)
     {
-        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); }
+        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed); }
         return Present1_hook.stdcall<HRESULT>(self, syncInterval, flags, parameters);
     }
 
@@ -3077,13 +3473,30 @@ namespace AspectRatio
                         {
                             ArmSiteDump("live lab");
                         }
+                        else if (std::strncmp(line, "drawlog", 7) == 0)
+                        {
+                            // drawlog N - log the next N command-list draws with their presents and callers.
+                            const long n = std::strtol(line + 7, nullptr, 0);
+                            g_DrawLogBudget.store(static_cast<int>(n > 0 ? n : 300));
+                            spdlog::info("MGS4: live lab: draw census armed for {} draws (hooks {}).",
+                                g_DrawLogBudget.load(), DrawInstanced_hook && DrawIndexedInstanced_hook ? "ok" : "MISSING");
+                        }
                         else if (std::strncmp(line, "boxstat", 7) == 0)
                         {
                             std::lock_guard bandLock(g_BandMutex);
-                            spdlog::info("MGS4: live lab: letterbox: mode {} zoom {} divisor {:.4f} patches {} presents {} cleared {} failed {} cutscene-live {} screen-live {} (last {:08X}) swapchain {}x{}.",
+                            spdlog::info("MGS4: live lab: letterbox: mode {} zoom {} divisor {:.4f} patches {} presents {} cleared {} failed {} boot {} gameplay-cam {} ({} builds) plate-seen {} ms ago cutscene-live {} screen-live {} (last {:08X}, frames {}/{}) swapchain {}x{} painted {}x{} rects [{},{},{},{}] [{},{},{},{}] index {}.",
                                 g_BandMode.load(), g_CutsceneZoom.load(), g_CutsceneDivisor.load(), g_CameraPatches.load(),
-                                g_Band.presents, g_Band.cleared, g_Band.failed, CutsceneCameraLive() ? "yes" : "no",
-                                ScreenLive() ? "yes" : "no", g_ScreenLastStrcode.load(), g_Band.width, g_Band.height);
+                                g_Band.presents, g_Band.cleared, g_Band.failed,
+                                g_BootStage.load() == 0 ? "armed" : g_BootStage.load() == 1 ? "plate-up" : "over",
+                                GameplayCameraLive() ? "yes" : "no", g_GameplayBuilds.load(),
+                                g_PlateSeenTick.load() ? static_cast<long long>(GetTickCount64() - g_PlateSeenTick.load()) : -1LL,
+                                CutsceneCameraLive() ? "yes" : "no",
+                                ScreenLive() ? "yes" : "no", g_ScreenLastStrcode.load(),
+                                g_ScreenInLastFrame.load() ? 1 : 0, g_ScreenInThisFrame.load() ? 1 : 0, g_Band.width, g_Band.height,
+                                g_BandLastPainted[0], g_BandLastPainted[1],
+                                g_BandLastRects[0].left, g_BandLastRects[0].top, g_BandLastRects[0].right, g_BandLastRects[0].bottom,
+                                g_BandLastRects[1].left, g_BandLastRects[1].top, g_BandLastRects[1].right, g_BandLastRects[1].bottom,
+                                g_BandLastIndex);
                         }
                         else if (std::strncmp(line, "box", 3) == 0)
                         {
@@ -3108,6 +3521,15 @@ namespace AspectRatio
                             const int n = static_cast<int>(std::strtol(line + 6, nullptr, 10));
                             g_CameraLogBudget.store(n > 0 ? n : 60);
                             spdlog::info("MGS4: live lab: camera build log armed ({}).", g_CameraLogBudget.load());
+                        }
+                        else if (std::strncmp(line, "screenlog", 9) == 0)
+                        {
+                            const int n = static_cast<int>(std::strtol(line + 9, nullptr, 10));
+                            g_ScreenLogAll.store(std::strstr(line + 9, "all") != nullptr);
+                            g_ScreenLogCount = 0;
+                            g_ScreenLogBudget.store(n > 0 ? n : 40);
+                            spdlog::info("MGS4: live lab: screen identity log armed ({}{}).", g_ScreenLogBudget.load(),
+                                g_ScreenLogAll.load() ? ", all HUD-owner nodes" : "");
                         }
                         else if (std::strncmp(line, "projlog", 7) == 0)
                         {
