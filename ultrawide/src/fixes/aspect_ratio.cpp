@@ -1,11 +1,12 @@
-#include "stdafx.h"
+#include "pch.hpp"
 
 #include "aspect_ratio.hpp"
 
-#include "common.hpp"
+#include "game.hpp"
+#include "mem.hpp"
 #include "config.hpp"
-#include "logging.hpp"
-#include "resolution_scaling_fixes.hpp"
+#include "log.hpp"
+#include "render_pipeline.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -85,8 +86,8 @@ namespace AspectRatio
 
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
+        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -122,7 +123,7 @@ namespace AspectRatio
         // The object registry only serves the lab (live bias, the corner table's
         // first-instance rule, runtime anchoring). Nothing prunes it in a normal launch, so
         // it is not kept there.
-        if (bLabMode)
+        if (pfc::config::LabMode())
         {
             uint32_t strcodeForRegistry = 0;
             std::memcpy(&strcodeForRegistry, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcodeForRegistry));
@@ -548,8 +549,8 @@ namespace AspectRatio
     {
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
+        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -572,8 +573,8 @@ namespace AspectRatio
     {
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
+        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -738,7 +739,7 @@ namespace AspectRatio
             if (std::fabs(normX + 0.719f) < 0.04f && std::fabs(v8[1] + 0.769f) < 0.04f
                 && staticArmed.compare_exchange_strong(expected, true))
             {
-                ResolutionScalingFixes::ArmProducerWatch(slotAddress,
+                RenderPipeline::ArmProducerWatch(slotAddress,
                     "the static producer (ration box anchor)");
             }
 
@@ -746,7 +747,7 @@ namespace AspectRatio
             if (std::fabs(normX) < 0.04f && v8[1] > 0.10f && v8[1] < 0.40f
                 && dynamicArmed.compare_exchange_strong(expected, true))
             {
-                ResolutionScalingFixes::ArmProducerWatch(slotAddress,
+                RenderPipeline::ArmProducerWatch(slotAddress,
                     "the dynamic producer (reticle anchor)");
             }
 
@@ -763,7 +764,7 @@ namespace AspectRatio
         // now installs unconditionally so the lab can arm diagnostics mid-session, so the
         // probe must cost one flag check when nothing is armed. The corner spread itself
         // no longer lives here (see PoolAppendProbe); this hook is diagnostics only.
-        if (!ResolutionScalingFixes::bWatchAnchorProducers
+        if (!RenderPipeline::bWatchAnchorProducers
             && !bAspectTestLadder && g_PoolDumpBudget.load(std::memory_order_relaxed) <= 0
             && g_SiteDumpFrames.load(std::memory_order_relaxed) <= 0
             && g_UploadLogBudget.load(std::memory_order_relaxed) <= 0
@@ -774,7 +775,7 @@ namespace AspectRatio
 
         uintptr_t returnAddress = 0;
         std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         const uintptr_t retRva = (returnAddress >= base) ? returnAddress - base : returnAddress;
 
         // The helper takes (wrapper, resource, destOffset, size) in registers; the source
@@ -890,7 +891,7 @@ namespace AspectRatio
         // Producer identification mode: locate the two reference blocks in the live pool and
         // put hardware write watches on their v8.x slots, so the code that computes each kind
         // of anchor names itself.
-        if (ResolutionScalingFixes::bWatchAnchorProducers && spread)
+        if (RenderPipeline::bWatchAnchorProducers && spread)
         {
             WatchProducersInPool(reinterpret_cast<uint8_t*>(source), ctx.r9);
         }
@@ -1036,7 +1037,7 @@ namespace AspectRatio
 
     void BuildAppendContext(const SafetyHookContext& ctx, CONTEXT& c)
     {
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         c = CONTEXT {};
         c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         // Unwind from the call's return address, not the call itself: the hook's jmp now
@@ -1431,7 +1432,7 @@ namespace AspectRatio
         // Nodes without a strcode are logged for the HUD owner only (with their opcode and
         // operand, the identity they do have); the main menu's ~50 heap owners without one
         // exhausted a 60-entry budget before the save list was reached (load_43).
-        const bool hud = id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner;
+        const bool hud = id.owner == reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaHudOwner;
         if (!id.strcode && !(hud && g_ScreenLogAll)) { return; }
         for (int i = 0; i < g_ScreenLogCount; i++)
         {
@@ -1475,7 +1476,7 @@ namespace AspectRatio
     {
         CONTEXT c;
         BuildAppendContext(ctx, c);
-        if (!UnwindOnce(c) || c.Rbp != 0 || c.Rsi != reinterpret_cast<uintptr_t>(baseModule) + kRvaLoadIconObject)
+        if (!UnwindOnce(c) || c.Rbp != 0 || c.Rsi != reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaLoadIconObject)
         {
             return;
         }
@@ -1532,7 +1533,7 @@ namespace AspectRatio
         if (screens)
         {
             const bool listed = NoteScreenElement(id.strcode);
-            const bool hud = id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner;
+            const bool hud = id.owner == reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaHudOwner;
             ScreenFrameNote(ctx.rcx, listed);
             PlateNote(id, hud);
             if (id.strcode == 0x00042FAA)
@@ -1562,7 +1563,7 @@ namespace AspectRatio
         // the pair reduces to the one number the output needs.
         float dx = 0.0f;
         float dy = 0.0f;
-        if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
+        if (spread && id.owner == reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaHudOwner)
         {
             const bool corners = bAspectPoolSpread;
             ChannelTreatment& now = g_ChannelNow[id.channel];
@@ -1703,7 +1704,7 @@ namespace AspectRatio
         ev.size = static_cast<uint32_t>(ctx.r8 & 0xFFFF);   // movzx r8d, si at +68A92B
         std::memcpy(ev.head, reinterpret_cast<const void*>(ctx.rdx), (std::min<size_t>)(ev.size, sizeof(ev.head)));
 
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         CONTEXT c;
         BuildAppendContext(ctx, c);
 
@@ -1806,7 +1807,7 @@ namespace AspectRatio
     {
         // call memcpy ; mov esi, [rbp+1A8h] - the append and the instruction after it.
         static constexpr uint8_t kExpected[] { 0xE8, 0x58, 0xA5, 0x69, 0x00, 0x8B, 0xB5, 0xA8, 0x01, 0x00, 0x00 };
-        auto* at = reinterpret_cast<uint8_t*>(baseModule) + kRvaPoolAppendCall;
+        auto* at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaPoolAppendCall;
         if (std::memcmp(at, kExpected, sizeof(kExpected)) != 0)
         {
             spdlog::error("MGS4: pool append attribution: +{:X} is not the expected call - not hooking.",
@@ -1814,7 +1815,7 @@ namespace AspectRatio
             return;
         }
         PoolAppend_hook = safetyhook::create_mid(at, PoolAppendProbe);
-        LOG_HOOK(PoolAppend_hook, "MGS4: pool append attribution")
+        PFC_LOG_HOOK(PoolAppend_hook, "MGS4: pool append attribution")
     }
 
     // The upload-side half: label each anchor block of the pool being uploaded with the
@@ -2025,7 +2026,7 @@ namespace AspectRatio
         uintptr_t engineB = 0;
         std::memcpy(&engineA, reinterpret_cast<const void*>(candidate + 0x20), sizeof(engineA));
         std::memcpy(&engineB, reinterpret_cast<const void*>(candidate + 0x28), sizeof(engineB));
-        const auto moduleBase = reinterpret_cast<uintptr_t>(baseModule);
+        const auto moduleBase = reinterpret_cast<uintptr_t>(pfc::game::Module());
         if (engineA != moduleBase + 0x437150 || engineB != moduleBase + 0x437110)
         {
             return false;
@@ -2052,7 +2053,7 @@ namespace AspectRatio
 
         uintptr_t returnAddress = 0;
         std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         const uintptr_t retRva = (returnAddress >= base) ? returnAddress - base : returnAddress;
 
         bool found = false;
@@ -2132,11 +2133,11 @@ namespace AspectRatio
     void InstallProducerProbe()
     {
         ProducerWrapper_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(baseModule) + kRvaProducerWrapper, ProducerWrapperProbe);
-        LOG_HOOK(ProducerWrapper_hook, "MGS4: producer probe (wrapper)")
+            reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaProducerWrapper, ProducerWrapperProbe);
+        PFC_LOG_HOOK(ProducerWrapper_hook, "MGS4: producer probe (wrapper)")
         ProducerOuter_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(baseModule) + kRvaProducerOuter, ProducerOuterProbe);
-        LOG_HOOK(ProducerOuter_hook, "MGS4: producer probe (outer)")
+            reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaProducerOuter, ProducerOuterProbe);
+        PFC_LOG_HOOK(ProducerOuter_hook, "MGS4: producer probe (outer)")
     }
 
     // ---- channel census -------------------------------------------------------------------
@@ -2165,7 +2166,7 @@ namespace AspectRatio
         }
         uintptr_t returnAddress = 0;
         std::memcpy(&returnAddress, reinterpret_cast<const void*>(ctx.rsp), sizeof(returnAddress));
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         spdlog::info("MGS4: UI channel: sel={:X} size={:X} ret=+{:X}",
             static_cast<uint32_t>(ctx.rcx), static_cast<uint32_t>(ctx.rdx),
             (returnAddress >= base) ? returnAddress - base : returnAddress);
@@ -2174,8 +2175,8 @@ namespace AspectRatio
     void InstallChannelCensus()
     {
         ChannelEmit_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(baseModule) + kRvaChannelEmitCall, ChannelEmitProbe);
-        LOG_HOOK(ChannelEmit_hook, "MGS4: UI channel census")
+            reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaChannelEmitCall, ChannelEmitProbe);
+        PFC_LOG_HOOK(ChannelEmit_hook, "MGS4: UI channel census")
 
         // F6 re-arms the budget, so a specific moment (aiming, a menu) can be sampled.
         std::thread([]
@@ -2537,22 +2538,22 @@ namespace AspectRatio
 
         if (bDumpLa2)
         {
-            if (uint8_t* info = Memory::PatternScan(baseModule, kArchiveFileInfoSignature, "MGS4: archive file info"))
+            if (uint8_t* info = pfc::mem::FindPattern(pfc::game::Module(), kArchiveFileInfoSignature, "MGS4: archive file info"))
             {
                 g_ArchiveFileInfo = reinterpret_cast<ArchiveFileInfoFn>(info);
             }
 
-            if (uint8_t* at = Memory::PatternScan(baseModule, kSlotResourceLoadSignature, "MGS4: slot resource logging"))
+            if (uint8_t* at = pfc::mem::FindPattern(pfc::game::Module(), kSlotResourceLoadSignature, "MGS4: slot resource logging"))
             {
                 SlotResourceLoad_hook = safetyhook::create_inline(at,
                     reinterpret_cast<void*>(&LoggedSlotResourceLoad));
-                LOG_HOOK(SlotResourceLoad_hook, "MGS4: slot resource logging")
+                PFC_LOG_HOOK(SlotResourceLoad_hook, "MGS4: slot resource logging")
             }
         }
-        if (uint8_t* at = Memory::PatternScan(baseModule, kArchiveReadSignature, "MGS4: LA2 logging"))
+        if (uint8_t* at = pfc::mem::FindPattern(pfc::game::Module(), kArchiveReadSignature, "MGS4: LA2 logging"))
         {
             ArchiveRead_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedArchiveRead));
-            LOG_HOOK(ArchiveRead_hook, "MGS4: LA2 logging")
+            PFC_LOG_HOOK(ArchiveRead_hook, "MGS4: LA2 logging")
         }
     }
 
@@ -2576,7 +2577,7 @@ namespace AspectRatio
         {
             uintptr_t returnAddress = 0;
             std::memcpy(&returnAddress, _AddressOfReturnAddress(), sizeof(returnAddress));
-            const auto base = reinterpret_cast<uintptr_t>(baseModule);
+            const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
             spdlog::info("MGS4: rect emit: ({},{} {}x{}) from +{:X}",
                 x, y, w, h, (returnAddress >= base) ? returnAddress - base : returnAddress);
         }
@@ -2589,10 +2590,10 @@ namespace AspectRatio
 
     void InstallRectEmitLogging()
     {
-        if (uint8_t* at = Memory::PatternScan(baseModule, kRectEmitterSignature, "MGS4: rect emitter"))
+        if (uint8_t* at = pfc::mem::FindPattern(pfc::game::Module(), kRectEmitterSignature, "MGS4: rect emitter"))
         {
             RectEmitter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedRectEmit));
-            LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
+            PFC_LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
         }
     }
 
@@ -2634,7 +2635,7 @@ namespace AspectRatio
         std::memcpy(&strcode, reinterpret_cast<const void*>(known.object + 0x1C), sizeof(strcode));
         std::memcpy(&engineA, reinterpret_cast<const void*>(known.object + 0x20), sizeof(engineA));
         std::memcpy(&engineB, reinterpret_cast<const void*>(known.object + 0x28), sizeof(engineB));
-        const auto moduleBase = reinterpret_cast<uintptr_t>(baseModule);
+        const auto moduleBase = reinterpret_cast<uintptr_t>(pfc::game::Module());
         return strcode == known.strcode
             && engineA == moduleBase + 0x437150
             && engineB == moduleBase + 0x437110;
@@ -2753,7 +2754,7 @@ namespace AspectRatio
         float p4, float p5, float aspectScale)
     {
         const auto ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
-        const auto base = reinterpret_cast<uintptr_t>(baseModule);
+        const auto base = reinterpret_cast<uintptr_t>(pfc::game::Module());
         const uintptr_t rva = ret >= base ? ret - base : ret;
         const ULONGLONG now = GetTickCount64();
 
@@ -2848,8 +2849,8 @@ namespace AspectRatio
 
     // ---- the bands: a clear on the back buffer before Present -----------------------------
     //
-    // The game's swap chain is reached through the DXGI factory exports (hooked the way the
-    // fork hooks D3D12CreateDevice), which hands over both the swap chain and the command
+    // The game's swap chain is reached through the DXGI factory exports (hooked the way
+    // render_pipeline.cpp hooks D3D12CreateDevice), which hands over both the swap chain and the command
     // queue it presents from. Each Present records one small command list on that queue:
     // transition the current back buffer, clear the band rects, transition back. Same queue,
     // so it is ordered after the game's frame and before the present.
@@ -2906,9 +2907,9 @@ namespace AspectRatio
     // widget: a 60-unit ring at (1192, 53) of 1280x720, stretched with the window, measured
     // the same at 4:3 and 21:9. So it is looked for one level down, at the command list:
     // every DrawInstanced / DrawIndexedInstanced while the budget lasts, with the present
-    // it belongs to and the game frames that issued it. The fork's public module already
+    // it belongs to and the game frames that issued it. The public render pipeline already
     // holds inline hooks on these two slots; ours go on top (the trampoline relocates the
-    // jmp the first hook left), so the chain is ours -> the fork's -> D3D12.
+    // jmp the first hook left), so the chain is ours -> render_pipeline's -> D3D12.
     SafetyHookInline DrawInstanced_hook {};
     SafetyHookInline DrawIndexedInstanced_hook {};
     constexpr size_t kListDrawInstancedSlot = 12;
@@ -2925,7 +2926,7 @@ namespace AspectRatio
         }
         void* frames[12] {};
         const USHORT n = RtlCaptureStackBackTrace(2, 12, frames, nullptr);
-        const auto module = reinterpret_cast<uintptr_t>(baseModule);
+        const auto module = reinterpret_cast<uintptr_t>(pfc::game::Module());
         std::string chain;
         for (USHORT i = 0; i < n; i++)
         {
@@ -3045,7 +3046,7 @@ namespace AspectRatio
             spdlog::error("MGS4: letterbox: command list creation failed."); return false;
         }
         b.list->Close();
-        if (bLabMode) { InstallDrawCensus(b.list); }
+        if (pfc::config::LabMode()) { InstallDrawCensus(b.list); }
         if (FAILED(b.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&b.fence))))
         {
             spdlog::error("MGS4: letterbox: fence creation failed."); return false;
@@ -3135,8 +3136,8 @@ namespace AspectRatio
         // swap chain (created at the desktop size, never resized) with the picture in the
         // top 1620 rows.
         int32_t windowWidth = 0, windowHeight = 0;
-        std::memcpy(&windowWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(windowWidth));
-        std::memcpy(&windowHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(windowHeight));
+        std::memcpy(&windowWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeX), sizeof(windowWidth));
+        std::memcpy(&windowHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeY), sizeof(windowHeight));
         const UINT paintedWidth = windowWidth > 0 ? std::min(static_cast<UINT>(windowWidth), b.width) : b.width;
         const UINT paintedHeight = windowHeight > 0 ? std::min(static_cast<UINT>(windowHeight), b.height) : b.height;
 
@@ -3306,7 +3307,7 @@ namespace AspectRatio
 
     void InstallLetterbox()
     {
-        auto* const base = reinterpret_cast<uint8_t*>(baseModule);
+        auto* const base = reinterpret_cast<uint8_t*>(pfc::game::Module());
         const auto checked = [base](uintptr_t rva, std::initializer_list<uint8_t> prologue, const char* what) -> uint8_t*
             {
                 auto* at = base + rva;
@@ -3330,17 +3331,17 @@ namespace AspectRatio
         if (auto* at = checked(kRvaCameraBuilder, { 0x48, 0x8B, 0xC4, 0x53, 0x56, 0x57 }, "camera builder"))
         {
             CameraBuilder_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&BuildCamera));
-            LOG_HOOK(CameraBuilder_hook, "MGS4: letterbox camera builder")
+            PFC_LOG_HOOK(CameraBuilder_hook, "MGS4: letterbox camera builder")
         }
         if (auto* at = checked(kRvaCinematicOwner, { 0x40, 0x55, 0x53, 0x57, 0x41, 0x56, 0x48, 0x8D }, "cinematic camera owner"))
         {
             CinematicOwner_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&UpdateCinematicCamera));
-            LOG_HOOK(CinematicOwner_hook, "MGS4: letterbox cinematic owner")
+            PFC_LOG_HOOK(CinematicOwner_hook, "MGS4: letterbox cinematic owner")
         }
         if (auto* at = checked(kRvaProjectionSetter, { 0x48, 0x83, 0xEC, 0x68 }, "projection setter"))
         {
             ProjectionSetter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&SetProjection));
-            LOG_HOOK(ProjectionSetter_hook, "MGS4: letterbox projection setter")
+            PFC_LOG_HOOK(ProjectionSetter_hook, "MGS4: letterbox projection setter")
         }
 
         // Band side: the DXGI exports, before the game resolves them.
@@ -3369,7 +3370,7 @@ namespace AspectRatio
 
     // ---- the HUD report (F11) --------------------------------------------------------------
     //
-    // The one diagnostic a normal launch carries, behind the Config Tool's Debug Logging: F11
+    // The one diagnostic a normal launch carries, behind the settings tool's Debug Logging: F11
     // writes the sites dump - every anchor record of the next instance-pool upload with its
     // owner, channel, node strcode and element offset - into the game log under a header
     // naming the output size and the active switches. It is exactly the dump the treatment
@@ -3387,8 +3388,8 @@ namespace AspectRatio
                     if (down && !wasDown)
                     {
                         int32_t outputWidth = 0, outputHeight = 0;
-                        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
-                        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+                        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
+                        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(pfc::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
                         spdlog::info("MGS4: HUD report (F11): output {}x{}, factor {:.4f} x {:.4f}, layout {}, world tracking {}.",
                             outputWidth, outputHeight, HorizontalSpreadFactor(), VerticalSpreadFactor(),
                             bAspectPoolSpread ? "expanded" : "centered", bAspectWorldTracking ? "on" : "off");
@@ -3701,8 +3702,8 @@ namespace AspectRatio
         // lab can arm them mid-session, and the probe self-gates to a flag check when
         // nothing is armed.
         UploadHelper_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(baseModule) + kRvaUploadHelper, UploadHelperProbe);
-        LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect producer watch")
+            reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaUploadHelper, UploadHelperProbe);
+        PFC_LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect producer watch")
     }
 
     void ApplyFixes()
@@ -3714,7 +3715,7 @@ namespace AspectRatio
         // upload-helper probe, the live command thread, the rect/producer/channel logging -
         // whose switches only exist in the lab settings file and which must not run outside
         // a lab boot.
-        if (bLabMode)
+        if (pfc::config::LabMode())
         {
             if (bLogUiChannels)
             {
@@ -3727,7 +3728,7 @@ namespace AspectRatio
             }
         }
 
-        // Menu masking without the corrected HUD would mask stretched menus: the Config Tool
+        // Menu masking without the corrected HUD would mask stretched menus: the settings tool
         // only offers it with a centered or expanded HUD, and the read enforces the same.
         bMenuMasking = bMenuMasking && bFixUiAspect;
         // The masking and the camera settings (AR-010) stand on their own: a stretched HUD
@@ -3740,7 +3741,7 @@ namespace AspectRatio
 
         if (bFixUiAspect)
         {
-            auto* const at = reinterpret_cast<uint8_t*>(baseModule) + kRvaUiLayoutConverter;
+            auto* const at = reinterpret_cast<uint8_t*>(pfc::game::Module()) + kRvaUiLayoutConverter;
 
             // The RVA is specific to one executable build and .text is encrypted on disk, so
             // the only meaningful check is here, in-process, before hooking. MSVC's canonical
@@ -3754,7 +3755,7 @@ namespace AspectRatio
             }
 
             UiLayoutConverter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&ConvertLayout));
-            LOG_HOOK(UiLayoutConverter_hook, "MGS4: UI Aspect")
+            PFC_LOG_HOOK(UiLayoutConverter_hook, "MGS4: UI Aspect")
 
             // Layer 2 rides on layer 1: without the undistorted centered base, spreading
             // anchors would just rearrange stretched widgets.
@@ -3764,7 +3765,7 @@ namespace AspectRatio
             }
         }
 
-        if (bLabMode)
+        if (pfc::config::LabMode())
         {
             ApplyCornerSpread();
             if (bFixUiAspectCorners && bAspectRuntimeAnchoring)
@@ -3784,8 +3785,8 @@ namespace AspectRatio
         // Debug Logging: the F11 HUD report, which needs the upload probe (the dump runs at
         // the pool's upload - the lab has already installed it) as well as the append hook
         // below. A lab boot gets the key too; it arms the same dump as the lab's own command.
-        const bool report = g_Logging.bVerboseLogging;
-        if (report && !bLabMode)
+        const bool report = pfc::log::Verbose();
+        if (report && !pfc::config::LabMode())
         {
             ApplyCornerSpread();
         }
@@ -3794,7 +3795,7 @@ namespace AspectRatio
         // spinner, the masking's screen identities and the HUD report. Its probe self-gates
         // to a flag check when nothing is armed, and every treatment is a strict no-op at
         // 16:9.
-        if (bFixUiAspect || BandHooksWanted() || bLabMode || report)
+        if (bFixUiAspect || BandHooksWanted() || pfc::config::LabMode() || report)
         {
             InstallSiteAttribution();
         }

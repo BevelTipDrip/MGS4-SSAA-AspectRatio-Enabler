@@ -5,7 +5,7 @@
 // The game lays out its entire interface in a logical 1280x720 space and maps that space onto
 // the full output, whatever the output's aspect - which stretches the HUD at anything other
 // than 16:9. The mechanism, measurements and design live in docs/features/aspect-ratio.md.
-// The research diagnostics that established them live in resolution_scaling_fixes.cpp.
+// The research diagnostics that established them live in render_pipeline.cpp.
 namespace AspectRatio
 {
     // Hooks the UI layout converter so every layout object maps an aspect-corrected logical
@@ -14,7 +14,7 @@ namespace AspectRatio
     // Applied only when the setting asks for it.
     void ApplyFixes();
 
-    // Layer 1. In a normal launch the Config Tool's "Ultrawide HUD" choice sets this alone
+    // Layer 1. In a normal launch the settings tool's "Ultrawide HUD" choice sets this alone
     // (Centered HUD) or together with bAspectPoolSpread (Expanded HUD); the lab settings
     // file drives them separately.
     inline bool bFixUiAspect = false;
@@ -68,7 +68,7 @@ namespace AspectRatio
 
     // The 16:9 frame on a non-16:9 output (AR-010): black bands over the region outside the
     // centred 16:9 rect - side pillars on a wide output, top and bottom bands on a tall one.
-    // Three switches, the Config Tool's "Menu Masking", "Cutscene Masking" and "Cutscene FOV
+    // Three switches, the settings tool's "Menu Masking", "Cutscene Masking" and "Cutscene FOV
     // Compensation"; the lab settings' "Aspect Letterbox" turns all three on.
     //
     // Menu masking: the bands are up over the boot sequence up to the continue press on a
@@ -90,7 +90,7 @@ namespace AspectRatio
     // simply shown wider than authored. A no-op on outputs that are not wider than 16:9.
     inline bool bCutsceneFovCompensation = false;
 
-    // Gameplay FOV: the gameplay camera's view width relative to stock, as the Config Tool's
+    // Gameplay FOV: the gameplay camera's view width relative to stock, as the settings tool's
     // percentage / 100. 1.0 is stock; the projection scale on the gameplay route alone is
     // divided by it. Cutscenes are not touched by this.
     inline float fFovAdjustment = 1.0f;
