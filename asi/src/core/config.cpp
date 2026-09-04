@@ -190,8 +190,22 @@ namespace mgs4e::config
             Read(ini, Graphics, "Log Viewports", RP::bLogViewports);
             Read(ini, Graphics, "Log UI Layout", RP::bLogUiLayout);
 
-            // The aspect layers individually, for the harness. Layer 1 is Fix UI Aspect, the
-            // corner spread is layer 2; the runtime anchoring is the earlier, abandoned layer 2.
+            // The shipping "Ultrawide HUD" choice first, so a lab file written like a user file
+            // gets the fix the way a user file does. Without this a lab boot silently ran with
+            // the stretched HUD whenever the file had no per-layer keys (2026-09-04: three
+            // README captures had to be retaken).
+            {
+                std::string hud;
+                Read(ini, Graphics, UltrawideHud, hud);
+                const bool expanded = hud == UltrawideHud_Expanded;
+                const bool centered = hud == UltrawideHud_Centered;
+                AspectRatio::bFixUiAspect = expanded || centered;
+                AspectRatio::bAspectPoolSpread = expanded;
+            }
+
+            // The aspect layers individually, for the harness; these override the choice above.
+            // Layer 1 is Fix UI Aspect, the corner spread is layer 2; the runtime anchoring is
+            // the earlier, abandoned layer 2.
             Read(ini, Graphics, "Fix UI Aspect", AspectRatio::bFixUiAspect);
             Read(ini, Graphics, "Fix UI Aspect Corners", AspectRatio::bFixUiAspectCorners);
             Read(ini, Graphics, "Aspect Runtime Anchoring", AspectRatio::bAspectRuntimeAnchoring);
