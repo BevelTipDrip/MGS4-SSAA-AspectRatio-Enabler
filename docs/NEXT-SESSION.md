@@ -34,9 +34,10 @@ external/        safetyhook, zydis, spdlog, wxWidgets, ultrawide (private)
 build/           build.cmd, build_zydis.cmd, build_wx.cmd, package.ps1, make_art.ps1
 ```
 
-Game side: `MGS4\scripts\PFCompanion.asi` (the harness deploys to `MGS4\PFCompanion.asi`,
-which the loader also picks up), settings and tool in the game root, log at
-`logs\PFCompanion_Game.log`. Never put an `.asi` in the game root.
+Game side: `MGS4\scripts\PFCompanion.asi` (the harness `-Deploy` copies there too — one
+copy only, the loader also loads from `MGS4\` and two copies would both hook), settings and
+tool in the game root, log at `logs\PFCompanion_Game.log`. Never put an `.asi` in the game
+root.
 
 ---
 
@@ -118,4 +119,6 @@ rediscovered the hard way:
   manual launch is yours to clean up.
 - **Evidence levels are enforced.** Inferred is a hypothesis with a note attached, not a reason to
   change code. Promote to Observed or Measured first, or record that it could not be promoted.
-- **The user's `MGSPatriotFix.settings` is never written**, by the tool, the ASI or you.
+- **`MGSPatriotFix.settings` is never written by the tool or the ASI** — it is read for the
+  overlap table and the one-time import, nothing else. The user's own settings now live in
+  `PFCompanion.settings`; leave that file alone unless they ask.
