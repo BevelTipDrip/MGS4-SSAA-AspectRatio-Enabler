@@ -341,20 +341,27 @@ namespace AspectRatio
     // The ring is two objects: the Solid Eye's, measured first, and the smaller compass the
     // game draws in its place with the Solid Eye unequipped (channel 0x22, hot dump 15,
     // 2026-09-03 - it sat at the centred position with the Solid Eye's ring tabled alone).
+    //
+    // Each widget names both the horizontal edge it belongs to (for outputs wider than 16:9)
+    // and the vertical one (for outputs taller than 16:9, where the same rule is rotated:
+    // layer 1 letterboxes the interface into a centred 16:9 band and the corner widgets
+    // move up or down to the real output edges). Only the axis with spare room ever shifts,
+    // so at 21:9 the vertical side is inert and at 4:3 the horizontal one is.
     struct HudIdentity
     {
         uint32_t strcode;
         int8_t side;        // -1 left edge, +1 right edge
+        int8_t sideY;       // -1 bottom edge, +1 top edge (NDC y is up)
         const char* what;
     };
     constexpr HudIdentity kHudIdentities[] = {
-        { 0x00FF6177, +1, "weapon panel" },         // also every weapon wheel slot
-        { 0x0093929C, +1, "weapon icon" },
-        { 0x00F1D8B7, -1, "item panel / Solid Eye" },   // also every item wheel slot
-        { 0x0085D6E9, -1, "life bar" },
-        { 0x0064D23C, +1, "camo ring (Solid Eye)" },
-        { 0x00925509, +1, "camo ring (compass)" },  // the plain ring the Solid Eye replaces; hot dump 15
-        { 0x000D12D5, -1, "battery bar" },          // sits under the item panel; (-0.539,-0.911)
+        { 0x00FF6177, +1, -1, "weapon panel" },         // also every weapon wheel slot
+        { 0x0093929C, +1, -1, "weapon icon" },
+        { 0x00F1D8B7, -1, -1, "item panel / Solid Eye" },   // also every item wheel slot
+        { 0x0085D6E9, -1, +1, "life bar" },
+        { 0x0064D23C, +1, +1, "camo ring (Solid Eye)" },
+        { 0x00925509, +1, +1, "camo ring (compass)" },  // the plain ring the Solid Eye replaces; hot dump 15
+        { 0x000D12D5, -1, -1, "battery bar" },          // sits under the item panel; (-0.539,-0.911)
     };
 
     // A widget's channel also carries records with no node of their own - the ammo and life
@@ -368,6 +375,7 @@ namespace AspectRatio
     struct ChannelTreatment
     {
         float dx;
+        float dy;
         bool named;
     };
 
@@ -393,11 +401,12 @@ namespace AspectRatio
         uint32_t strcode;   // opcode 0x0D node strcode, as for kHudIdentities
         uint32_t elem;      // frame-2 rbx - frame-1 r14
         int8_t side;
+        int8_t sideY;       // the wheels hang off the bottom boxes, so both go down at 4:3
         const char* what;
     };
     constexpr ElementSide kHudElements[] = {
-        { kSelectorStrcode, 0x1950, -1, "item wheel slot plates" },       // text +0x3B38/+0x3C08
-        { kSelectorStrcode, 0x2410, +1, "weapon wheel slot plates" },
+        { kSelectorStrcode, 0x1950, -1, -1, "item wheel slot plates" },       // text +0x3B38/+0x3C08
+        { kSelectorStrcode, 0x2410, +1, -1, "weapon wheel slot plates" },
     };
 
     // The wheel backdrops are the opposite case: a translucent dim plate authored to cover
@@ -428,8 +437,10 @@ namespace AspectRatio
     // area: the plate lands at 480 + (x+1)*1440 px instead of (x+1)*1920, an error of x*480
     // px that grows toward the edges. Multiplying the centre by the spread factor lands it
     // on the object; the corners are then translated by the same delta so the bracket keeps
-    // its native size (the vertical axis needs nothing - the canvas height is the output
-    // height).
+    // its native size. On a wide output the vertical axis needs nothing - the canvas height
+    // is the output height - and on a tall output it is the other way round: the canvas
+    // width is the output width and the letterboxed band is what misplaces the label
+    // vertically, so the same correction runs on y with the vertical factor.
     struct WorldElement
     {
         uint32_t strcode;   // dword at frame-2 rbx + 8 under opcode 0x0D
@@ -544,6 +555,30 @@ namespace AspectRatio
         return static_cast<float>(outputWidth) / static_cast<float>(safeWidth);
     }
 
+    // The same number for an output taller than 16:9 - 4:3, say - where layer 1 grows the
+    // logical range vertically instead (extraY) and the interface sits letterboxed in a
+    // centred 16:9 band. Exactly one of the two factors is ever above 1.0: at 4:3 this is
+    // 4/3 and the horizontal one is 1.0, at 21:9 the other way round, at 16:9 both are 1.0.
+    float VerticalSpreadFactor()
+    {
+        int32_t outputWidth = 0;
+        int32_t outputHeight = 0;
+        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
+        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
+
+        if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
+        {
+            return 1.0f;
+        }
+
+        const int64_t safeHeight = static_cast<int64_t>(outputWidth) * 9 / 16;
+        if (safeHeight <= 0 || safeHeight >= outputHeight)
+        {
+            return 1.0f;
+        }
+        return static_cast<float>(outputHeight) / static_cast<float>(safeHeight);
+    }
+
     // The shift is a constant per side - deliberately NOT a function of each anchor's exact
     // position. The first version scaled every anchor by the spread factor, grouped by a
     // draw-order proximity heuristic, and the user's comparison shots showed what any
@@ -569,6 +604,31 @@ namespace AspectRatio
     {
         const float factor = HorizontalSpreadFactor();
         return factor == 1.0f ? 0.0f : 1.0f - 1.0f / factor;
+    }
+
+    // The 4:3 case is the same rule rotated: the widgets that sit at the top and bottom of
+    // the 16:9 band move up and down to the real output edges by 1 - 1/factorY, keeping
+    // their 16:9 pixel margins from the top and bottom of the screen. At 2880x2160 that is
+    // 0.25 NDC = 270 px per side. Never both: a wider output has SideShiftY() == 0 and a
+    // taller one has SideShift() == 0, so a widget's (sideX, sideY) pair only ever moves it
+    // along the axis the output actually has spare room on.
+    float SideShiftY()
+    {
+        const float factor = VerticalSpreadFactor();
+        return factor == 1.0f ? 0.0f : 1.0f - 1.0f / factor;
+    }
+
+    // The edge a shift is toward, for the log: the horizontal pair on a wide output, the
+    // vertical pair on a tall one.
+    const char* ShiftEdgeName(int8_t sideX, int8_t sideY)
+    {
+        if (SideShift() != 0.0f) { return sideX < 0 ? "left" : sideX > 0 ? "right" : "centre"; }
+        return sideY < 0 ? "bottom" : sideY > 0 ? "top" : "centre";
+    }
+
+    float ActiveShift()
+    {
+        return SideShift() != 0.0f ? SideShift() : SideShiftY();
     }
     // Temporary census of every anchor-bearing pool that flows through the helper. Three HUD
     // elements sit at centered positions while their widgets spread - the compass's centre
@@ -956,6 +1016,7 @@ namespace AspectRatio
     // the dynamic range runs past 64.
     constexpr int kChannelCount = 128;
     float g_ChannelBias[kChannelCount] {};
+    float g_ChannelBiasY[kChannelCount] {};   // "chanbias <ch> <dx> <dy>": the 4:3 measurements bias vertically
     std::atomic<bool> g_ChannelBiasActive { false };
     // Ordinal bias ("chanord"): only the n-th record a channel appends per frame. Counted on
     // the render thread only, so the counter needs no atomics.
@@ -1075,11 +1136,11 @@ namespace AspectRatio
         return fresh;
     }
 
-    float ChannelDx(int channel)
+    const ChannelTreatment* ChannelCarry(int channel)
     {
-        if (g_ChannelNow[channel].named) { return g_ChannelNow[channel].dx; }
-        if (g_ChannelLast[channel].named) { return g_ChannelLast[channel].dx; }
-        return 0.0f;
+        if (g_ChannelNow[channel].named) { return &g_ChannelNow[channel]; }
+        if (g_ChannelLast[channel].named) { return &g_ChannelLast[channel]; }
+        return nullptr;
     }
 
     void ShiftAppend(SafetyHookContext& ctx, bool spread, bool bias)
@@ -1110,7 +1171,11 @@ namespace AspectRatio
         // (bAspectWorldTracking) and the corner/selector spread (bAspectPoolSpread). Each
         // names only its own channels, so ChannelDx carries a group only when its switch is
         // on - a centered HUD with world tracking moves the Solid Eye labels and nothing else.
+        // Every treatment is a pair: the horizontal delta is live on outputs wider than
+        // 16:9, the vertical one on outputs taller, and the inactive axis's shift is 0.0 so
+        // the pair reduces to the one number the output needs.
         float dx = 0.0f;
+        float dy = 0.0f;
         if (spread && id.owner == reinterpret_cast<uintptr_t>(baseModule) + kRvaHudOwner)
         {
             const bool corners = bAspectPoolSpread;
@@ -1120,25 +1185,25 @@ namespace AspectRatio
                 const int worldMode = g_WorldMode.load(std::memory_order_relaxed);
                 if (worldMode != 0 && (worldMode == 2 || !now.named))
                 {
-                    float x = 0.0f;
-                    std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
-                    now = { x * (HorizontalSpreadFactor() - 1.0f), true };
+                    float v8[2] {};
+                    std::memcpy(v8, src + kAnchorBlockV8, sizeof(v8));
+                    now = { v8[0] * (HorizontalSpreadFactor() - 1.0f), v8[1] * (VerticalSpreadFactor() - 1.0f), true };
                     const uint64_t logBit = 1ull << (world - kWorldElements);
                     if ((g_WorldElementsLogged.fetch_or(logBit) & logBit) == 0)
                     {
-                        spdlog::info("MGS4: UI Aspect: world element {:08X} ({}) on channel 0x{:02X}: reference element +{:X}, x {:.4f} -> {:.4f}.",
-                            world->strcode, world->what, id.channel, id.elem, x, x + now.dx);
+                        spdlog::info("MGS4: UI Aspect: world element {:08X} ({}) on channel 0x{:02X}: reference element +{:X}, x {:.4f} -> {:.4f}, y {:.4f} -> {:.4f}.",
+                            world->strcode, world->what, id.channel, id.elem, v8[0], v8[0] + now.dx, v8[1], v8[1] + now.dy);
                     }
                 }
             }
             else if (const HudIdentity* identity = corners ? HudIdentityEntry(id.strcode) : nullptr)
             {
-                now = { static_cast<float>(identity->side) * SideShift(), true };
+                now = { static_cast<float>(identity->side) * SideShift(), static_cast<float>(identity->sideY) * SideShiftY(), true };
                 const uint64_t logBit = 1ull << (identity - kHudIdentities);
                 if ((g_ShiftedIdentitiesLogged.fetch_or(logBit) & logBit) == 0)
                 {
                     spdlog::info("MGS4: UI Aspect: element {:08X} ({}) on channel 0x{:02X} anchored {} by {:.4f}.",
-                        identity->strcode, identity->what, id.channel, identity->side < 0 ? "left" : "right", SideShift());
+                        identity->strcode, identity->what, id.channel, ShiftEdgeName(identity->side, identity->sideY), ActiveShift());
                 }
             }
 
@@ -1149,40 +1214,51 @@ namespace AspectRatio
             if (element)
             {
                 dx += static_cast<float>(element->side) * SideShift();
+                dy += static_cast<float>(element->sideY) * SideShiftY();
                 const uint64_t bit = 1ull << (element - kHudElements);
                 if ((g_ShiftedElementsLogged.fetch_or(bit) & bit) == 0)
                 {
                     spdlog::info("MGS4: UI Aspect: element {:08X}+{:X} ({}) on channel 0x{:02X} anchored {} by {:.4f}.",
-                        element->strcode, id.elem, element->what, id.channel, element->side < 0 ? "left" : "right", SideShift());
+                        element->strcode, id.elem, element->what, id.channel, ShiftEdgeName(element->side, element->sideY), ActiveShift());
                 }
             }
             else if (const ElementStretch* stretch = (corners && id.hasElem) ? HudStretchEntry(id.strcode, id.elem) : nullptr)
             {
-                // Stretched about the screen centre: x basis and x origin scaled together,
-                // so the plate's 16:9 span becomes the full output span.
-                const float factor = HorizontalSpreadFactor();
-                float basisX = 0.0f, originX = 0.0f;
+                // Stretched about the screen centre: basis and origin scaled together along
+                // the axis with spare room, so the plate's 16:9 span becomes the full output
+                // span - sideways on a wide output, up and down on a tall one.
+                const float factorX = HorizontalSpreadFactor();
+                const float factorY = VerticalSpreadFactor();
+                float basisX = 0.0f, basisY = 0.0f, originX = 0.0f, originY = 0.0f;
                 std::memcpy(&basisX, src + kAnchorBlockV6, sizeof(basisX));
+                std::memcpy(&basisY, src + kAnchorBlockV7 + 4, sizeof(basisY));
                 std::memcpy(&originX, src + kAnchorBlockV8, sizeof(originX));
-                basisX *= factor;
-                originX *= factor;
+                std::memcpy(&originY, src + kAnchorBlockV8 + 4, sizeof(originY));
+                basisX *= factorX;
+                originX *= factorX;
+                basisY *= factorY;
+                originY *= factorY;
                 std::memcpy(src + kAnchorBlockV6, &basisX, sizeof(basisX));
+                std::memcpy(src + kAnchorBlockV7 + 4, &basisY, sizeof(basisY));
                 std::memcpy(src + kAnchorBlockV8, &originX, sizeof(originX));
+                std::memcpy(src + kAnchorBlockV8 + 4, &originY, sizeof(originY));
                 const uint64_t bit = 1ull << (stretch - kHudStretched);
                 if ((g_StretchedElementsLogged.fetch_or(bit) & bit) == 0)
                 {
                     spdlog::info("MGS4: UI Aspect: element {:08X}+{:X} ({}) on channel 0x{:02X} stretched by {:.4f}.",
-                        stretch->strcode, id.elem, stretch->what, id.channel, factor);
+                        stretch->strcode, id.elem, stretch->what, id.channel, factorX != 1.0f ? factorX : factorY);
                 }
             }
-            else
+            else if (const ChannelTreatment* carry = ChannelCarry(id.channel))
             {
-                dx += ChannelDx(id.channel);
+                dx += carry->dx;
+                dy += carry->dy;
             }
         }
         if (bias)
         {
             dx += g_ChannelBias[id.channel];
+            dy += g_ChannelBiasY[id.channel];
             const int ordChannel = g_OrdChannel.load(std::memory_order_relaxed);
             if (ordChannel >= 0)
             {
@@ -1196,12 +1272,13 @@ namespace AspectRatio
                 }
             }
         }
-        if (dx != 0.0f)
+        if (dx != 0.0f || dy != 0.0f)
         {
-            float x = 0.0f;
-            std::memcpy(&x, src + kAnchorBlockV8, sizeof(x));
-            x += dx;
-            std::memcpy(src + kAnchorBlockV8, &x, sizeof(x));
+            float v8[2] {};
+            std::memcpy(v8, src + kAnchorBlockV8, sizeof(v8));
+            v8[0] += dx;
+            v8[1] += dy;
+            std::memcpy(src + kAnchorBlockV8, v8, sizeof(v8));
         }
     }
 
@@ -1209,7 +1286,8 @@ namespace AspectRatio
     {
         const bool sites = g_SiteDumpFrames.load(std::memory_order_relaxed) > 0;
         const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
-        const bool spread = (bAspectPoolSpread || bAspectWorldTracking) && SideShift() != 0.0f;   // strict no-op at 16:9
+        const bool spread = (bAspectPoolSpread || bAspectWorldTracking)
+            && (SideShift() != 0.0f || SideShiftY() != 0.0f);   // strict no-op at 16:9
         if (!sites && !bias && !spread)
         {
             return;
@@ -2224,8 +2302,8 @@ namespace AspectRatio
                         int32_t outputWidth = 0, outputHeight = 0;
                         std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeX), sizeof(outputWidth));
                         std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(baseModule) + kRvaWindowSizeY), sizeof(outputHeight));
-                        spdlog::info("MGS4: HUD report (F11): output {}x{}, factor {:.4f}, layout {}, world tracking {}.",
-                            outputWidth, outputHeight, HorizontalSpreadFactor(),
+                        spdlog::info("MGS4: HUD report (F11): output {}x{}, factor {:.4f} x {:.4f}, layout {}, world tracking {}.",
+                            outputWidth, outputHeight, HorizontalSpreadFactor(), VerticalSpreadFactor(),
                             bAspectPoolSpread ? "expanded" : "centered", bAspectWorldTracking ? "on" : "off");
                         std::lock_guard lock(g_ObjectsMutex);
                         ArmSiteDump("HUD report");
@@ -2322,18 +2400,21 @@ namespace AspectRatio
                         }
                         else if (std::strncmp(line, "chanbias", 8) == 0)
                         {
-                            // chanbias <channel> <dx>   (channel decimal or 0x.., dx in NDC)
+                            // chanbias <channel> <dx> [dy]   (channel decimal or 0x.., deltas in NDC)
                             char* end = nullptr;
                             const long channel = std::strtol(line + 8, &end, 0);
-                            const float dx = std::strtof(end, nullptr);
+                            const float dx = std::strtof(end, &end);
+                            const float dy = std::strtof(end, nullptr);
                             if (channel >= 0 && channel < kChannelCount)
                             {
                                 g_ChannelBias[channel] = dx;
+                                g_ChannelBiasY[channel] = dy;
                                 bool any = false;
                                 for (float v : g_ChannelBias) { any = any || v != 0.0f; }
+                                for (float v : g_ChannelBiasY) { any = any || v != 0.0f; }
                                 g_ChannelBiasActive.store(any);
-                                spdlog::info("MGS4: live lab: channel {} (0x{:X}) bias {:+.4f}; active={}",
-                                    channel, channel, dx, any);
+                                spdlog::info("MGS4: live lab: channel {} (0x{:X}) bias {:+.4f} {:+.4f}; active={}",
+                                    channel, channel, dx, dy, any);
                             }
                         }
                         else if (std::strncmp(line, "spread", 6) == 0)
@@ -2365,6 +2446,7 @@ namespace AspectRatio
                         else if (std::strncmp(line, "chanreset", 9) == 0)
                         {
                             for (float& v : g_ChannelBias) { v = 0.0f; }
+                            for (float& v : g_ChannelBiasY) { v = 0.0f; }
                             g_OrdChannel.store(-1);
                             g_ChannelBiasActive.store(false);
                             spdlog::info("MGS4: live lab: channel biases cleared.");

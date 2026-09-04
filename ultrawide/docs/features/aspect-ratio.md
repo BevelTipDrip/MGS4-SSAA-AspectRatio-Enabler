@@ -25,6 +25,12 @@ has never been reproduced during this project. It stays filed under Window resol
 that is the setting that exposes it; when this feature fixes it, mark it fixed there with a
 pointer back here rather than moving it.
 
+**Update 2026-09-04:** 4:3 is done — both layers run rotated onto the vertical axis
+([AR-009](#ar-009--43-output-verified-with-both-layers-rotated-to-the-vertical-axis) below;
+mechanism in [ultrawide-hud-identity-spread.md](ultrawide-hud-identity-spread.md#7-the-shift)).
+WR-001 in the public fork is to be marked fixed with a pointer only; the public doc must not
+describe the mechanism.
+
 ---
 
 ## What is already known
@@ -402,8 +408,9 @@ can show real widget artwork.
    routes and are the classic breakage site.
 2. **The 3D camera** (AR-002) — the world is still Vert- at 21:9. Squash vs crop first, then
    the projection.
-3. **4:3** — layer 1 already handles the axis swap (should fix WR-001; untested). The corner
-   spread is X-only; 4:3 wants the same rule rotated (spread `v8.y`, exempt `|y| > 1/factorY`).
+3. ~~**4:3**~~ — done 2026-09-04 (AR-009). Left to check there: the 3D view (cropped or
+   squashed?), and the BASIC CONTROLS panel which stops at the 16:9 band top/bottom exactly as
+   it stops at the sides on 21:9 (one `kHudStretched` line once its element is read off F11).
 4. **A real play session at 21:9** — the harness sees one stage and one aim; an hour of play
    sees codec, item switching, alerts, and everything else.
 5. **32:9** — nothing in the math is 21:9-specific, but factor 2.37 stretches the cluster
@@ -650,6 +657,30 @@ can show real widget artwork.
   section above
 - **Verified:** all four cases re-checked in full-4K crops of the same stage; confirmed by the
   user 2026-09-01
+
+### AR-009 — 4:3 output, verified with both layers rotated to the vertical axis
+
+- **Status:** Fixed, 2026-09-04 (the WR-001 case)
+- **Evidence:** Observed — lab captures at 2880x2160, read by the user
+- **Affects:** `Window Aspect Ratio = 4:3` (any of its resolutions), Centered or Expanded HUD
+- **Evidence detail:** with the spread off, the interface is a 16:9 canvas centred in the frame
+  (layer 1 alone: shapes correct, widgets 270 px inside the top and bottom edges). With the spread on, the weapon and item panels sit on the bottom edge, the life bar
+  and camo ring on the top edge, and each wheel hangs from its box with the dim backdrop
+  covering the full height. Log: `logical range 0..1280 x -120..840`, five widgets
+  `anchored top|bottom by 0.2500`, backdrops `stretched by 1.3333`. User: "4:3 appears to be
+  working" (HUD), "these look correct" (wheels)
+- **Screenshots:** [HUD, spread on](evidence/AR-009-hud-4-3-2880x2160.jpg) /
+  [HUD, spread off](evidence/AR-009-hud-4-3-spread-off.jpg) /
+  [weapon wheel](evidence/AR-009-weapon-wheel-4-3.jpg) /
+  [item wheel](evidence/AR-009-item-wheel-4-3.jpg)
+- **Popups:** none
+- **Cause:** same as AR-001, on the other axis — the converter maps 720 logical rows onto the
+  full output height
+- **Fix:** `VerticalSpreadFactor()` / `SideShiftY()` in `aspect_ratio.cpp`; every identity
+  carries `side` and `sideY`, and exactly one axis is active for a given window. Section 7 of
+  the identity-spread doc
+- **Verified:** one boot, one loadout (Act 4 barrel save), one resolution; the 5:4 entries
+  (factor 1.4) have not been booted but use the same rule
 
 ---
 

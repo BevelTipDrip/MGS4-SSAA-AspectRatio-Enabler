@@ -25,7 +25,9 @@ weapon and item selector wheels attached to their corner boxes when you open the
 everything else - menus, subtitles, the reticle, the CAUTION banner, anything that tracks the
 3D world - exactly centred where a plain 16:9 canvas would put it. Nothing is stretched, nothing
 is guessed from where it happens to be on screen, and on a 16:9 output the code is a strict
-no-op.
+no-op. At an output *taller* than 16:9 (4:3) the same rule runs on the vertical axis: the
+interface keeps its 16:9 shape, the corner widgets move to the real top and bottom edges, and
+the wheels hang from their boxes (section 7).
 
 ## 2. The problem
 
@@ -344,6 +346,36 @@ and every anchor on the same side moves by the same number of pixels. So each wi
 rotated quads, text, ticks - translates rigidly. At `factor == 1` the shift is `0.0` and
 `PoolAppendProbe` returns before unwinding anything: strict no-op on 16:9.
 
+### The vertical twin - 4:3 (2026-09-04)
+
+An output taller than 16:9 is the same problem rotated. Layer 1 already widens the logical
+range on the *y* axis for it (`extraY = (H - W*9/16) * 360 / safeHeight`; at 2880x2160 the
+range is `0..1280 x -120..840`), so the canvas keeps its shape and the empty bands are top and
+bottom. Layer 2 then shifts along y with the rotated constant:
+
+```
+factorY = outputHeight / (outputWidth * 9/16)    // 4/3 at 2880x2160
+shiftY  = 1 - 1/factorY                          // 0.25 NDC = 270 px per edge
+v8.y   += sideY * shiftY                         // sideY = -1 bottom, +1 top (NDC y is up)
+```
+
+Every identity carries both a `side` (x) and a `sideY`; exactly one of `SideShift()` and
+`SideShiftY()` is non-zero for a given window, so a table entry such as `{ weapon panel, +1, -1 }`
+reads "right on a wide output, bottom on a tall one" and the other component is a no-op. The
+wheel backdrops in `kHudStretched` are scaled on whichever axis has the factor (y basis at
+`v7+4`, y origin at `v8+4`), world labels get `y * (factorY - 1)` on the tall axis, and the
+`chanbias` lab command takes an optional `dy`. Nothing else changed.
+
+Verified at 2880x2160 (lab, 2026-09-04): the log shows all five corner widgets anchored top /
+bottom by 0.2500, the wheel backdrops stretched by 1.3333 and the slot plates anchored bottom;
+the user read the HUD and both wheel captures ("4:3 appears to be working" / "these look
+correct"). Evidence: [`AR-009-hud-4-3-2880x2160.jpg`](evidence/AR-009-hud-4-3-2880x2160.jpg),
+[`AR-009-hud-4-3-spread-off.jpg`](evidence/AR-009-hud-4-3-spread-off.jpg),
+[`AR-009-weapon-wheel-4-3.jpg`](evidence/AR-009-weapon-wheel-4-3.jpg),
+[`AR-009-item-wheel-4-3.jpg`](evidence/AR-009-item-wheel-4-3.jpg). Note the channel numbers on
+this loadout were one higher than the 21:9 census (0x1E weapon, 0x1F item, 0x22 life, 0x24 camo,
+0x05 battery) - another reason nothing is keyed on a channel.
+
 Rotated quads (compass arrow, diagonal weapon silhouette, objective marker) fail the strict
 axis-aligned block signature; under a known owner and channel the relaxed signature (`v8.z == 1`,
 sane basis magnitudes, any rotation) is enough, because the identity already excludes non-UI
@@ -399,7 +431,8 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 
 - **Other 16:9-sized backdrops.** The wheel backdrops are stretched (section 6), but the same
   shape shows elsewhere: the BASIC CONTROLS overlay's dark panel stops at the 16:9 edges
-  (capture 2026-09-03, `lab3/title2/item_sites.jpg`), and the pause menu and codec have not
+  (capture 2026-09-03, `lab3/title2/item_sites.jpg`; the same panel stops at the 16:9 band top
+  and bottom at 4:3, capture 2026-09-04), and the pause menu and codec have not
   been looked at. Each is a strcode + element read off a `sites` dump and one `kHudStretched`
   line; the user decides which ones matter.
 - **The title screen's grey panel** (hot dump 03: "offset to the left and not centered") was
@@ -421,8 +454,11 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
   boss HUDs, the expanded radar, Drebin's shop, cutscenes - need a channel census before
   anything is claimed for them. A channel not in the table simply stays centred, so the failure
   mode is a cosmetic gap, never a wrong jump.
-- **The 3D camera is still Vert-** at 21:9 (AR-002), and 4:3 has not been tested with layer 2
-  (the shift is x-only; 4:3 wants the same rule rotated).
+- **The 3D camera is still Vert-** at 21:9 (AR-002). Whether the 3D view at 4:3 is cropped or
+  squashed has not been checked; only the HUD was verified there.
+- **4:3 has one loadout and one resolution behind it** (2880x2160, the Act 4 barrel save).
+  Other 4:3 resolutions are the same factor, so nothing is expected to differ, but 5:4 (1280x1024,
+  factor 1.4) has not been booted.
 - **The zone-based code paths** (`Fix UI Aspect Corners`, the pool-state detector, the la2
   strcode corner table) are still in the tree, off; they get deleted once the identity path has
   been through a full play session.
@@ -440,9 +476,10 @@ Run logs: `C:\mgspf_tools\lab3\` (`sites/`, `chanbias/`, `itm_chans/`, `itm_plat
 | gameplay HUD owner | `+0x1DE3290` (frame-1 `rbp`) |
 | anchor block | 96 B: `v6` +48, `v7` +64, `v8` +80 |
 | element type by innermost producer | `+BAFDF` quads, `+BC213` text, `+BB65F`, `+BCEF3<+BC9A0` |
-| shift | `1 - 1/factor` per side; `factor = W / (H*16/9)` |
+| shift, wide output | `v8.x += side * (1 - 1/factor)`; `factor = W / (H*16/9)` |
+| shift, tall output | `v8.y += sideY * (1 - 1/factorY)`; `factorY = H / (W*9/16)`; NDC y up |
 | node strcode | frame-2 `rbx` = executing node; opcode `0x0D`, element strcode at node+8 |
-| tables | `kHudChannels` (owner+channel), `kHudElements` (owner+channel+element offset), `kWorldElements` (owner+strcode, world-tracked) |
+| tables | `kHudIdentities` (strcode → side, sideY), `kHudElements` (strcode+element offset → side, sideY), `kHudStretched` (strcode+element offset, scaled on the active axis), `kWorldElements` (strcode, world-tracked) |
 
 Attribution: the layout converter RVA and object field layout are mgs4Ultra120's research
 (github.com/drbermejor/mgs4Ultra120); the la2 archive-read signature is from cipherxof's
