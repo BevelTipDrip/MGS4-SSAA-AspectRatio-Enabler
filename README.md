@@ -62,8 +62,8 @@ bottom off.
 
 **Planned**
 - 16:10 displays: the same HUD, menu and cutscene treatment. The masking and FOV work is
-  written against the window's real shape, so it is a matter of measuring and tabling the
-  16:10 cases rather than new machinery.
+  written against the window's real shape, proper offsets just need to be added for 16:10
+  resolutions.
 
 ## Installation
 
