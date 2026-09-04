@@ -243,3 +243,16 @@ signature (same camera, same input scale, within 250 ms) and gets divided too. A
 `1.80000 -> 1.38462` standing, `1.74000 -> 1.33846` aiming; user-confirmed on the
 fov100/fov130 comparison sheet. The cinematic routes are untouched by it, and the cutscene
 compensation is untouched by the FOV setting.
+
+## AR-011: masked picture stretched over the whole window (2026-09-04)
+
+User report: with Menu or Cutscene Masking on, a 2048x1536 (4:3) window showed the picture
+stretched across the full 3840x2160 screen; off, it sat unstretched at the top-left of the
+full-screen window. Cause: the game creates the swap chain at the window size and then, at boot,
+grows it to the desktop size through `IDXGISwapChain3::ResizeBuffers1`, not `ResizeBuffers`.
+Only the latter was hooked, so the band renderer still held the back buffers, the resize failed
+silently, and DXGI stretched the small chain to the window. Fix: hook slot 39 (`ResizeBuffers1`)
+the same way. Log now shows "swap chain resize (ResizeBuffers1) to 3840x2160, band renderer
+dropped" followed by the renderer rebuilt at 3840x2160. Verified at the main menu, 4:3 2048x1536,
+masking on: picture in its region, bands top and bottom. The 14:03 session had looked fine only
+because a later display-mode change went through the hooked `ResizeBuffers`.

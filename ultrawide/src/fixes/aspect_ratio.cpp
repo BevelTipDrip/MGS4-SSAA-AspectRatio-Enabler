@@ -2870,13 +2870,15 @@ namespace AspectRatio
     SafetyHookInline Present_hook {};
     SafetyHookInline Present1_hook {};
     SafetyHookInline ResizeBuffers_hook {};
+    SafetyHookInline ResizeBuffers1_hook {};
 
-    // IDXGIFactory / IDXGIFactory2 / IDXGISwapChain / IDXGISwapChain1 vtable slots.
+    // IDXGIFactory / IDXGIFactory2 / IDXGISwapChain / IDXGISwapChain1 / IDXGISwapChain3 vtable slots.
     constexpr size_t kFactoryCreateSwapChainSlot = 10;
     constexpr size_t kFactory2CreateSwapChainForHwndSlot = 15;
     constexpr size_t kSwapChainPresentSlot = 8;
     constexpr size_t kSwapChainResizeBuffersSlot = 13;
     constexpr size_t kSwapChain1Present1Slot = 22;
+    constexpr size_t kSwapChain3ResizeBuffers1Slot = 39;
 
     struct BandRenderer
     {
@@ -3216,6 +3218,19 @@ namespace AspectRatio
         return ResizeBuffers_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags);
     }
 
+    // The other resize entry point. The game's boot-time resize (a 2048x1536 chain grown to
+    // the 3840x2160 desktop) went through here, unhooked, so our buffer references made it
+    // fail and the small chain was stretched over the whole window (2026-09-04).
+    HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers1(IDXGISwapChain3* self, UINT bufferCount, UINT width,
+        UINT height, DXGI_FORMAT format, UINT flags, const UINT* nodeMask, IUnknown* const* presentQueue)
+    {
+        {
+            std::lock_guard lock(g_BandMutex);
+            if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize (ResizeBuffers1) to {}x{}, band renderer dropped.", width, height); }
+        }
+        return ResizeBuffers1_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags, nodeMask, presentQueue);
+    }
+
     void HookSwapChain(IUnknown* presenter, IUnknown* swapChain)
     {
         static bool hooked = false;
@@ -3239,9 +3254,15 @@ namespace AspectRatio
             one->Release();
             Present1_hook = safetyhook::create_inline(vtable[kSwapChain1Present1Slot], reinterpret_cast<void*>(Hooked_Present1));
         }
-        spdlog::info("MGS4: letterbox: swap chain hooked (Present {}, Present1 {}, ResizeBuffers {}), queue {}.",
+        IDXGISwapChain3* three = nullptr;
+        if (SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&three))) && three)
+        {
+            three->Release();
+            ResizeBuffers1_hook = safetyhook::create_inline(vtable[kSwapChain3ResizeBuffers1Slot], reinterpret_cast<void*>(Hooked_ResizeBuffers1));
+        }
+        spdlog::info("MGS4: letterbox: swap chain hooked (Present {}, Present1 {}, ResizeBuffers {}, ResizeBuffers1 {}), queue {}.",
             Present_hook ? "ok" : "FAILED", Present1_hook ? "ok" : "absent", ResizeBuffers_hook ? "ok" : "FAILED",
-            g_PresentQueue ? "captured" : "MISSING");
+            ResizeBuffers1_hook ? "ok" : "absent", g_PresentQueue ? "captured" : "MISSING");
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device,
