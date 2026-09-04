@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lab.hpp"
+
 // Aspect ratio correction for the game's UI.
 //
 // The game lays out its entire interface in a logical 1280x720 space and maps that space onto
@@ -22,29 +24,29 @@ namespace AspectRatio
     // Layer 2: spread widget anchors so corner widgets sit at the margins they have on 16:9
     // instead of huddling in the centered area. Separate switch so the layers can be tested
     // independently; does nothing without bFixUiAspect.
-    inline bool bFixUiAspectCorners = false;
+    MGS4E_LAB_SWITCH(bool, bFixUiAspectCorners, false);
 
     // Diagnostic: logs each UI channel's descriptor-table entry as the payload assembler
     // emits it, labeling the channels for the producer-based positioning plan. F6 re-arms.
-    inline bool bLogUiChannels = false;
+    MGS4E_LAB_SWITCH(bool, bLogUiChannels, false);
 
     // Diagnostic: logs every .la2 UI layout file the game reads, with each file's parsed
     // layer table (strcodes, status, object counts) - the identity map for the
     // producer-based positioning.
-    inline bool bLogLa2Loads = false;
+    MGS4E_LAB_SWITCH(bool, bLogLa2Loads, false);
 
     // Diagnostic: with bLogLa2Loads, also write each la2's bytes to C:\mgspf_tools\la2_dump
     // so the files can be parsed and previewed outside the game.
-    inline bool bDumpLa2 = false;
+    MGS4E_LAB_SWITCH(bool, bDumpLa2, false);
 
     // Diagnostic: bias the logical range of the one layout object whose la2 strcode matches,
     // so a screenshot shows exactly which screen elements that file governs. 0 disables.
-    inline uint32_t uAspectTestStrcode = 0;
+    MGS4E_LAB_SWITCH(uint32_t, uAspectTestStrcode, 0);
 
     // Runtime re-apply of the bottom-corner anchors. Off by default: it renders the HUD
     // corners but drags the same content's menu and selector copies with it, and has
     // crashed in play. A lab/experiment switch until context discrimination is solved.
-    inline bool bAspectRuntimeAnchoring = false;
+    MGS4E_LAB_SWITCH(bool, bAspectRuntimeAnchoring, false);
 
     // Draw-time corner anchoring: shift widget anchors in the per-frame instance pool at
     // upload, with wheel-state awareness read from the pool itself (AR-008) - an open
@@ -64,7 +66,7 @@ namespace AspectRatio
 
     // Diagnostic: bias every distinct la2's objects by index x 12 logical units, so one run
     // maps every visible widget to its host object by measured shift.
-    inline bool bAspectTestLadder = false;
+    MGS4E_LAB_SWITCH(bool, bAspectTestLadder, false);
 
     // The 16:9 frame on a non-16:9 output (AR-010): black bands over the region outside the
     // centred 16:9 rect - side pillars on a wide output, top and bottom bands on a tall one.

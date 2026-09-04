@@ -8,7 +8,11 @@ This is a private module of [MGS4 SSAA and Aspect Ratio Enabler](https://github.
 MGS4 SSAA and Aspect Ratio Enabler builds with or without it: when this repository is checked out at
 `external/ultrawide`, MSBuild compiles `src/fixes/aspect_ratio.cpp` from here; when it is
 absent, a stub in the public tree logs that the module is not present and the game runs
-without the ultrawide fixes. Nothing in the public tree describes how the fix works.
+without the ultrawide fixes. Nothing in the public tree describes how the fix works, and a
+Release build of the ASI carries none of the research instrumentation or its strings: the
+lab switches here are compile-time constants outside the Lab configuration (`shared/lab.hpp`).
+
+This code is not open source: all rights reserved, see `LICENSE.md`.
 
 ## Layout
 

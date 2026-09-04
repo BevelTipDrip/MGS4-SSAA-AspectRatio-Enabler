@@ -809,6 +809,7 @@ namespace AspectRatio
                 retRva, ctx.r9, ctx.r8, source, floats, hex);
         }
 
+#if MGS4E_LAB_BUILD
         if (g_BufDumpMask.load(std::memory_order_relaxed) != 0 && source && ctx.r9 <= (8u << 20))
         {
             const int bit = retRva == kRvaInstancePoolCaller ? 1 : retRva == 0x7A946F ? 2 : retRva == 0x7A94BF ? 4 : 0;
@@ -829,6 +830,7 @@ namespace AspectRatio
                 }
             }
         }
+#endif
 
         if (!source || ctx.r9 < kAnchorBlockSize || ctx.r9 > (8u << 20))
         {
@@ -1426,6 +1428,7 @@ namespace AspectRatio
     int g_ScreenLogCount = 0;
     std::atomic<bool> g_ScreenLogAll { false };   // "screenlog N all": HUD-owner nodes without a strcode too
 
+#if MGS4E_LAB_BUILD
     void ScreenLogAppend(const AppendIdentity& id)
     {
         if (g_ScreenLogBudget.load(std::memory_order_relaxed) <= 0) { return; }
@@ -1454,6 +1457,7 @@ namespace AspectRatio
             id.owner, id.channel, id.hasElem ? id.elem : 0, id.strcode, id.opcode, id.operand,
             id.hasElem ? "" : " (no element frame)");
     }
+#endif
 
     // The loading spinner (the ring in the top-right corner of the loading plates) is not a
     // layout-script widget: it has no owner, no channel and no strcode, and its record is
@@ -1541,7 +1545,9 @@ namespace AspectRatio
                 g_TitleSeen.store(true, std::memory_order_relaxed);
                 RearmBootPhase();
             }
+#if MGS4E_LAB_BUILD
             ScreenLogAppend(id);
+#endif
         }
         if (!spread && !bias)
         {
@@ -2606,7 +2612,9 @@ namespace AspectRatio
     //   biascode <hex> <dx> <dy> shift every object with that la2 strcode
     //   reset                    restore every object to the layer-1 centered mapping
     //   list                     log the registry (index, strcode, current range)
+#if MGS4E_LAB_BUILD
     constexpr const char* kLiveCommandFile = "C:/mgspf_tools/live_anchor.txt";
+#endif
 
     // Whether a registered object is still the object we recorded. VirtualQuery alone caused
     // a crash in play: a freed-and-reused heap page passes it, and writing 16 bytes into
@@ -3402,6 +3410,7 @@ namespace AspectRatio
         spdlog::info("MGS4: HUD report: F11 writes the HUD's anchor records to this log.");
     }
 
+#if MGS4E_LAB_BUILD
     void StartLiveAnchorLab()
     {
         spdlog::info("MGS4: live anchor lab: polling {}.", kLiveCommandFile);
@@ -3619,6 +3628,7 @@ namespace AspectRatio
                 }
             }).detach();
     }
+#endif
 
     // ---- runtime corner anchoring ---------------------------------------------------------
     //
@@ -3715,6 +3725,7 @@ namespace AspectRatio
         // upload-helper probe, the live command thread, the rect/producer/channel logging -
         // whose switches only exist in the lab settings file and which must not run outside
         // a lab boot.
+#if MGS4E_LAB_BUILD
         if (mgs4e::config::LabMode())
         {
             if (bLogUiChannels)
@@ -3727,6 +3738,7 @@ namespace AspectRatio
                 InstallLa2Logging();
             }
         }
+#endif
 
         // Menu masking without the corrected HUD would mask stretched menus: the settings tool
         // only offers it with a centered or expanded HUD, and the read enforces the same.
@@ -3765,6 +3777,7 @@ namespace AspectRatio
             }
         }
 
+#if MGS4E_LAB_BUILD
         if (mgs4e::config::LabMode())
         {
             ApplyCornerSpread();
@@ -3776,6 +3789,7 @@ namespace AspectRatio
             InstallRectEmitLogging();
             InstallProducerProbe();
         }
+#endif
 
         if (letterbox)
         {
