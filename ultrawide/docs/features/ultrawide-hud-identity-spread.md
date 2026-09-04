@@ -387,8 +387,8 @@ data.
 None of the numbers above came from reading disassembly alone. The workflow, all in
 `C:\mgspf_tools\`:
 
-- **Lab mode.** A marker file `MGSPatriotFix.lab` in the game root makes the ASI read
-  `MGSPatriotFix.lab.settings` instead of the user's settings (3840x1620 window, `Fix UI
+- **Lab mode.** A marker file `MGS4Enabler.lab` in the game root makes the ASI read
+  `MGS4Enabler.lab.settings` instead of the user's settings (3840x1620 window, `Fix UI
   Aspect=1`, `Aspect Pool Spread=1`, `Fix UI Aspect Corners=0`) and switch on the research
   code. The user's own play configuration is never touched.
 - **Harness.** `boot_to_aim.ps1 -LabConfig -LoadSave -SaveIndex 7 -KeepOpen` boots to a safe
