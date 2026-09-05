@@ -272,3 +272,23 @@ is created at the desktop size straight away, no ResizeBuffers1 step. Verified a
 2048x1536, masking on (user set DX11 in the launcher; the harness never touches that setting).
 The public side gained a D3D11 `CreateSamplerState` hook for anisotropic filtering; not verified
 here because MGSPatriotFix takes that setting on this machine.
+
+## AR-014: the picture never filled the display when the window size was not the desktop size (2026-09-05)
+
+Reported by a tester on a real 4:3 monitor (bars around a squeezed picture) and reproduced by
+the user: with the Window Aspect Ratio override the game "always occupies an area of a
+3840x2160 window". Cause, measured with a D3D11 context census: the engine's fullscreen is a
+borderless window at the desktop size, and the last thing in a frame binds the back buffer,
+sets a viewport of (0,0,windowSize) and draws one full-screen triangle - the picture is
+windowSize pixels at the origin of the chain, unscaled. The launcher always writes windowSize
+= desktop size, so the game never scales on its own; the override is what makes them differ.
+Fix: every viewport and scissor the engine sets while the back buffer is bound is remapped
+into the largest centred rect of the chain with the window's aspect (`ComputeFit`,
+`FitViewport`, `FitScissor`), and the bands are drawn in that rect. D3D11: immediate-context
+hooks (OMSetRenderTargets, OMSetRenderTargetsAndUAVs, RSSetViewports, RSSetScissorRects), the
+back buffer known by pointer identity. D3D12: CreateRenderTargetView hooked from the chain's
+creation to learn the back-buffer RTV handles, then OMSetRenderTargets / RSSetViewports /
+RSSetScissorRects on the command-list vtable; bound state per list. The DXGI hooks now install
+whenever the window override is on, masking or not. Verified on D3D11: 4:3 1400x1050 -> a
+2880x2160 rect at (480,0), 21:9 3840x1620 -> centred at (0,270). D3D12 not yet verified.
+The engine still lays out and renders for windowSize; only the last hop scales.

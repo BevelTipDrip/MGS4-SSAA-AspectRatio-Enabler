@@ -3054,6 +3054,278 @@ namespace AspectRatio
 
     template <typename T> void SafeRelease(T*& p) { if (p) { p->Release(); p = nullptr; } }
 
+    // ---- fit to display (AR-014) --------------------------------------------------------------
+    //
+    // The engine's fullscreen is a borderless window at the desktop size, and it paints its
+    // picture - render.windowSize pixels - at the origin of that swap chain, unscaled: the
+    // last thing in a frame is a bind of the back buffer, a viewport of (0,0,windowSize) and
+    // one full-screen triangle (D3D11 census, 2026-09-05). The launcher always sets windowSize
+    // to the desktop size, so nobody sees this; the Window Aspect Ratio override is what makes
+    // them differ - a 1400x1050 picture in the corner of a 3840x2160 chain, 3840x1620 in the
+    // top band. So every viewport and scissor the engine sets while the back buffer is bound
+    // is remapped into the largest centred rect of the chain with the window's aspect, and the
+    // masking bands are drawn in that rect. Nothing upstream changes: the engine still lays
+    // out, renders and reads its window size exactly as before.
+    struct FitRect
+    {
+        bool active = false;   // false when the window size is the chain size (or unknown)
+        float scale = 1.0f;
+        float ox = 0.0f, oy = 0.0f;
+        UINT w = 0, h = 0;     // the fitted rect
+        int ww = 0, wh = 0;    // the window size it was computed for
+    };
+    FitRect g_Fit;   // recomputed at each present; read on the render thread
+
+    FitRect ComputeFit(UINT chainW, UINT chainH)
+    {
+        FitRect f;
+        f.w = chainW;
+        f.h = chainH;
+        f.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
+        f.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
+        if (f.ww <= 0 || f.wh <= 0 || chainW == 0 || chainH == 0
+            || (static_cast<UINT>(f.ww) == chainW && static_cast<UINT>(f.wh) == chainH))
+        {
+            return f;
+        }
+        f.scale = (std::min)(static_cast<float>(chainW) / static_cast<float>(f.ww), static_cast<float>(chainH) / static_cast<float>(f.wh));
+        f.w = static_cast<UINT>(std::lround(f.ww * f.scale));
+        f.h = static_cast<UINT>(std::lround(f.wh * f.scale));
+        f.ox = static_cast<float>((chainW - f.w) / 2);
+        f.oy = static_cast<float>((chainH - f.h) / 2);
+        f.active = true;
+        return f;
+    }
+
+    // A viewport in window space (its extent no larger than the window) is moved into the
+    // fitted rect. One already in chain space - a full-chain clear, say - is left alone.
+    template <typename Viewport>
+    bool FitViewport(Viewport& vp)
+    {
+        if (!g_Fit.active || vp.Width > g_Fit.ww + 1.0f || vp.Height > g_Fit.wh + 1.0f) { return false; }
+        vp.TopLeftX = g_Fit.ox + vp.TopLeftX * g_Fit.scale;
+        vp.TopLeftY = g_Fit.oy + vp.TopLeftY * g_Fit.scale;
+        vp.Width *= g_Fit.scale;
+        vp.Height *= g_Fit.scale;
+        return true;
+    }
+
+    bool FitScissor(RECT& r)
+    {
+        if (!g_Fit.active || r.right - r.left > g_Fit.ww + 1 || r.bottom - r.top > g_Fit.wh + 1) { return false; }
+        r.left = static_cast<LONG>(std::lround(g_Fit.ox + r.left * g_Fit.scale));
+        r.top = static_cast<LONG>(std::lround(g_Fit.oy + r.top * g_Fit.scale));
+        r.right = static_cast<LONG>(std::lround(g_Fit.ox + r.right * g_Fit.scale));
+        r.bottom = static_cast<LONG>(std::lround(g_Fit.oy + r.bottom * g_Fit.scale));
+        return true;
+    }
+
+    // D3D11: the immediate context. The back buffer is known by identity (pointer value from
+    // GetBuffer, released at once, never dereferenced); a resize clears it.
+    SafetyHookInline Fit11_OMSetRenderTargets_hook {};
+    SafetyHookInline Fit11_OMSetRenderTargetsAndUAVs_hook {};
+    SafetyHookInline Fit11_RSSetViewports_hook {};
+    SafetyHookInline Fit11_RSSetScissorRects_hook {};
+    void* g_BackBuffer11 = nullptr;
+    bool g_BackBufferBound11 = false;
+
+    bool IsBackBuffer11(ID3D11RenderTargetView* view)
+    {
+        if (!view || !g_BackBuffer11) { return false; }
+        ID3D11Resource* res = nullptr;
+        view->GetResource(&res);
+        const bool back = res == g_BackBuffer11;
+        if (res) { res->Release(); }
+        return back;
+    }
+
+    void STDMETHODCALLTYPE Fit11_OMSetRenderTargets(ID3D11DeviceContext* self, UINT count,
+        ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth)
+    {
+        g_BackBufferBound11 = count > 0 && views && IsBackBuffer11(views[0]);
+        Fit11_OMSetRenderTargets_hook.stdcall<void>(self, count, views, depth);
+    }
+
+    void STDMETHODCALLTYPE Fit11_OMSetRenderTargetsAndUAVs(ID3D11DeviceContext* self, UINT count,
+        ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth, UINT uavStart, UINT uavCount,
+        ID3D11UnorderedAccessView* const* uavs, const UINT* initialCounts)
+    {
+        if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        {
+            g_BackBufferBound11 = count > 0 && views && IsBackBuffer11(views[0]);
+        }
+        Fit11_OMSetRenderTargetsAndUAVs_hook.stdcall<void>(self, count, views, depth, uavStart, uavCount, uavs, initialCounts);
+    }
+
+    void STDMETHODCALLTYPE Fit11_RSSetViewports(ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports)
+    {
+        if (g_BackBufferBound11 && g_Fit.active && count > 0 && count <= 16 && viewports)
+        {
+            D3D11_VIEWPORT fitted[16];
+            std::memcpy(fitted, viewports, sizeof(D3D11_VIEWPORT) * count);
+            for (UINT i = 0; i < count; i++) { FitViewport(fitted[i]); }
+            Fit11_RSSetViewports_hook.stdcall<void>(self, count, fitted);
+            return;
+        }
+        Fit11_RSSetViewports_hook.stdcall<void>(self, count, viewports);
+    }
+
+    void STDMETHODCALLTYPE Fit11_RSSetScissorRects(ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects)
+    {
+        if (g_BackBufferBound11 && g_Fit.active && count > 0 && count <= 16 && rects)
+        {
+            D3D11_RECT fitted[16];
+            std::memcpy(fitted, rects, sizeof(D3D11_RECT) * count);
+            for (UINT i = 0; i < count; i++) { FitScissor(fitted[i]); }
+            Fit11_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
+            return;
+        }
+        Fit11_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
+    }
+
+    void InstallFit11(ID3D11DeviceContext* context)
+    {
+        static bool installed = false;
+        if (installed || !context) { return; }
+        installed = true;
+        void** vtable = *reinterpret_cast<void***>(context);
+        Fit11_OMSetRenderTargets_hook = safetyhook::create_inline(vtable[33], reinterpret_cast<void*>(Fit11_OMSetRenderTargets));
+        Fit11_OMSetRenderTargetsAndUAVs_hook = safetyhook::create_inline(vtable[34], reinterpret_cast<void*>(Fit11_OMSetRenderTargetsAndUAVs));
+        Fit11_RSSetViewports_hook = safetyhook::create_inline(vtable[44], reinterpret_cast<void*>(Fit11_RSSetViewports));
+        Fit11_RSSetScissorRects_hook = safetyhook::create_inline(vtable[45], reinterpret_cast<void*>(Fit11_RSSetScissorRects));
+        spdlog::info("MGS4: fit: D3D11 context hooks (render targets {}/{}, viewports {}, scissors {}).",
+            Fit11_OMSetRenderTargets_hook ? "ok" : "FAILED", Fit11_OMSetRenderTargetsAndUAVs_hook ? "ok" : "FAILED",
+            Fit11_RSSetViewports_hook ? "ok" : "FAILED", Fit11_RSSetScissorRects_hook ? "ok" : "FAILED");
+    }
+
+    // D3D12: render targets are descriptor handles, so the back buffer is known by the RTVs
+    // the game creates for the chain's buffers (CreateRenderTargetView, hooked from the swap
+    // chain's creation on, before the game makes them); a resize empties the table and the
+    // game's re-creation refills it. Bound state is per command list.
+    SafetyHookInline Fit12_CreateRenderTargetView_hook {};
+    SafetyHookInline Fit12_OMSetRenderTargets_hook {};
+    SafetyHookInline Fit12_RSSetViewports_hook {};
+    SafetyHookInline Fit12_RSSetScissorRects_hook {};
+    IDXGISwapChain* g_FitSwapChain12 = nullptr;   // identity only; the chain outlives every use
+    std::mutex g_Fit12Mutex;
+    std::vector<SIZE_T> g_BackBufferRtvs12;
+    std::unordered_map<void*, bool> g_BoundLists12;
+
+    bool IsSwapChainBuffer12(ID3D12Resource* res)
+    {
+        if (!res || !g_FitSwapChain12) { return false; }
+        DXGI_SWAP_CHAIN_DESC desc {};
+        if (FAILED(g_FitSwapChain12->GetDesc(&desc))) { return false; }
+        for (UINT i = 0; i < desc.BufferCount; i++)
+        {
+            ID3D12Resource* buffer = nullptr;
+            if (SUCCEEDED(g_FitSwapChain12->GetBuffer(i, __uuidof(ID3D12Resource), reinterpret_cast<void**>(&buffer))) && buffer)
+            {
+                const bool match = buffer == res;
+                buffer->Release();
+                if (match) { return true; }
+            }
+        }
+        return false;
+    }
+
+    void STDMETHODCALLTYPE Fit12_CreateRenderTargetView(ID3D12Device* self, ID3D12Resource* res,
+        const D3D12_RENDER_TARGET_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
+    {
+        Fit12_CreateRenderTargetView_hook.stdcall<void>(self, res, desc, dest);
+        std::lock_guard lock(g_Fit12Mutex);
+        std::erase(g_BackBufferRtvs12, dest.ptr);
+        if (IsSwapChainBuffer12(res)) { g_BackBufferRtvs12.push_back(dest.ptr); }
+    }
+
+    void STDMETHODCALLTYPE Fit12_OMSetRenderTargets(ID3D12GraphicsCommandList* self, UINT count,
+        const D3D12_CPU_DESCRIPTOR_HANDLE* handles, BOOL single, const D3D12_CPU_DESCRIPTOR_HANDLE* depth)
+    {
+        {
+            std::lock_guard lock(g_Fit12Mutex);
+            const bool bound = count > 0 && handles
+                && std::find(g_BackBufferRtvs12.begin(), g_BackBufferRtvs12.end(), handles[0].ptr) != g_BackBufferRtvs12.end();
+            g_BoundLists12[self] = bound;
+        }
+        Fit12_OMSetRenderTargets_hook.stdcall<void>(self, count, handles, single, depth);
+    }
+
+    bool ListBound12(ID3D12GraphicsCommandList* list)
+    {
+        std::lock_guard lock(g_Fit12Mutex);
+        const auto it = g_BoundLists12.find(list);
+        return it != g_BoundLists12.end() && it->second;
+    }
+
+    void STDMETHODCALLTYPE Fit12_RSSetViewports(ID3D12GraphicsCommandList* self, UINT count, const D3D12_VIEWPORT* viewports)
+    {
+        if (g_Fit.active && count > 0 && count <= 16 && viewports && ListBound12(self))
+        {
+            D3D12_VIEWPORT fitted[16];
+            std::memcpy(fitted, viewports, sizeof(D3D12_VIEWPORT) * count);
+            for (UINT i = 0; i < count; i++) { FitViewport(fitted[i]); }
+            Fit12_RSSetViewports_hook.stdcall<void>(self, count, fitted);
+            return;
+        }
+        Fit12_RSSetViewports_hook.stdcall<void>(self, count, viewports);
+    }
+
+    void STDMETHODCALLTYPE Fit12_RSSetScissorRects(ID3D12GraphicsCommandList* self, UINT count, const D3D12_RECT* rects)
+    {
+        if (g_Fit.active && count > 0 && count <= 16 && rects && ListBound12(self))
+        {
+            D3D12_RECT fitted[16];
+            std::memcpy(fitted, rects, sizeof(D3D12_RECT) * count);
+            for (UINT i = 0; i < count; i++) { FitScissor(fitted[i]); }
+            Fit12_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
+            return;
+        }
+        Fit12_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
+    }
+
+    void InstallFit12Device(ID3D12CommandQueue* queue, IUnknown* swapChain)
+    {
+        static bool installed = false;
+        if (installed || !queue || !swapChain) { return; }
+        installed = true;
+        IDXGISwapChain* chain = nullptr;
+        if (SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&chain))) && chain)
+        {
+            g_FitSwapChain12 = chain;
+            chain->Release();
+        }
+        ID3D12Device* device = nullptr;
+        if (SUCCEEDED(queue->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device))) && device)
+        {
+            void** vtable = *reinterpret_cast<void***>(device);
+            Fit12_CreateRenderTargetView_hook = safetyhook::create_inline(vtable[20], reinterpret_cast<void*>(Fit12_CreateRenderTargetView));
+            device->Release();
+        }
+        spdlog::info("MGS4: fit: D3D12 CreateRenderTargetView hook {}.", Fit12_CreateRenderTargetView_hook ? "ok" : "FAILED");
+    }
+
+    void InstallFit12Lists(ID3D12GraphicsCommandList* list)
+    {
+        static bool installed = false;
+        if (installed || !list) { return; }
+        installed = true;
+        void** vtable = *reinterpret_cast<void***>(list);
+        Fit12_RSSetViewports_hook = safetyhook::create_inline(vtable[21], reinterpret_cast<void*>(Fit12_RSSetViewports));
+        Fit12_RSSetScissorRects_hook = safetyhook::create_inline(vtable[22], reinterpret_cast<void*>(Fit12_RSSetScissorRects));
+        Fit12_OMSetRenderTargets_hook = safetyhook::create_inline(vtable[46], reinterpret_cast<void*>(Fit12_OMSetRenderTargets));
+        spdlog::info("MGS4: fit: D3D12 command list hooks (viewports {}, scissors {}, render targets {}).",
+            Fit12_RSSetViewports_hook ? "ok" : "FAILED", Fit12_RSSetScissorRects_hook ? "ok" : "FAILED", Fit12_OMSetRenderTargets_hook ? "ok" : "FAILED");
+    }
+
+    void FitOnResize()
+    {
+        g_BackBuffer11 = nullptr;
+        g_BackBufferBound11 = false;
+        std::lock_guard lock(g_Fit12Mutex);
+        g_BackBufferRtvs12.clear();
+        g_BoundLists12.clear();
+    }
+
     // ---- draw census (lab: "drawlog N") ---------------------------------------------------
     //
     // The loading spinner is drawn by nothing the pool append sees - 0-1 appends per upload
@@ -3106,6 +3378,173 @@ namespace AspectRatio
         DrawIndexedInstanced_hook.stdcall<void>(self, indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
     }
 
+#if MGS4E_LAB_BUILD
+    // ---- D3D11 context census (lab: Debug Logging) ------------------------------------------
+    //
+    // Where does the engine put its picture? With a window size that is not the desktop
+    // size the picture sits unscaled at the origin of a desktop-sized swap chain (AR-014).
+    // To scale it at present time the final blit has to be found: this logs, for the first
+    // frames, every render-target bind (with the target's size and whether it is the back
+    // buffer), every viewport and every scissor the immediate context is given.
+    SafetyHookInline D3D11_OMSetRenderTargets_hook {};
+    SafetyHookInline D3D11_RSSetViewports_hook {};
+    SafetyHookInline D3D11_RSSetScissorRects_hook {};
+    std::atomic<int> g_D3D11CensusBudget { 4000 };
+    std::atomic<bool> g_D3D11BackBufferBound { false };
+    std::atomic<int> g_D3D11Frame { 0 };
+    SafetyHookInline D3D11_Draw_hook {};
+    SafetyHookInline D3D11_DrawIndexed_hook {};
+    SafetyHookInline D3D11_CopySubresourceRegion_hook {};
+    SafetyHookInline D3D11_CopyResource_hook {};
+    SafetyHookInline D3D11_ResolveSubresource_hook {};
+    D3D11_VIEWPORT g_D3D11LastViewport {};
+    bool CensusOn() { const int fr = g_D3D11Frame.load(std::memory_order_relaxed); return fr >= 1 && fr <= 2 && g_D3D11CensusBudget.load(std::memory_order_relaxed) > 0 && g_D3D11CensusBudget.fetch_sub(1) > 0; }
+    std::string TexName(ID3D11Resource* res)
+    {
+        if (!res) { return "null"; }
+        ID3D11Texture2D* tex = nullptr;
+        std::string s = std::format("{:X}", reinterpret_cast<uintptr_t>(res));
+        if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+        {
+            D3D11_TEXTURE2D_DESC d {};
+            tex->GetDesc(&d);
+            s += std::format(" {}x{} fmt{}", d.Width, d.Height, static_cast<int>(d.Format));
+            ID3D11Texture2D* backBuffer = nullptr;
+            if (g_Band.swapChain && SUCCEEDED(g_Band.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer))) && backBuffer)
+            {
+                if (backBuffer == tex) { s += " BACKBUFFER"; }
+                backBuffer->Release();
+            }
+            tex->Release();
+        }
+        return s;
+    }
+    SafetyHookInline D3D11_OMSetRenderTargetsAndUAVs_hook {};
+    void STDMETHODCALLTYPE Hooked_D3D11_OMSetRenderTargetsAndUAVs(ID3D11DeviceContext* self, UINT count,
+        ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth, UINT uavStart, UINT uavCount,
+        ID3D11UnorderedAccessView* const* uavs, const UINT* initialCounts)
+    {
+        if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        {
+            ID3D11Resource* r0 = nullptr;
+            if (count > 0 && views && views[0]) { views[0]->GetResource(&r0); }
+            const std::string name = TexName(r0);
+            g_D3D11BackBufferBound.store(name.find("BACKBUFFER") != std::string::npos, std::memory_order_relaxed);
+            if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} OMSetRenderTargetsAndUAVs count={} rt0={} depth={} uavs={}", g_D3D11Frame.load(), count, name, depth ? "yes" : "no", uavCount); }
+            if (r0) { r0->Release(); }
+        }
+        D3D11_OMSetRenderTargetsAndUAVs_hook.stdcall<void>(self, count, views, depth, uavStart, uavCount, uavs, initialCounts);
+    }
+
+    void STDMETHODCALLTYPE Hooked_D3D11_Draw(ID3D11DeviceContext* self, UINT vertexCount, UINT start)
+    {
+        if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} Draw {} vp=({:.0f},{:.0f} {:.0f}x{:.0f}){}", g_D3D11Frame.load(), vertexCount, g_D3D11LastViewport.TopLeftX, g_D3D11LastViewport.TopLeftY, g_D3D11LastViewport.Width, g_D3D11LastViewport.Height, g_D3D11BackBufferBound.load() ? " [backbuffer]" : ""); }
+        D3D11_Draw_hook.stdcall<void>(self, vertexCount, start);
+    }
+    void STDMETHODCALLTYPE Hooked_D3D11_DrawIndexed(ID3D11DeviceContext* self, UINT indexCount, UINT start, INT base)
+    {
+        if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} DrawIndexed {} vp=({:.0f},{:.0f} {:.0f}x{:.0f}){}", g_D3D11Frame.load(), indexCount, g_D3D11LastViewport.TopLeftX, g_D3D11LastViewport.TopLeftY, g_D3D11LastViewport.Width, g_D3D11LastViewport.Height, g_D3D11BackBufferBound.load() ? " [backbuffer]" : ""); }
+        D3D11_DrawIndexed_hook.stdcall<void>(self, indexCount, start, base);
+    }
+    void STDMETHODCALLTYPE Hooked_D3D11_CopySubresourceRegion(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, UINT x, UINT y, UINT z, ID3D11Resource* src, UINT srcSub, const D3D11_BOX* box)
+    {
+        if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} CopySubresourceRegion dst {} at ({},{}) src {} box {}", g_D3D11Frame.load(), TexName(dst), x, y, TexName(src), box ? std::format("({},{})-({},{})", box->left, box->top, box->right, box->bottom) : "none"); }
+        D3D11_CopySubresourceRegion_hook.stdcall<void>(self, dst, dstSub, x, y, z, src, srcSub, box);
+    }
+    void STDMETHODCALLTYPE Hooked_D3D11_CopyResource(ID3D11DeviceContext* self, ID3D11Resource* dst, ID3D11Resource* src)
+    {
+        if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} CopyResource dst {} src {}", g_D3D11Frame.load(), TexName(dst), TexName(src)); }
+        D3D11_CopyResource_hook.stdcall<void>(self, dst, src);
+    }
+    void STDMETHODCALLTYPE Hooked_D3D11_ResolveSubresource(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format)
+    {
+        if (CensusOn()) { spdlog::info("MGS4: d3d11 census: f{} ResolveSubresource dst {} src {}", g_D3D11Frame.load(), TexName(dst), TexName(src)); }
+        D3D11_ResolveSubresource_hook.stdcall<void>(self, dst, dstSub, src, srcSub, format);
+    }
+
+    void STDMETHODCALLTYPE Hooked_D3D11_OMSetRenderTargets(ID3D11DeviceContext* self, UINT count,
+        ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth)
+    {
+        bool back = false;
+        UINT w = 0, h = 0;
+        if (count > 0 && views && views[0])
+        {
+            ID3D11Resource* res = nullptr;
+            views[0]->GetResource(&res);
+            if (res)
+            {
+                ID3D11Texture2D* tex = nullptr;
+                if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+                {
+                    D3D11_TEXTURE2D_DESC d {};
+                    tex->GetDesc(&d);
+                    w = d.Width; h = d.Height;
+                    ID3D11Texture2D* backBuffer = nullptr;
+                    if (g_Band.swapChain && SUCCEEDED(g_Band.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer))) && backBuffer)
+                    {
+                        back = backBuffer == tex;
+                        backBuffer->Release();
+                    }
+                    tex->Release();
+                }
+                res->Release();
+            }
+        }
+        g_D3D11BackBufferBound.store(back, std::memory_order_relaxed);
+        if (CensusOn())
+        {
+            ID3D11Resource* r0 = nullptr;
+            if (count > 0 && views && views[0]) { views[0]->GetResource(&r0); }
+            spdlog::info("MGS4: d3d11 census: f{} OMSetRenderTargets count={} rtv0={:X} rt0={} depth={}",
+                g_D3D11Frame.load(), count, reinterpret_cast<uintptr_t>(count > 0 && views ? views[0] : nullptr), TexName(r0), depth ? "yes" : "no");
+            if (r0) { r0->Release(); }
+        }
+        D3D11_OMSetRenderTargets_hook.stdcall<void>(self, count, views, depth);
+    }
+
+    void STDMETHODCALLTYPE Hooked_D3D11_RSSetViewports(ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports)
+    {
+        if (count > 0 && viewports) { g_D3D11LastViewport = viewports[0]; }
+        if (CensusOn() && count > 0 && viewports)
+        {
+            spdlog::info("MGS4: d3d11 census: f{} RSSetViewports count={} vp0=({:.0f},{:.0f} {:.0f}x{:.0f}){}",
+                g_D3D11Frame.load(), count, viewports[0].TopLeftX, viewports[0].TopLeftY, viewports[0].Width, viewports[0].Height,
+                g_D3D11BackBufferBound.load(std::memory_order_relaxed) ? " [backbuffer bound]" : "");
+        }
+        D3D11_RSSetViewports_hook.stdcall<void>(self, count, viewports);
+    }
+
+    void STDMETHODCALLTYPE Hooked_D3D11_RSSetScissorRects(ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects)
+    {
+        if (CensusOn() && count > 0 && rects)
+        {
+            spdlog::info("MGS4: d3d11 census: f{} RSSetScissorRects count={} r0=({},{} {},{}){}",
+                g_D3D11Frame.load(), count, rects[0].left, rects[0].top, rects[0].right, rects[0].bottom,
+                g_D3D11BackBufferBound.load(std::memory_order_relaxed) ? " [backbuffer bound]" : "");
+        }
+        D3D11_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
+    }
+
+    void InstallD3D11Census(ID3D11DeviceContext* context)
+    {
+        static bool installed = false;
+        if (installed || !context || !mgs4e::log::Verbose()) { return; }
+        installed = true;
+        void** vtable = *reinterpret_cast<void***>(context);
+        D3D11_OMSetRenderTargets_hook = safetyhook::create_inline(vtable[33], reinterpret_cast<void*>(Hooked_D3D11_OMSetRenderTargets));
+        D3D11_RSSetViewports_hook = safetyhook::create_inline(vtable[44], reinterpret_cast<void*>(Hooked_D3D11_RSSetViewports));
+        D3D11_RSSetScissorRects_hook = safetyhook::create_inline(vtable[45], reinterpret_cast<void*>(Hooked_D3D11_RSSetScissorRects));
+        D3D11_DrawIndexed_hook = safetyhook::create_inline(vtable[12], reinterpret_cast<void*>(Hooked_D3D11_DrawIndexed));
+        D3D11_OMSetRenderTargetsAndUAVs_hook = safetyhook::create_inline(vtable[34], reinterpret_cast<void*>(Hooked_D3D11_OMSetRenderTargetsAndUAVs));
+        D3D11_Draw_hook = safetyhook::create_inline(vtable[13], reinterpret_cast<void*>(Hooked_D3D11_Draw));
+        D3D11_CopySubresourceRegion_hook = safetyhook::create_inline(vtable[46], reinterpret_cast<void*>(Hooked_D3D11_CopySubresourceRegion));
+        D3D11_CopyResource_hook = safetyhook::create_inline(vtable[47], reinterpret_cast<void*>(Hooked_D3D11_CopyResource));
+        D3D11_ResolveSubresource_hook = safetyhook::create_inline(vtable[57], reinterpret_cast<void*>(Hooked_D3D11_ResolveSubresource));
+        spdlog::info("MGS4: d3d11 census: context hooks OMSetRenderTargets {}, RSSetViewports {}, RSSetScissorRects {}.",
+            D3D11_OMSetRenderTargets_hook ? "ok" : "FAILED", D3D11_RSSetViewports_hook ? "ok" : "FAILED", D3D11_RSSetScissorRects_hook ? "ok" : "FAILED");
+    }
+#endif
+
     void InstallDrawCensus(ID3D12GraphicsCommandList* list)
     {
         static bool installed = false;
@@ -3145,6 +3584,7 @@ namespace AspectRatio
         SafeRelease(b.queue);
         SafeRelease(b.context11);
         SafeRelease(b.device11);
+        FitOnResize();
         SafeRelease(b.swapChain);
         b.width = b.height = 0;
     }
@@ -3173,6 +3613,18 @@ namespace AspectRatio
                 SafeRelease(context);
                 spdlog::error("MGS4: letterbox: the D3D11 device has no ID3D11DeviceContext1 (D3D 11.1 is needed for ClearView)."); return false;
             }
+            {
+                ID3D11Texture2D* back = nullptr;
+                if (SUCCEEDED(b.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))) && back)
+                {
+                    g_BackBuffer11 = back;
+                    back->Release();
+                }
+            }
+            InstallFit11(b.context11);
+#if MGS4E_LAB_BUILD
+            InstallD3D11Census(b.context11);
+#endif
             context->Release();
             spdlog::info("MGS4: letterbox: band renderer ready on a {}x{} D3D11 swap chain, {} buffers, format {}.",
                 b.width, b.height, desc.BufferCount, static_cast<int>(desc.BufferDesc.Format));
@@ -3221,6 +3673,7 @@ namespace AspectRatio
             spdlog::error("MGS4: letterbox: command list creation failed."); return false;
         }
         b.list->Close();
+        InstallFit12Lists(b.list);
         if (mgs4e::config::LabMode()) { InstallDrawCensus(b.list); }
         if (FAILED(b.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&b.fence))))
         {
@@ -3288,7 +3741,6 @@ namespace AspectRatio
         BandRenderer& b = g_Band;
         b.presents++;
         if (b.failed) { return; }
-        if (!BandsWanted()) { return; }
 
         if (!b.swapChain || b.swapChain != static_cast<void*>(swapChain))
         {
@@ -3306,20 +3758,39 @@ namespace AspectRatio
             }
         }
 
-        // The painted region is the engine's window size at the buffer's origin, not the
-        // buffer itself: measured 2026-09-04, a 3840x1620 window presents from a 3840x2160
-        // swap chain (created at the desktop size, never resized) with the picture in the
-        // top 1620 rows.
-        int32_t windowWidth = 0, windowHeight = 0;
-        std::memcpy(&windowWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeX), sizeof(windowWidth));
-        std::memcpy(&windowHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeY), sizeof(windowHeight));
-        const UINT paintedWidth = windowWidth > 0 ? std::min(static_cast<UINT>(windowWidth), b.width) : b.width;
-        const UINT paintedHeight = windowHeight > 0 ? std::min(static_cast<UINT>(windowHeight), b.height) : b.height;
+        // The fit for the next frame's draws (AR-014): the picture is the engine's window
+        // size, scaled and centred into the chain. Logged when it changes.
+        {
+            const FitRect fit = ComputeFit(b.width, b.height);
+            if (fit.active != g_Fit.active || fit.w != g_Fit.w || fit.h != g_Fit.h || fit.ww != g_Fit.ww || fit.wh != g_Fit.wh)
+            {
+                if (fit.active)
+                {
+                    spdlog::info("MGS4: fit: {}x{} picture scaled x{:.4f} into a {}x{} rect at ({},{}) of the {}x{} chain.",
+                        fit.ww, fit.wh, fit.scale, fit.w, fit.h, static_cast<int>(fit.ox), static_cast<int>(fit.oy), b.width, b.height);
+                }
+                else
+                {
+                    spdlog::info("MGS4: fit: window {}x{} is the chain size; no scaling.", fit.ww, fit.wh);
+                }
+            }
+            g_Fit = fit;
+        }
 
+        if (!BandsWanted()) { return; }
+
+        // The bands frame the 16:9 picture inside the fitted rect.
         D3D12_RECT rects[2] {};
-        const UINT count = BandRects(paintedWidth, paintedHeight, rects);
-        g_BandLastPainted[0] = paintedWidth;
-        g_BandLastPainted[1] = paintedHeight;
+        const UINT count = BandRects(g_Fit.w, g_Fit.h, rects);
+        for (UINT i = 0; i < count; i++)
+        {
+            rects[i].left += static_cast<LONG>(g_Fit.ox);
+            rects[i].right += static_cast<LONG>(g_Fit.ox);
+            rects[i].top += static_cast<LONG>(g_Fit.oy);
+            rects[i].bottom += static_cast<LONG>(g_Fit.oy);
+        }
+        g_BandLastPainted[0] = g_Fit.w;
+        g_BandLastPainted[1] = g_Fit.h;
         g_BandLastRects[0] = rects[0];
         g_BandLastRects[1] = rects[1];
         if (count == 0) { return; }
@@ -3386,6 +3857,7 @@ namespace AspectRatio
 #if MGS4E_LAB_BUILD
             g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
             PerfPresent();
+            g_D3D11Frame.fetch_add(1, std::memory_order_relaxed);
 #endif
             g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
         }
@@ -3404,6 +3876,7 @@ namespace AspectRatio
 #if MGS4E_LAB_BUILD
             g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
             PerfPresent();
+            g_D3D11Frame.fetch_add(1, std::memory_order_relaxed);
 #endif
             g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
         }
@@ -3447,6 +3920,7 @@ namespace AspectRatio
             if (SUCCEEDED(presenter->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&queue))) && queue)
             {
                 g_PresentQueue = queue;   // keeps its reference
+                InstallFit12Device(queue, swapChain);
             }
         }
         void** vtable = *reinterpret_cast<void***>(swapChain);
@@ -3535,6 +4009,9 @@ namespace AspectRatio
 
     bool BandHooksWanted()
     {
+        // The fit (AR-014) rides on the same swap chain hooks and is needed whenever the
+        // window size can differ from the desktop's.
+        if (RenderPipeline::bOverrideWindowSize) { return true; }
 #if MGS4E_LAB_BUILD
         // The perf census ticks from the Present hook, so a Lab build with Debug Logging on
         // hooks the chain even with the masking off; DrawBands then returns at once.
