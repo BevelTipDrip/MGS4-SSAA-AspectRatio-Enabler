@@ -743,3 +743,18 @@ can show real widget artwork.
 ## Retracted / unverified
 
 None recorded.
+
+## AR-013: frame rate less stable at 21:9 / 4:3 than at 16:9 (2026-09-05)
+
+User report: with the Expanded HUD, a 21:9 window stuttered where 16:9 did not, worst in the
+in-game menus, although 16:9 renders more pixels. A per-second perf census in the Lab build
+(Debug Logging; `MGS4: perf:` lines: present-to-present avg/p50/p99/max and the time inside
+each hook) measured the pool append hook at 565 ms of every second at 21:9 (900 ms with a menu
+up) against 0.4 ms at 16:9, where it is a strict no-op. The stack walk was not it: a
+`RtlVirtualUnwind` costs ~0.25 us here. The `VirtualQuery` that guarded the read of nodes
+outside the script block - every node of the menus' heap owners - cost ~0.4 ms per call and
+ran ~2,000 times a second. Replaced by a guarded (SEH) 12-byte read: after, 2.9 ms per second,
+presents back from 99/s to 116/s, average frame 8.7 ms against 8.8 ms at 16:9, and the heaviest
+menu second (30,000 reads) costs 6 ms. User confirmed in play. The 50 ms+ hitches that remain
+appear identically at 16:9 with our hooks idle; they are the game's own. A slot-learning fast
+path for the identity was tried and dropped: unnecessary at 0.25 us a walk, and more to go wrong.

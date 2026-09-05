@@ -29,6 +29,111 @@ namespace AspectRatio
     // The function and the object's field layout were identified by the mgs4Ultra120 project
     // (github.com/drbermejor/mgs4Ultra120); the call pattern and the written values were
     // measured here with the Log UI Layout diagnostic before anything was built on them.
+#if MGS4E_LAB_BUILD
+    // ---- perf census (lab, Debug Logging) ---------------------------------------------------
+    //
+    // The user reports a less stable frame rate at 21:9 than at 16:9 with the Expanded HUD,
+    // even though 16:9 renders more pixels (2026-09-05). Everything of ours that runs per
+    // frame is a strict no-op at 16:9 and does real work otherwise, so the first question is
+    // whether the difference is ours. Once a second, a line with the present-to-present
+    // frame times (avg / p99 / max) and the time spent inside each hook. Read two sessions
+    // against each other, same scene, one per aspect.
+    struct PerfCensus
+    {
+        std::atomic<uint64_t> appendCalls { 0 }, appendTicks { 0 }, appendMax { 0 };
+        std::atomic<uint64_t> uploadCalls { 0 }, uploadTicks { 0 };
+        std::atomic<uint64_t> convertCalls { 0 }, convertTicks { 0 };
+        std::atomic<uint64_t> bandTicks { 0 };
+        std::atomic<uint64_t> unwinds { 0 }, queries { 0 };
+        std::mutex mutex;
+        std::vector<double> frames;   // present-to-present, ms, this window
+        uint64_t lastPresent = 0;
+        uint64_t windowStart = 0;
+    };
+    PerfCensus g_Perf;
+
+    uint64_t PerfTicks()
+    {
+        LARGE_INTEGER t;
+        QueryPerformanceCounter(&t);
+        return static_cast<uint64_t>(t.QuadPart);
+    }
+
+    double PerfMs(uint64_t ticks)
+    {
+        static const double msPerTick = []
+            {
+                LARGE_INTEGER f;
+                QueryPerformanceFrequency(&f);
+                return 1000.0 / static_cast<double>(f.QuadPart);
+            }();
+        return static_cast<double>(ticks) * msPerTick;
+    }
+
+    struct PerfScope
+    {
+        std::atomic<uint64_t>& calls;
+        std::atomic<uint64_t>& sum;
+        std::atomic<uint64_t>* max;
+        uint64_t t0;
+        PerfScope(std::atomic<uint64_t>& c, std::atomic<uint64_t>& s, std::atomic<uint64_t>* m) : calls(c), sum(s), max(m), t0(PerfTicks()) {}
+        ~PerfScope()
+        {
+            const uint64_t d = PerfTicks() - t0;
+            calls.fetch_add(1, std::memory_order_relaxed);
+            sum.fetch_add(d, std::memory_order_relaxed);
+            if (max)
+            {
+                uint64_t m = max->load(std::memory_order_relaxed);
+                while (d > m && !max->compare_exchange_weak(m, d, std::memory_order_relaxed)) {}
+            }
+        }
+    };
+
+    // Called once per present. Logs and resets after each full second.
+    void PerfPresent()
+    {
+        if (!mgs4e::log::Verbose()) { return; }
+        const uint64_t now = PerfTicks();
+        std::lock_guard lock(g_Perf.mutex);
+        if (g_Perf.lastPresent) { g_Perf.frames.push_back(PerfMs(now - g_Perf.lastPresent)); }
+        g_Perf.lastPresent = now;
+        if (!g_Perf.windowStart) { g_Perf.windowStart = now; return; }
+        if (PerfMs(now - g_Perf.windowStart) < 1000.0) { return; }
+
+        auto& fr = g_Perf.frames;
+        std::sort(fr.begin(), fr.end());
+        const size_t n = fr.size();
+        double sum = 0.0;
+        for (double v : fr) { sum += v; }
+        const double avg = n ? sum / static_cast<double>(n) : 0.0;
+        const double p50 = n ? fr[n / 2] : 0.0;
+        const double p99 = n ? fr[(std::min)(n - 1, static_cast<size_t>(n * 99 / 100))] : 0.0;
+        const double mx = n ? fr.back() : 0.0;
+
+        const int w = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
+        const int h = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
+
+        spdlog::info("MGS4: perf: {}x{} {} presents | frame ms avg {:.2f} p50 {:.2f} p99 {:.2f} max {:.2f} | "
+                     "append {} calls {:.2f} ms max {:.3f} ms unwinds {} vq {} | upload {} calls {:.2f} ms | "
+                     "convert {} calls {:.2f} ms | bands {:.2f} ms",
+            w, h, n, avg, p50, p99, mx,
+            g_Perf.appendCalls.load(), PerfMs(g_Perf.appendTicks.load()), PerfMs(g_Perf.appendMax.load()),
+            g_Perf.unwinds.load(), g_Perf.queries.load(),
+            g_Perf.uploadCalls.load(), PerfMs(g_Perf.uploadTicks.load()),
+            g_Perf.convertCalls.load(), PerfMs(g_Perf.convertTicks.load()),
+            PerfMs(g_Perf.bandTicks.load()));
+
+        fr.clear();
+        g_Perf.windowStart = now;
+        for (auto* a : { &g_Perf.appendCalls, &g_Perf.appendTicks, &g_Perf.appendMax, &g_Perf.uploadCalls, &g_Perf.uploadTicks,
+                         &g_Perf.convertCalls, &g_Perf.convertTicks, &g_Perf.bandTicks, &g_Perf.unwinds, &g_Perf.queries })
+        {
+            a->store(0, std::memory_order_relaxed);
+        }
+    }
+#endif
+
     constexpr uintptr_t kRvaUiLayoutConverter = 0x439810;
 
     // The engine's output size globals, render.windowSizeX/Y. Same location the internal
@@ -73,6 +178,9 @@ namespace AspectRatio
     // there may be more - keeps happening.
     uint8_t ConvertLayout(uintptr_t object, int32_t x, int32_t y, int32_t width, int32_t height)
     {
+#if MGS4E_LAB_BUILD
+        PerfScope perf(g_Perf.convertCalls, g_Perf.convertTicks, nullptr);
+#endif
         const uint8_t result = UiLayoutConverter_hook.stdcall<uint8_t>(object, x, y, width, height);
 
         // Only the full-canvas call is understood well enough to adjust. Nothing else has
@@ -760,6 +868,9 @@ namespace AspectRatio
 
     void UploadHelperProbe(SafetyHookContext& ctx)
     {
+#if MGS4E_LAB_BUILD
+        PerfScope perf(g_Perf.uploadCalls, g_Perf.uploadTicks, nullptr);
+#endif
         // The helper is one of the game's hottest paths (every buffer upload). The hook
         // now installs unconditionally so the lab can arm diagnostics mid-session, so the
         // probe must cost one flag check when nothing is armed. The corner spread itself
@@ -1067,6 +1178,9 @@ namespace AspectRatio
 
     bool UnwindOnce(CONTEXT& c)
     {
+#if MGS4E_LAB_BUILD
+        g_Perf.unwinds.fetch_add(1, std::memory_order_relaxed);
+#endif
         DWORD64 imageBase = 0;
         auto* entry = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
         if (!entry)
@@ -1077,6 +1191,27 @@ namespace AspectRatio
         DWORD64 establisher = 0;
         RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, entry, &c, &handlerData, &establisher, nullptr);
         return c.Rip != 0;
+    }
+
+    // The 12 bytes of a script node, or nothing. SEH in a function with no C++ objects.
+    //
+    // AR-013 (2026-09-05): the perf census put this hook at ~240 ms of every second in
+    // gameplay and ~900 ms with an in-game menu up at 21:9, and the cost tracked the
+    // VirtualQuery count - ~0.4 ms per call here, against ~0.25 us for a whole
+    // RtlVirtualUnwind. The query guarded the read of nodes outside the script block, which
+    // the menus' heap owners always are. A guarded read costs nothing when the page is
+    // mapped and one caught fault when it is not.
+    bool ReadNodeBytes(uintptr_t node, uint8_t* out)
+    {
+        __try
+        {
+            std::memcpy(out, reinterpret_cast<const void*>(node), 12);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
     }
 
     AppendIdentity IdentifyAppend(const SafetyHookContext& ctx, bool wantElem)
@@ -1102,18 +1237,23 @@ namespace AspectRatio
                 // as long as the position really is inside the block r14 points at. The
                 // menus' heap owners (the pause menu, the codec) run their nodes from
                 // outside that block - node - r14 was 0xA48630 on the pause menu, census
-                // 2026-09-04 - so for those the node's page is checked before the read.
-                bool readable = script > 0x10000 && id.elem < 0x10000;
-                if (!readable && node > 0x10000)
+                // 2026-09-04 - so for those the read is guarded (AR-013).
+                uint8_t bytes[12] {};
+                bool readable = false;
+                if (script > 0x10000 && id.elem < 0x10000)
                 {
-                    MEMORY_BASIC_INFORMATION info {};
-                    readable = VirtualQuery(reinterpret_cast<void*>(node), &info, sizeof(info))
-                        && info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
-                        && node + 12 <= reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+                    std::memcpy(bytes, reinterpret_cast<const void*>(node), sizeof(bytes));
+                    readable = true;
+                }
+                else if (node > 0x10000)
+                {
+#if MGS4E_LAB_BUILD
+                    g_Perf.queries.fetch_add(1, std::memory_order_relaxed);
+#endif
+                    readable = ReadNodeBytes(node, bytes);
                 }
                 if (readable)
                 {
-                    const auto* bytes = reinterpret_cast<const uint8_t*>(node);
                     id.opcode = bytes[0];
                     std::memcpy(&id.operand, bytes + 8, sizeof(id.operand));
                     if (bytes[0] == 0x0D)
@@ -1125,7 +1265,6 @@ namespace AspectRatio
         }
         return id;
     }
-
     // The corner spread proper, plus the lab's per-channel bias: the record about to be
     // appended is still in the assembler's frame (rdx), so its anchor is moved in place.
     // Rotated quads (the compass arrow, the weapon silhouette) pass the relaxed signature;
@@ -1679,6 +1818,9 @@ namespace AspectRatio
 
     void PoolAppendProbe(SafetyHookContext& ctx)
     {
+#if MGS4E_LAB_BUILD
+        PerfScope perf(g_Perf.appendCalls, g_Perf.appendTicks, &g_Perf.appendMax);
+#endif
         const bool sites = g_SiteDumpFrames.load(std::memory_order_relaxed) > 0;
         const bool bias = g_ChannelBiasActive.load(std::memory_order_relaxed);
         const bool shifted = SideShift() != 0.0f || SideShiftY() != 0.0f;   // false at 16:9: strict no-op
@@ -3235,14 +3377,36 @@ namespace AspectRatio
 
     HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags)
     {
-        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed); }
+        if ((flags & DXGI_PRESENT_TEST) == 0)
+        {
+#if MGS4E_LAB_BUILD
+            const uint64_t t0 = PerfTicks();
+#endif
+            DrawBands(self);
+#if MGS4E_LAB_BUILD
+            g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
+            PerfPresent();
+#endif
+            g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
+        }
         return Present_hook.stdcall<HRESULT>(self, syncInterval, flags);
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags,
         const DXGI_PRESENT_PARAMETERS* parameters)
     {
-        if ((flags & DXGI_PRESENT_TEST) == 0) { DrawBands(self); g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed); }
+        if ((flags & DXGI_PRESENT_TEST) == 0)
+        {
+#if MGS4E_LAB_BUILD
+            const uint64_t t0 = PerfTicks();
+#endif
+            DrawBands(self);
+#if MGS4E_LAB_BUILD
+            g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
+            PerfPresent();
+#endif
+            g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
+        }
         return Present1_hook.stdcall<HRESULT>(self, syncInterval, flags, parameters);
     }
 
@@ -3371,6 +3535,11 @@ namespace AspectRatio
 
     bool BandHooksWanted()
     {
+#if MGS4E_LAB_BUILD
+        // The perf census ticks from the Present hook, so a Lab build with Debug Logging on
+        // hooks the chain even with the masking off; DrawBands then returns at once.
+        if (mgs4e::log::Verbose()) { return true; }
+#endif
         return bMenuMasking || bCutsceneMasking;
     }
 
@@ -3391,12 +3560,14 @@ namespace AspectRatio
         spdlog::info("MGS4: letterbox: menu masking {}, cutscene masking {}, cutscene FOV compensation {}, FOV adjustment {:.2f}.",
             bMenuMasking ? "on" : "off", bCutsceneMasking ? "on" : "off", bCutsceneFovCompensation ? "on" : "off", fFovAdjustment);
         g_CutsceneZoom.store(bCutsceneFovCompensation ? 1 : 0);
-        if (!CameraHooksWanted())
+        if (!CameraHooksWanted() && !BandHooksWanted())
         {
             return;
         }
 
         // Camera side.
+        if (CameraHooksWanted())
+        {
         if (auto* at = checked(kRvaCameraBuilder, { 0x48, 0x8B, 0xC4, 0x53, 0x56, 0x57 }, "camera builder"))
         {
             CameraBuilder_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&BuildCamera));
@@ -3411,6 +3582,7 @@ namespace AspectRatio
         {
             ProjectionSetter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&SetProjection));
             MGS4E_LOG_HOOK(ProjectionSetter_hook, "MGS4: letterbox projection setter")
+        }
         }
 
         // Band side: the DXGI exports, before the game resolves them.
