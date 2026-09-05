@@ -3883,6 +3883,45 @@ namespace AspectRatio
         return Present1_hook.stdcall<HRESULT>(self, syncInterval, flags, parameters);
     }
 
+    // The chain is sized to the window it is shown in (AR-014, second half). The engine
+    // resizes its chain to its configured fullscreen resolution - the launcher's choice,
+    // 3840x2160 here - whatever the window is: on a 1440x1080 desktop that was a 3840x2160
+    // chain in a 1440x1080 borderless window, which DXGI stretches to fit, squeezing a 16:9
+    // chain into a 4:3 window. With the chain at the window's client size the picture the
+    // fit places in it lands on the screen 1:1.
+    bool WindowClientSize(IDXGISwapChain* chain, UINT& width, UINT& height)
+    {
+        IDXGISwapChain1* one = nullptr;
+        HWND window = nullptr;
+        if (SUCCEEDED(chain->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&one))) && one)
+        {
+            one->GetHwnd(&window);
+            one->Release();
+        }
+        if (!window)
+        {
+            DXGI_SWAP_CHAIN_DESC desc {};
+            if (SUCCEEDED(chain->GetDesc(&desc))) { window = desc.OutputWindow; }
+        }
+        RECT client {};
+        if (!window || !GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) { return false; }
+        width = static_cast<UINT>(client.right);
+        height = static_cast<UINT>(client.bottom);
+        return true;
+    }
+
+    void SizeToWindow(IDXGISwapChain* chain, UINT& width, UINT& height, const char* who)
+    {
+        if (!RenderPipeline::bOverrideWindowSize) { return; }   // stock play: leave the engine alone
+        UINT w = 0, h = 0;
+        if (WindowClientSize(chain, w, h) && (w != width || h != height))
+        {
+            spdlog::info("MGS4: fit: {} asked for {}x{}; the window is {}x{}, sizing the chain to it.", who, width, height, w, h);
+            width = w;
+            height = h;
+        }
+    }
+
     HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(IDXGISwapChain* self, UINT bufferCount, UINT width,
         UINT height, DXGI_FORMAT format, UINT flags)
     {
@@ -3892,6 +3931,7 @@ namespace AspectRatio
             std::lock_guard lock(g_BandMutex);
             if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize to {}x{}, band renderer dropped.", width, height); }
         }
+        SizeToWindow(self, width, height, "ResizeBuffers");
         return ResizeBuffers_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags);
     }
 
@@ -3905,6 +3945,7 @@ namespace AspectRatio
             std::lock_guard lock(g_BandMutex);
             if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize (ResizeBuffers1) to {}x{}, band renderer dropped.", width, height); }
         }
+        SizeToWindow(self, width, height, "ResizeBuffers1");
         return ResizeBuffers1_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags, nodeMask, presentQueue);
     }
 

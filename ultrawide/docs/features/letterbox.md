@@ -292,3 +292,13 @@ RSSetScissorRects on the command-list vtable; bound state per list. The DXGI hoo
 whenever the window override is on, masking or not. Verified on D3D11: 4:3 1400x1050 -> a
 2880x2160 rect at (480,0), 21:9 3840x1620 -> centred at (0,270). D3D12 not yet verified.
 The engine still lays out and renders for windowSize; only the last hop scales.
+
+AR-014, second half (same day): the chain is not the desktop size either - it is the game's
+configured fullscreen resolution (the launcher's choice, 3840x2160 here), whatever the window
+is. On a 1440x1080 desktop the engine made a 1440x1080 borderless window and resized its chain
+to 3840x2160, which DXGI then stretches into the window: a 16:9 chain squeezed into 4:3, the
+picture with it. `SizeToWindow` (in both ResizeBuffers hooks, only with the window override on)
+replaces the requested size with the window's client size, so the chain is the window and the
+fit lands 1:1. Verified: 1440x1080 desktop, 4:3 1400x1050 -> "ResizeBuffers asked for
+3840x2160; the window is 1440x1080", chain 1440x1080, picture x1.0286, screen filled, menus at
+16:9 inside with the bands. The tester's bars were this, not their setup - the user's point.
