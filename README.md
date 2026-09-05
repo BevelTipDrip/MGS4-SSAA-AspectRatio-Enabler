@@ -19,7 +19,7 @@ corner widgets sit at the edges of the actual screen, where they belong.
 
 ![HUD at 21:9](docs/images/hud-21-9.jpg)
 
-**16:9 (3840x2160), the reference the game was made for**
+**16:9 (3840x2160)**
 
 ![HUD at 16:9](docs/images/hud-16-9.jpg)
 
@@ -213,7 +213,5 @@ This repository is under the MIT License, see `LICENSE.md`.
 
 The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the
 release binaries) is licensed separately, under a credit-required licence: you may use, modify
-and redistribute it, in your own mods too, but the fix must be credited **directly and visibly
-to BevelTipDrip** wherever it is used or distributed. That means the mod page, the README and
-any about screen, with a link to this repository. Passing it off as your own ends that
+and redistribute it, in your own mods too, but the fix must be credited wherever it is used or distributed. That means the mod page, the README with a link to this repository. Passing it off as your own ends that
 permission. The full text is in the submodule's `LICENSE.md`.
