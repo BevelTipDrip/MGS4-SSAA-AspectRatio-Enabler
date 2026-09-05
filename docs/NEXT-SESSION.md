@@ -139,6 +139,11 @@ rediscovered the hard way:
   Steam Cloud synced and must never be edited by us. Engine-side hooks are API-agnostic; the
   masking bands and the anisotropy sampler hook have a D3D11 path and a D3D12 path each
   (AR-012 in the private letterbox register). Verify D3D11 by the log line D3D11 device created.
+- **A perf census lives in the Lab build.** With Debug Logging on, a Lab ASI logs one MGS4: perf:
+  line a second: presents, frame ms avg/p50/p99/max, and the time spent in each of our per-frame
+  hooks (pool append, upload probe, layout converter, bands). Compare two sessions of the same
+  scene before theorising about stutter; it found AR-013 (VirtualQuery per menu node, 0.4 ms
+  each) in one pair of runs. The summariser is ad hoc (scratchpad perf/sum.sh), rewrite as needed.
 - **Other mods' config files get a tab in the tool when present** (	ool/src/mod_config.*): a table of
   known files (MGSFPSUnlock.ini first) with the keys to expose; Detect looks beside mgs4.exe
   (MGS4\, MGS4\scripts, plugins, update) and, flagged not-loadable, the same names under the
