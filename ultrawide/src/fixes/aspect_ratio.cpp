@@ -2885,6 +2885,8 @@ namespace AspectRatio
         IDXGISwapChain3* swapChain = nullptr;
         ID3D12Device* device = nullptr;
         ID3D12CommandQueue* queue = nullptr;
+        ID3D11Device* device11 = nullptr;            // set instead of the D3D12 trio on a D3D11 chain
+        ID3D11DeviceContext1* context11 = nullptr;
         ID3D12DescriptorHeap* rtvHeap = nullptr;
         std::vector<ID3D12Resource*> buffers;
         std::vector<ID3D12CommandAllocator*> allocators;
@@ -2999,6 +3001,8 @@ namespace AspectRatio
         if (b.fenceEvent) { CloseHandle(b.fenceEvent); b.fenceEvent = nullptr; }
         SafeRelease(b.device);
         SafeRelease(b.queue);
+        SafeRelease(b.context11);
+        SafeRelease(b.device11);
         SafeRelease(b.swapChain);
         b.width = b.height = 0;
     }
@@ -3006,22 +3010,41 @@ namespace AspectRatio
     bool BandSetup(BandRenderer& b, IDXGISwapChain* swapChain)
     {
         BandRelease(b);
-        if (!g_PresentQueue) { spdlog::error("MGS4: letterbox: no command queue captured at swap chain creation."); return false; }
         if (FAILED(swapChain->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&b.swapChain))) || !b.swapChain)
         {
             spdlog::error("MGS4: letterbox: the swap chain is not IDXGISwapChain3."); return false;
         }
-        if (FAILED(swapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&b.device))) || !b.device)
-        {
-            spdlog::error("MGS4: letterbox: the swap chain's device is not D3D12."); return false;
-        }
-        b.queue = g_PresentQueue;
-        b.queue->AddRef();
-
         DXGI_SWAP_CHAIN_DESC desc {};
         if (FAILED(b.swapChain->GetDesc(&desc)) || desc.BufferCount == 0) { spdlog::error("MGS4: letterbox: GetDesc failed."); return false; }
         b.width = desc.BufferDesc.Width;
         b.height = desc.BufferDesc.Height;
+
+        // D3D11, the renderer the game ships set to: the bands are cleared through the
+        // immediate context at each present, with the back buffer fetched and released on
+        // the spot, so nothing of ours is outstanding when the game resizes the chain.
+        if (SUCCEEDED(swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&b.device11))) && b.device11)
+        {
+            ID3D11DeviceContext* context = nullptr;
+            b.device11->GetImmediateContext(&context);
+            if (!context || FAILED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&b.context11))) || !b.context11)
+            {
+                SafeRelease(context);
+                spdlog::error("MGS4: letterbox: the D3D11 device has no ID3D11DeviceContext1 (D3D 11.1 is needed for ClearView)."); return false;
+            }
+            context->Release();
+            spdlog::info("MGS4: letterbox: band renderer ready on a {}x{} D3D11 swap chain, {} buffers, format {}.",
+                b.width, b.height, desc.BufferCount, static_cast<int>(desc.BufferDesc.Format));
+            return true;
+        }
+
+        // D3D12: a command list of our own on the game's present queue.
+        if (!g_PresentQueue) { spdlog::error("MGS4: letterbox: no command queue captured at swap chain creation."); return false; }
+        if (FAILED(swapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&b.device))) || !b.device)
+        {
+            spdlog::error("MGS4: letterbox: the swap chain's device is neither D3D11 nor D3D12."); return false;
+        }
+        b.queue = g_PresentQueue;
+        b.queue->AddRef();
 
         D3D12_DESCRIPTOR_HEAP_DESC heap {};
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -3158,6 +3181,23 @@ namespace AspectRatio
         g_BandLastRects[0] = rects[0];
         g_BandLastRects[1] = rects[1];
         if (count == 0) { return; }
+
+        if (b.device11)
+        {
+            // D3D11 renders into buffer 0 whatever the swap effect; ClearView takes the rects.
+            ID3D11Texture2D* back = nullptr;
+            if (FAILED(b.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))) || !back) { return; }
+            ID3D11RenderTargetView* rtv = nullptr;
+            if (SUCCEEDED(b.device11->CreateRenderTargetView(back, nullptr, &rtv)) && rtv)
+            {
+                const float black[4] { 0.0f, 0.0f, 0.0f, 1.0f };
+                b.context11->ClearView(rtv, black, reinterpret_cast<const D3D11_RECT*>(rects), count);
+                rtv->Release();
+                b.cleared++;
+            }
+            back->Release();
+            return;
+        }
 
         const UINT index = b.swapChain->GetCurrentBackBufferIndex();
         g_BandLastIndex = index;

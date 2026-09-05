@@ -257,3 +257,18 @@ dropped" followed by the renderer rebuilt at 3840x2160. Verified at the main men
 masking on: picture in its region, bands top and bottom. The 14:03 session had looked fine only
 because a later display-mode change went through the hooked `ResizeBuffers`.
 Confirmed by the user in a play session the same day.
+
+## AR-012: D3D11 (2026-09-05)
+
+The game ships with `api = dx11` in `mgs4.ecf` and offers D3D11/D3D12 in its options, so most
+players are on D3D11. Under it the bands were disabled: the swap chain's presenter is an
+`ID3D11Device`, no D3D12 queue is captured, `BandSetup` bailed ("no command queue"). Everything
+engine-side (layout converter, pool append, cameras, resolution, shadows) installs the same on
+both. Fix: `BandSetup` asks the chain for an `ID3D11Device` first and, if it gets one, takes the
+immediate context as `ID3D11DeviceContext1`; `DrawBands` then fetches buffer 0, makes an RTV,
+`ClearView`s the band rects and releases both on the spot, so nothing of ours is outstanding
+across a resize (the D3D12 path keeps its command list and per-buffer RTVs). On D3D11 the chain
+is created at the desktop size straight away, no ResizeBuffers1 step. Verified at the menu, 4:3
+2048x1536, masking on (user set DX11 in the launcher; the harness never touches that setting).
+The public side gained a D3D11 `CreateSamplerState` hook for anisotropic filtering; not verified
+here because MGSPatriotFix takes that setting on this machine.
