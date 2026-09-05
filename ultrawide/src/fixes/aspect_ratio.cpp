@@ -3545,6 +3545,159 @@ namespace AspectRatio
     }
 #endif
 
+#if MGS4E_LAB_BUILD
+    // ---- display census (lab: Debug Logging) ------------------------------------------------
+    //
+    // Where does the engine get the size it resizes its chain to? It is not the ecf, not the
+    // launcher's save, not another mod, not the desktop (all ruled out 2026-09-05). This logs
+    // what it asks the display APIs: mode enumeration, screen metrics, device caps, and the
+    // DXGI output's mode list, with the caller's address in the game image.
+    SafetyHookInline EnumDisplaySettingsW_hook {};
+    SafetyHookInline EnumDisplaySettingsExW_hook {};
+    SafetyHookInline GetSystemMetrics_hook {};
+    SafetyHookInline GetDeviceCaps_hook {};
+    SafetyHookInline EnumAdapters1_hook {};
+    SafetyHookInline EnumOutputs_hook {};
+    SafetyHookInline GetDisplayModeList_hook {};
+    SafetyHookInline OutputGetDesc_hook {};
+    std::atomic<int> g_DisplayCensusBudget { 400 };
+
+    std::string CallerTag(void* ret)
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const auto p = reinterpret_cast<uintptr_t>(ret);
+        return (p >= base && p < base + 0x8000000) ? std::format("mgs4+{:X}", p - base) : std::format("ext {:X}", p);
+    }
+    bool DisplayCensusOn() { return g_DisplayCensusBudget.load(std::memory_order_relaxed) > 0 && g_DisplayCensusBudget.fetch_sub(1) > 0; }
+
+    BOOL WINAPI Hooked_EnumDisplaySettingsW(LPCWSTR device, DWORD mode, DEVMODEW* dm)
+    {
+        const BOOL r = EnumDisplaySettingsW_hook.stdcall<BOOL>(device, mode, dm);
+        // The walk is hundreds of entries: log the current/registry queries, each new largest
+        // mode, and the end of the walk.
+        static DWORD maxArea = 0;
+        const DWORD area = (r && dm) ? dm->dmPelsWidth * dm->dmPelsHeight : 0;
+        const bool special = static_cast<int>(mode) < 0;
+        const bool newMax = r && area > maxArea;
+        if (newMax) { maxArea = area; }
+        if (!r) { maxArea = 0; }
+        if ((special || newMax || !r) && DisplayCensusOn())
+        {
+            spdlog::info("MGS4: display census: EnumDisplaySettingsW(mode {}) -> {} {}x{} @{} from {}", static_cast<int>(mode), r ? "ok" : "fail",
+                dm ? dm->dmPelsWidth : 0, dm ? dm->dmPelsHeight : 0, dm ? dm->dmDisplayFrequency : 0, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    BOOL WINAPI Hooked_EnumDisplaySettingsExW(LPCWSTR device, DWORD mode, DEVMODEW* dm, DWORD flags)
+    {
+        const BOOL r = EnumDisplaySettingsExW_hook.stdcall<BOOL>(device, mode, dm, flags);
+        if (DisplayCensusOn())
+        {
+            spdlog::info("MGS4: display census: EnumDisplaySettingsExW(mode {}, flags {}) -> {} {}x{} from {}", static_cast<int>(mode), flags, r ? "ok" : "fail",
+                dm ? dm->dmPelsWidth : 0, dm ? dm->dmPelsHeight : 0, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    int WINAPI Hooked_GetSystemMetrics(int index)
+    {
+        const int r = GetSystemMetrics_hook.stdcall<int>(index);
+        if ((index == SM_CXSCREEN || index == SM_CYSCREEN || index == SM_CXVIRTUALSCREEN || index == SM_CYVIRTUALSCREEN) && DisplayCensusOn())
+        {
+            spdlog::info("MGS4: display census: GetSystemMetrics({}) -> {} from {}", index, r, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    int WINAPI Hooked_GetDeviceCaps(HDC dc, int index)
+    {
+        const int r = GetDeviceCaps_hook.stdcall<int>(dc, index);
+        if ((index == HORZRES || index == VERTRES || index == DESKTOPHORZRES || index == DESKTOPVERTRES) && DisplayCensusOn())
+        {
+            spdlog::info("MGS4: display census: GetDeviceCaps({}) -> {} from {}", index, r, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Hooked_GetDisplayModeList(IDXGIOutput* self, DXGI_FORMAT format, UINT flags, UINT* count, DXGI_MODE_DESC* modes)
+    {
+        const HRESULT r = GetDisplayModeList_hook.stdcall<HRESULT>(self, format, flags, count, modes);
+        if (DisplayCensusOn())
+        {
+            std::string biggest = "n/a";
+            if (modes && count && *count) { biggest = std::format("first {}x{} last {}x{}", modes[0].Width, modes[0].Height, modes[*count - 1].Width, modes[*count - 1].Height); }
+            spdlog::info("MGS4: display census: IDXGIOutput::GetDisplayModeList(fmt {}) -> {} modes, {} from {}", static_cast<int>(format), count ? *count : 0, biggest, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Hooked_OutputGetDesc(IDXGIOutput* self, DXGI_OUTPUT_DESC* desc)
+    {
+        const HRESULT r = OutputGetDesc_hook.stdcall<HRESULT>(self, desc);
+        if (DisplayCensusOn() && desc)
+        {
+            spdlog::info("MGS4: display census: IDXGIOutput::GetDesc -> desktop ({},{})-({},{}) from {}", desc->DesktopCoordinates.left, desc->DesktopCoordinates.top,
+                desc->DesktopCoordinates.right, desc->DesktopCoordinates.bottom, CallerTag(_ReturnAddress()));
+        }
+        return r;
+    }
+    void HookOutput(IDXGIOutput* output)
+    {
+        static bool hooked = false;
+        if (hooked || !output) { return; }
+        hooked = true;
+        void** vtable = *reinterpret_cast<void***>(output);
+        OutputGetDesc_hook = safetyhook::create_inline(vtable[7], reinterpret_cast<void*>(Hooked_OutputGetDesc));
+        GetDisplayModeList_hook = safetyhook::create_inline(vtable[8], reinterpret_cast<void*>(Hooked_GetDisplayModeList));
+    }
+    HRESULT STDMETHODCALLTYPE Hooked_EnumOutputs(IDXGIAdapter* self, UINT index, IDXGIOutput** output)
+    {
+        const HRESULT r = EnumOutputs_hook.stdcall<HRESULT>(self, index, output);
+        if (SUCCEEDED(r) && output && *output) { HookOutput(*output); if (DisplayCensusOn()) { spdlog::info("MGS4: display census: EnumOutputs({}) from {}", index, CallerTag(_ReturnAddress())); } }
+        return r;
+    }
+    void HookAdapter(IDXGIAdapter* adapter)
+    {
+        static bool hooked = false;
+        if (hooked || !adapter) { return; }
+        hooked = true;
+        void** vtable = *reinterpret_cast<void***>(adapter);
+        EnumOutputs_hook = safetyhook::create_inline(vtable[7], reinterpret_cast<void*>(Hooked_EnumOutputs));
+    }
+    HRESULT STDMETHODCALLTYPE Hooked_EnumAdapters1(IDXGIFactory1* self, UINT index, IDXGIAdapter1** adapter)
+    {
+        const HRESULT r = EnumAdapters1_hook.stdcall<HRESULT>(self, index, adapter);
+        if (SUCCEEDED(r) && adapter && *adapter) { HookAdapter(*adapter); }
+        return r;
+    }
+    void InstallDisplayCensus()
+    {
+        if (!mgs4e::log::Verbose()) { return; }
+        if (const HMODULE user32 = GetModuleHandleW(L"user32.dll"))
+        {
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(user32, "EnumDisplaySettingsW"))) { EnumDisplaySettingsW_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_EnumDisplaySettingsW)); }
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(user32, "EnumDisplaySettingsExW"))) { EnumDisplaySettingsExW_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_EnumDisplaySettingsExW)); }
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(user32, "GetSystemMetrics"))) { GetSystemMetrics_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_GetSystemMetrics)); }
+        }
+        if (const HMODULE gdi32 = GetModuleHandleW(L"gdi32.dll"))
+        {
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(gdi32, "GetDeviceCaps"))) { GetDeviceCaps_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_GetDeviceCaps)); }
+        }
+        spdlog::info("MGS4: display census: EnumDisplaySettingsW {}, ExW {}, GetSystemMetrics {}, GetDeviceCaps {}.",
+            EnumDisplaySettingsW_hook ? "ok" : "no", EnumDisplaySettingsExW_hook ? "ok" : "no", GetSystemMetrics_hook ? "ok" : "no", GetDeviceCaps_hook ? "ok" : "no");
+    }
+    void HookFactoryForCensus(IUnknown* factory)
+    {
+        static bool hooked = false;
+        if (hooked || !factory || !mgs4e::log::Verbose()) { return; }
+        hooked = true;
+        IDXGIFactory1* one = nullptr;
+        if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&one))) && one)
+        {
+            void** vtable = *reinterpret_cast<void***>(one);
+            EnumAdapters1_hook = safetyhook::create_inline(vtable[12], reinterpret_cast<void*>(Hooked_EnumAdapters1));
+            one->Release();
+            spdlog::info("MGS4: display census: EnumAdapters1 {}.", EnumAdapters1_hook ? "ok" : "FAILED");
+        }
+    }
+#endif
+
     void InstallDrawCensus(ID3D12GraphicsCommandList* list)
     {
         static bool installed = false;
@@ -4007,6 +4160,9 @@ namespace AspectRatio
         if (hooked || !factory) { return; }
         hooked = true;
         void** vtable = *reinterpret_cast<void***>(factory);
+#if MGS4E_LAB_BUILD
+        HookFactoryForCensus(factory);
+#endif
         CreateSwapChain_hook = safetyhook::create_inline(vtable[kFactoryCreateSwapChainSlot], reinterpret_cast<void*>(Hooked_CreateSwapChain));
         IDXGIFactory2* two = nullptr;
         if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory2), reinterpret_cast<void**>(&two))) && two)
@@ -4075,6 +4231,9 @@ namespace AspectRatio
                 return at;
             };
 
+#if MGS4E_LAB_BUILD
+        InstallDisplayCensus();
+#endif
         spdlog::info("MGS4: letterbox: menu masking {}, cutscene masking {}, cutscene FOV compensation {}, FOV adjustment {:.2f}.",
             bMenuMasking ? "on" : "off", bCutsceneMasking ? "on" : "off", bCutsceneFovCompensation ? "on" : "off", fFovAdjustment);
         g_CutsceneZoom.store(bCutsceneFovCompensation ? 1 : 0);

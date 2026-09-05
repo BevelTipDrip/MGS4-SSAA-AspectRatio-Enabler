@@ -302,3 +302,15 @@ replaces the requested size with the window's client size, so the chain is the w
 fit lands 1:1. Verified: 1440x1080 desktop, 4:3 1400x1050 -> "ResizeBuffers asked for
 3840x2160; the window is 1440x1080", chain 1440x1080, picture x1.0286, screen filled, menus at
 16:9 inside with the bands. The tester's bars were this, not their setup - the user's point.
+
+AR-014, the source (same day, after a lab display-API census): the size the engine resizes its
+chain to is the **largest display mode the monitor reports**. At start-up the loop at
+mgs4+738315 calls EnumDisplaySettingsW for every mode (869 of them here), keeps the biggest
+(3840x2160, the panel's native, listed even with the desktop at 1440x1080), and that is the
+windowSize our config hook then sees ("Window Size: 3840x2160 -> ...") and the size the
+fullscreen ResizeBuffers asks for. Not the ecf (edited to 1400x1050: no change), not the
+launcher save (every field set to 1440x1080: no change), not MGSPatriotFix (removed: no
+change), not the desktop (1440x1080 at the time). The window itself is sized from the current
+mode (EnumDisplaySettingsW(-1) -> 1440x1080 from mgs4+738C2C / 738138 / 738A1B, and
+GetSystemMetrics 0/1 from the DXGI runtime). So stock play only lines up when the desktop runs
+at the panel's largest mode. The fix stands as is: chain sized to the window, picture fitted.
