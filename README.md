@@ -208,7 +208,5 @@ This repository is under the MIT License, see `LICENSE.md`.
 
 The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the
 release binaries) is licensed separately, under a credit-required licence: you may use, modify
-and redistribute it, in your own mods too, but the fix must be credited **directly and visibly
-to BevelTipDrip** wherever it is used or distributed. That means the mod page, the README and
-any about screen, with a link to this repository. Passing it off as your own ends that
+and redistribute it, in your own mods too, but the fix must be credited wherever it is used or distributed. That means the mod page, the README with a link to this repository. Passing it off as your own ends that
 permission. The full text is in the submodule's `LICENSE.md`.
