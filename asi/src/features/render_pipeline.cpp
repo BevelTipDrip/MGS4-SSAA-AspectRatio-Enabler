@@ -929,6 +929,37 @@ namespace
         CreateSampler_hook.stdcall<void>(self, desc, destination);
     }
 
+    // The same for D3D11, the renderer the game ships set to: MaxAnisotropy on CreateSamplerState.
+    SafetyHookInline CreateSamplerState_hook {};
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateSamplerState(ID3D11Device* self,
+        const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** sampler)
+    {
+        const int wanted = RenderPipeline::iAnisotropicFiltering;
+
+        if (desc && wanted > 0 && desc->MaxAnisotropy > 0
+            && desc->MaxAnisotropy < static_cast<UINT>(wanted)
+            && (desc->Filter == D3D11_FILTER_ANISOTROPIC
+                || desc->Filter == D3D11_FILTER_COMPARISON_ANISOTROPIC
+                || desc->Filter == D3D11_FILTER_MINIMUM_ANISOTROPIC
+                || desc->Filter == D3D11_FILTER_MAXIMUM_ANISOTROPIC))
+        {
+            D3D11_SAMPLER_DESC raised = *desc;
+            raised.MaxAnisotropy = static_cast<UINT>(wanted);
+
+            static std::atomic<int> reported { 0 };
+            if (reported.fetch_add(1) < 3)
+            {
+                spdlog::info("MGS4: Anisotropic Filtering: D3D11 sampler {}x -> {}x.",
+                    desc->MaxAnisotropy, wanted);
+            }
+
+            return CreateSamplerState_hook.stdcall<HRESULT>(self, &raised, sampler);
+        }
+
+        return CreateSamplerState_hook.stdcall<HRESULT>(self, desc, sampler);
+    }
+
     // Rough size of an input element, for advancing D3D12_APPEND_ALIGNED_ELEMENT offsets.
     // Only the formats the game actually uses need to be exact; anything unknown gets 16,
     // which can only over-advance - and an over-advanced running offset can never produce
@@ -2318,6 +2349,58 @@ namespace
         return result;
     }
 
+    // D3D11 device creation. The only thing wanted from a D3D11 device is the sampler hook;
+    // the allocation logging above is a D3D12 diagnostic.
+    SafetyHookInline D3D11CreateDevice_hook {};
+    SafetyHookInline D3D11CreateDeviceAndSwapChain_hook {};
+    constexpr size_t kCreateSamplerStateSlot = 23;
+
+    void HookD3D11Device(ID3D11Device* device)
+    {
+        static bool hooked = false;
+        if (hooked || !device)
+        {
+            return;
+        }
+        hooked = true;
+        spdlog::info("MGS4: D3D11 device created.");
+
+        if (RenderPipeline::iAnisotropicFiltering > 0)
+        {
+            void** vtable = *reinterpret_cast<void***>(device);
+            CreateSamplerState_hook = safetyhook::create_inline(vtable[kCreateSamplerStateSlot],
+                reinterpret_cast<void*>(Hooked_CreateSamplerState));
+            spdlog::info("MGS4: D3D11 CreateSamplerState hook: {}.", CreateSamplerState_hook ? "installed" : "FAILED");
+        }
+    }
+
+    HRESULT WINAPI Hooked_D3D11CreateDevice(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driverType, HMODULE software,
+        UINT flags, const D3D_FEATURE_LEVEL* featureLevels, UINT featureLevelCount, UINT sdkVersion,
+        ID3D11Device** device, D3D_FEATURE_LEVEL* featureLevel, ID3D11DeviceContext** context)
+    {
+        const HRESULT result = D3D11CreateDevice_hook.stdcall<HRESULT>(adapter, driverType, software, flags,
+            featureLevels, featureLevelCount, sdkVersion, device, featureLevel, context);
+        if (SUCCEEDED(result) && device && *device)
+        {
+            HookD3D11Device(*device);
+        }
+        return result;
+    }
+
+    HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driverType,
+        HMODULE software, UINT flags, const D3D_FEATURE_LEVEL* featureLevels, UINT featureLevelCount, UINT sdkVersion,
+        const DXGI_SWAP_CHAIN_DESC* swapChainDesc, IDXGISwapChain** swapChain, ID3D11Device** device,
+        D3D_FEATURE_LEVEL* featureLevel, ID3D11DeviceContext** context)
+    {
+        const HRESULT result = D3D11CreateDeviceAndSwapChain_hook.stdcall<HRESULT>(adapter, driverType, software,
+            flags, featureLevels, featureLevelCount, sdkVersion, swapChainDesc, swapChain, device, featureLevel, context);
+        if (SUCCEEDED(result) && device && *device)
+        {
+            HookD3D11Device(*device);
+        }
+        return result;
+    }
+
     void InstallRenderTargetLogging()
     {
         // Loading d3d12.dll early is harmless - when the game later resolves it, it
@@ -2339,6 +2422,20 @@ namespace
         D3D12CreateDevice_hook = safetyhook::create_inline(createDevice,
             reinterpret_cast<void*>(Hooked_D3D12CreateDevice));
         spdlog::info("MGS4: D3D12CreateDevice hook: {}.", D3D12CreateDevice_hook ? "installed" : "FAILED");
+
+        // And D3D11, which the game ships set to (mgs4.ecf: api = dx11) and offers in its menu.
+        if (const HMODULE d3d11 = LoadLibraryW(L"d3d11.dll"))
+        {
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDevice")))
+            {
+                D3D11CreateDevice_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_D3D11CreateDevice));
+            }
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain")))
+            {
+                D3D11CreateDeviceAndSwapChain_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_D3D11CreateDeviceAndSwapChain));
+            }
+            spdlog::info("MGS4: D3D11CreateDevice hook: {}.", D3D11CreateDevice_hook ? "installed" : "FAILED");
+        }
     }
 
     // Collects the readable address ranges of mgs4.exe below .data, i.e. the code and

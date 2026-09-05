@@ -134,6 +134,11 @@ rediscovered the hard way:
   manual launch is yours to clean up.
 - **Evidence levels are enforced.** Inferred is a hypothesis with a note attached, not a reason to
   change code. Promote to Observed or Measured first, or record that it could not be promoted.
+- **The game runs D3D11 by default** (mgs4.ecf: pi = dx11; the options menu offers both).
+  The user picks the API in the game's launcher; it is stored under mgs4_savedata_win, which is
+  Steam Cloud synced and must never be edited by us. Engine-side hooks are API-agnostic; the
+  masking bands and the anisotropy sampler hook have a D3D11 path and a D3D12 path each
+  (AR-012 in the private letterbox register). Verify D3D11 by the log line D3D11 device created.
 - **Other mods' config files get a tab in the tool when present** (	ool/src/mod_config.*): a table of
   known files (MGSFPSUnlock.ini first) with the keys to expose; Detect looks beside mgs4.exe
   (MGS4\, MGS4\scripts, plugins, update) and, flagged not-loadable, the same names under the

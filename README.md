@@ -117,6 +117,8 @@ Notes:
   log will tell you.
 - Shadow scaling is applied on top of the game's own Shadow Quality option, so leave that at
   its highest.
+- Works with the game set to either DirectX 11 or DirectX 12 in its options. The game ships
+  set to DirectX 11.
 - The masking options and FOV Adjustment do nothing at 16:9. They default on because that is
   the framing the game was made for. Turn Cutscene Masking off if you would rather have
   cutscenes fill an ultrawide.
