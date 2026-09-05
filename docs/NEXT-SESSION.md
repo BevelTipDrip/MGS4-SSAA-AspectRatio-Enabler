@@ -139,6 +139,11 @@ rediscovered the hard way:
   Steam Cloud synced and must never be edited by us. Engine-side hooks are API-agnostic; the
   masking bands and the anisotropy sampler hook have a D3D11 path and a D3D12 path each
   (AR-012 in the private letterbox register). Verify D3D11 by the log line D3D11 device created.
+- **The engine never scales its picture.** Fullscreen is a borderless desktop-size window and
+  the final blit is windowSize pixels at the origin (D3D11 census: bind back buffer, viewport
+  (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
+  (AR-014 in the private letterbox register): viewports and scissors remapped while the back
+  buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
 - **A perf census lives in the Lab build.** With Debug Logging on, a Lab ASI logs one MGS4: perf:
   line a second: presents, frame ms avg/p50/p99/max, and the time spent in each of our per-frame
   hooks (pool append, upload probe, layout converter, bands). Compare two sessions of the same

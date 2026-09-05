@@ -117,6 +117,9 @@ Notes:
   log will tell you.
 - Shadow scaling is applied on top of the game's own Shadow Quality option, so leave that at
   its highest.
+- A window size that is not your desktop size is scaled to fill the display, keeping its
+  shape: 4:3 on a widescreen monitor is pillarboxed, 21:9 on a 16:9 monitor is letterboxed. The
+  game on its own paints such a picture unscaled in the top-left corner.
 - Works with the game set to either DirectX 11 or DirectX 12 in its options. The game ships
   set to DirectX 11.
 - The masking options and FOV Adjustment do nothing at 16:9. They default on because that is
