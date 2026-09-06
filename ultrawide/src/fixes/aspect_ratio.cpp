@@ -2985,11 +2985,64 @@ namespace AspectRatio
         --g_CinematicOwnerDepth;
     }
 
+    // ---- AR-016: the codec portrait camera ----------------------------------------------
+    //
+    // A codec call renders the caller with a second camera (projection scale 4, built on
+    // the same routes as the gameplay camera) into a pane that is laid out at 16:9 like the
+    // rest of the codec. The camera's projection follows the window's aspect - measured on
+    // the same call to Otacon, 2026-09-06: m00 = 4 in every case, |m11/m00| = 1.8081 at
+    // 16:9, 2.4109 at 21:9, 1.3556 at 4:3, i.e. the window's aspect x 1.0171 each time -
+    // so the picture that lands in the pane is the window's shape squeezed into 16:9: a
+    // narrow face at 21:9, a wide one at 4:3. The user has seen this since the first
+    // ultrawide build ("codec calls have always been compressed") and a tester filed it
+    // (issue #1). Holding m11 at its 16:9 value gives the pane a 16:9 picture: the render
+    // target keeps the window's shape, so the frame is stretched sideways there and the
+    // pane's squeeze undoes it exactly.
+    //
+    // The signature is the projection itself: while a screen is live (codec identities in
+    // the pool), a matrix whose |m11/m00| is the window's aspect x 1.0171 within 0.5 % is
+    // the portrait camera. The gameplay camera behind the pause menu has |m11/m00| equal to
+    // the aspect itself and is left alone. A sighting also marks the call as live for the
+    // band gate: the user wants no masking over codec calls.
+    std::atomic<ULONGLONG> g_CodecCallTick { 0 };
+    std::atomic<int> g_CodecPortraitReported { 0 };
+
+    bool CodecCallLive()
+    {
+        return GetTickCount64() - g_CodecCallTick.load() <= 150;
+    }
+
+    bool PatchCodecPortrait(const float* matrix, float* patched)
+    {
+        if (!RenderPipeline::bCodecPortraitFix || !matrix || matrix[0] == 0.0f || !ScreenLive()) { return false; }
+        const int ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
+        const int wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
+        if (ww <= 0 || wh <= 0) { return false; }
+        constexpr float kSixteenNine = 16.0f / 9.0f;
+        constexpr float kPortraitFactor = 1.0171f;   // |m11/m00| / window aspect, the same at 16:9, 21:9 and 4:3
+        const float aspect = static_cast<float>(ww) / static_cast<float>(wh);
+        if (std::fabs(aspect - kSixteenNine) < 0.01f) { return false; }
+        const float ratio = std::fabs(matrix[5] / matrix[0]);
+        const float expected = aspect * kPortraitFactor;
+        if (std::fabs(ratio - expected) > expected * 0.005f) { return false; }
+        std::memcpy(patched, matrix, sizeof(float) * 16);
+        patched[5] = std::copysign(std::fabs(matrix[0]) * kSixteenNine * kPortraitFactor, matrix[5]);
+        g_CodecCallTick.store(GetTickCount64());
+        if (g_CodecPortraitReported.fetch_add(1) == 0)
+        {
+            spdlog::info("MGS4: letterbox: codec portrait camera m00={:.5f} m11={:.5f} (window aspect {:.4f}) held at 16:9: m11={:.5f}; the bands stand down for the call.",
+                matrix[0], matrix[5], aspect, patched[5]);
+        }
+        return true;
+    }
+
     // Passthrough with a log budget: the common projection setter sees every matrix the
     // renderer is given, so "projlog" answers whether the zoom reached the render side
     // as a uniform scale (m11/m00 unchanged) and nothing applied it twice.
     void __fastcall SetProjection(const float* matrix)
     {
+        float patched[16];
+        if (PatchCodecPortrait(matrix, patched)) { matrix = patched; }
         if (matrix && g_ProjectionLogBudget.load() > 0 && g_ProjectionLogBudget.fetch_sub(1) > 0)
         {
             spdlog::info("MGS4: letterbox: projection m00={:.5f} m11={:.5f} m11/m00={:.4f} m[11]={:+.3f} m[10]={:.5f} m[14]={:.4f} cutscene={}",
@@ -4150,7 +4203,8 @@ namespace AspectRatio
                 // lands ~0.6 s after the key, and the camera was back for ~7 presents
                 // before the grace began (split_a, 2026-09-04) - a visible blink.
                 const bool plateUp = static_cast<BootStage>(g_BootStage.load(std::memory_order_relaxed)) == BootStage::PlateUp;
-                return (bMenuMasking && (boot || ScreenLive()))
+                // A codec call is a 16:9 picture of its own (AR-016) and stays unmasked.
+                return (bMenuMasking && (boot || (ScreenLive() && !CodecCallLive())))
                     || (bCutsceneMasking && CutsceneCameraLive() && !grace && !plateUp);
             }
         }
@@ -4486,7 +4540,9 @@ namespace AspectRatio
     // something it serves is on.
     bool CameraHooksWanted()
     {
-        return bMenuMasking || bCutsceneMasking || bCutsceneFovCompensation || fFovAdjustment != 1.0f;
+        // The projection setter also carries the codec portrait fix (AR-016), which rides on
+        // the HUD fix: a corrected codec belongs with a corrected interface.
+        return bMenuMasking || bCutsceneMasking || bCutsceneFovCompensation || fFovAdjustment != 1.0f || bFixUiAspect;
     }
 
     bool BandHooksWanted()

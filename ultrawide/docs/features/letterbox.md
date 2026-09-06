@@ -413,3 +413,47 @@ display: native 4:3 gameplay fills the window ("band (0,150 1600x900) is widened
 corners, ring and reticle round; 21:9 1600x686 fitted at (0,257), full width, no band line on
 this backend at that size; 4:3 1400x1050 scaled x1.1429 to fill with the masking bands ("band
 (0,132 1400x787) is widened"). User's read pending at the time of writing.
+
+## AR-016: codec calls - the portrait camera follows the window's aspect (2026-09-06)
+
+Reported as issue #1 on the public repository (RylicTWG, 3440x1440, DX11, 0.0.2: "codec calls at
+the wrong aspect ratio", portrait narrowed and cropped) and confirmed by the user as a
+long-standing one ("codec calls have always been compressed into a 16:9 frame either at 4:3 or
+ultrawide"), with a second ask: codec calls should be a 16:9 picture with no masking bands.
+
+Measured with the automated call (`scratchpad/codec_run.ps1`: stage boot into s01a10l_1, Tab,
+Enter for CODEC, left click for SEND - synthetic Enter is ignored on the codec screen, the UI
+confirm is the left mouse button - then `camlog`, `projlog 300`, captures). A call renders the
+caller with a second camera, projection scale 4, built on the same routes as the gameplay
+camera (+EB0EB, +EB191, +B8A43, +B8B4F, +BA3A3; `aspect=1.0000` on every build). Its projection
+at the setter:
+
+| window | m00 | m11 | \|m11/m00\| | aspect x 1.0171 |
+| --- | --- | --- | --- | --- |
+| 16:9 3840x2160 | 4.00000 | -7.23256 | 1.8081 | 1.8081 |
+| 21:9 3840x1620 | 4.00000 | -9.64341 | 2.4109 | 2.4109 |
+| 4:3 2880x2160 | 4.00000 | -5.42248 | 1.3556 | 1.3561 |
+
+m00 is fixed and m11 follows the window's aspect, so the pane - laid out at 16:9 like the rest
+of the codec - receives the window's shape squeezed into 16:9. The gameplay camera behind the
+pause menu has |m11/m00| equal to the window's aspect exactly, without the 1.0171, which is the
+discriminator.
+
+Fix (`PatchCodecPortrait`, called from the projection setter hook): while a screen is live
+(`ScreenLive()`), a matrix whose |m11/m00| is the window's aspect x 1.0171 within 0.5 % has m11
+replaced by copysign(|m00| x 16/9 x 1.0171), i.e. its 16:9 value; the render target keeps the
+window's shape, so the frame is stretched sideways there and the pane's squeeze undoes it. Each
+sighting stamps `g_CodecCallTick`; `CodecCallLive()` (150 ms) takes the screen term out of the
+band gate, so the call is unmasked while the codec select screen and the pause menu keep their
+bands. `CameraHooksWanted()` now includes `bFixUiAspect` so the setter hook is present without
+any masking. Lab key `Codec Portrait Fix` (`bCodecPortraitFix`, on in Release). Log line once:
+`codec portrait camera m00=... held at 16:9: m11=...; the bands stand down for the call.` The
+transition also carries an m00 = 3 camera with the same signature (the codec zoom-in); it gets
+the same treatment, which is what it needs.
+
+Verified on DX11: 21:9 3840x1620 and 4:3 2880x2160, Otacon call from the Middle East stage -
+portrait framed as at 16:9, no bands, world visible past the codec frame; the 16:9 window is
+untouched by construction. User's read pending at the time of writing. Not yet run at the
+reporter's exact shape (a native 21:9 desktop, window = chain, where the AR-015 band widening
+also fires); the two fixes act on different passes, but that configuration should be captured
+once the desktop can be set to 2560x1080 again.
