@@ -8,7 +8,10 @@ knows how to share the game with and reads their settings files read-only to sta
 where both patch the same thing; that table is the one place another mod is named by design.
 The project name and short id (`MGS4Enabler`) date from 2026-09-04.
 
-**Next task: aspect ratio fixes — ultrawide (21:9, 32:9) and 4:3.**
+**Next task: aspect ratio fixes — ultrawide (21:9, 32:9) and 4:3.** The open items are the
+README's "Known issues" list (2026-09-06): the in-game options menu over the Nomad interior
+(same shape as the codec portrait, AR-016, or the sub-canvas mapping, AR-018), the 3D item,
+weapon and camo renders, the map render, and subtitles in gameplay and cutscenes.
 
 The aspect-ratio implementation, its bug register and its working notes live in the private
 module at `external/ultrawide` (a submodule; see its README). Without access to it the project
