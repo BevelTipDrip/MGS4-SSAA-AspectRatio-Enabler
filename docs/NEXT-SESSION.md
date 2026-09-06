@@ -149,10 +149,10 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
-- **The D3D12 renderer squeezes a 4:3 window's picture into a 16:9 band** (AR-015 in the
-  private letterbox register): its last offscreen pass uses the window's centred 16:9 band as
-  its viewport, scene and HUD together, so everything comes out squeezed with uncleared bars;
-  D3D11 paints the same pass over the whole window. The fit hooks widen that band to the window
+- **The D3D12 renderer squeezes any non-16:9 window's picture into a centred 16:9 band**
+  (AR-015 in the private letterbox register): its last offscreen pass uses that band as its
+  viewport, letterbox at 4:3 and pillarbox at 21:9, scene and HUD together, so everything
+  comes out squeezed with uncleared margins; D3D11 paints the same pass over the whole window. The fit hooks widen that band to the window
   (`Band Expand` lab key). Log line: the engine's 16:9 band ... is widened. Two wrong icon
   crops can look right when two errors cancel - the Stretched HUD looked round under DX12 for
   exactly that reason; read the whole picture, not one icon.
