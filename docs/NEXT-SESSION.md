@@ -165,6 +165,11 @@ rediscovered the hard way:
   `Codec Portrait Fix`. To reach a call in the harness: stage boot, Tab, Enter (CODEC is the
   first pause entry), then a *left click* for SEND - synthetic Enter is ignored on that screen.
   Never press Up/Down there (manual tuning); Left/Right pick other contacts.
+- **Pre-rendered videos are one native full-surface rect** (AR-017 in the private letterbox
+  register): emitted from +E367BB through the rect emitter at +BE090, so they take the window's
+  shape. With the HUD fix on that rect becomes the centred 16:9 rect of the surface. The
+  prologue drama stages are engine cutscenes; the videos are the NEW GAME opening (Up twice at
+  the main menu, Enter, Enter, Enter in the harness).
 - **Under DX12 the engine's composition targets are chain-sized while its viewports are
   window-sized** (AR-015, second part): with the override on, the picture landed 1:1 in the
   top-left of the chain and the back-buffer blit copied it as is. The D3D12 fit therefore
