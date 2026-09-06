@@ -457,8 +457,10 @@ Verified on DX11: 21:9 3840x1620 and 4:3 2880x2160, Otacon call from the Middle 
 portrait framed as at 16:9 inside the masked codec; the 16:9 window is untouched by
 construction. User's read of the 21:9 and 4:3 calls: "Looks like that fixed it." Not yet run at the
 reporter's exact shape (a native 21:9 desktop, window = chain, where the AR-015 band widening
-also fires); the two fixes act on different passes, but that configuration should be captured
-once the desktop can be set to 2560x1080 again.
+also fires); the two fixes act on different passes, and the native 4:3 case with the band
+widening active (1600x1200 capture output as primary, DX11, 2026-09-06) shows the call
+framed as at 16:9 inside the masked codec, so the two do not interact. A native 21:9 capture
+is still worth taking when that desktop is available.
 
 ## AR-017: pre-rendered videos stretched to the window (2026-09-06)
 
@@ -485,8 +487,10 @@ otherwise a warning and the videos are left alone. Log line once: `movie rect (0
 (960,0 5760x3240) in render units, the whole window's height, black either side; 4:3
 2880x2160 -> `(0,540 5760x3240)`, letterboxed. Faces natural in both. One 21:9 run came back
 dark on every frame with a "HIDEO 1" channel tag and the same log lines - a channel-switch
-accident of the key schedule, not the fix; the repeat run was fine. User's read pending at the
-time of writing.
+accident of the key schedule, not the fix; the repeat run was fine. Also verified at native 4:3
+(1600x1200 capture output as primary, window = chain = display, the AR-015 band widening
+firing on the same frames): `movie rect (0,0 3200x2400) -> (0,300 3200x1800)`, video
+letterboxed with natural proportions. User's read pending at the time of writing.
 
 The harness route: `scratchpad/opening_run.ps1` - boot to the main menu, Up twice, Enter
 (NEW GAME), Enter (difficulty), Enter, then captures every N seconds; the video starts ~10 s
