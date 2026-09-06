@@ -33,6 +33,50 @@ the world leaking past their edges. On an ultrawide the cutscene camera is zoome
 the full frame fits, because the engine otherwise keeps the 16:9 width and cuts the top and
 bottom off.
 
+## Cutscenes, videos, codec and menus
+
+Three more places the game stretched things that were never meant to stretch. All of them are
+fixed in 0.0.3, on DX11 and DX12.
+
+**Codec calls.** The caller's portrait is rendered by its own camera, and that camera took the
+window's shape: a narrow face on an ultrawide, a wide one on 4:3. It now keeps the 16:9 framing
+inside the codec, and the codec itself sits in the masked 16:9 area like the other menus.
+
+**21:9 (1920x823)**
+
+![Codec at 21:9](docs/images/codec-21-9.jpg)
+
+**4:3 (1600x1200)**
+
+![Codec at 4:3](docs/images/codec-4-3.jpg)
+
+**Pre-rendered videos.** The opening's TV commercials and the other video segments were drawn
+over the whole window, so on anything but 16:9 they were stretched, and the masking never
+caught them because they are not camera cutscenes. They now play pillarboxed on an ultrawide and
+letterboxed on 4:3.
+
+**21:9 (1920x823)**
+
+![Opening video at 21:9](docs/images/video-21-9.jpg)
+
+**4:3 (1600x1200)**
+
+![Opening video at 4:3](docs/images/video-4-3.jpg)
+
+**System menus.** The difficulty select, the load list and the options screen are laid out on a
+different canvas from the rest of the interface, and that canvas was scaled independently on each
+axis. They stretched across the full window while the main menu next to them did not. They now
+follow the same 16:9 layout as everything else.
+
+**21:9 (1920x823)**
+
+![Difficulty select at 21:9](docs/images/menu-21-9.jpg)
+
+The same release also fixes a bigger one that affected every non-16:9 window: the renderer's
+final composition pass was drawing the whole picture into a centred 16:9 band of the window, so
+a 4:3 or 21:9 picture came out squeezed with uncleared corners, on both DX11 and DX12. That
+pass now covers the full window.
+
 ## Features
 
 **Aspect ratio and HUD**
