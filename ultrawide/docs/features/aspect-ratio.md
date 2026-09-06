@@ -779,7 +779,7 @@ difficulty rect at 1920x823 becomes `(688,199 2693x1214)`; the list's `(80,0 838
 `(641,0 1913x1644)`. A 16:9 surface has equal scales and is left alone. Verified at native
 1920x823: the difficulty screen sits in the 16:9 area with the MENU/DIFFICULTY side bars
 visible again and the text at 16:9 proportions. The options screen was not captured (the
-menu walk's keys ran into NEW GAME); it comes from the same la2 and the same call shape, so
-it is expected to follow, pending a capture. User's read of the 1920x823 difficulty screen:
-"This looks good." Also verified on DX12 at the same size (the hook is engine-side; the
-capture matched the DX11 one).
+menu walk's keys ran into NEW GAME). User's read of the 1920x823 difficulty screen: "This
+looks good." Also verified on DX12 at the same size (the hook is engine-side; the capture
+matched the DX11 one). The user then checked the menus by hand, options screen included, on
+both APIs: "the menus are fixed under all APIs" (2026-09-06). Closed.
