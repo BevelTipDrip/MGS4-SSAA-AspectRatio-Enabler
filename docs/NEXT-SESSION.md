@@ -165,6 +165,12 @@ rediscovered the hard way:
   `Codec Portrait Fix`. To reach a call in the harness: stage boot, Tab, Enter (CODEC is the
   first pause entry), then a *left click* for SEND - synthetic Enter is ignored on that screen.
   Never press Up/Down there (manual tuning); Left/Right pick other contacts.
+- **The layout converter also gets sub-canvas calls** (AR-018 in the private aspect-ratio
+  register): the system menus (difficulty, load list, options) lay out sub-rects such as
+  `(100,87 1180x532)`, which the game maps with two independent scales, so they stretched over
+  the full window. The hook now places a sub-rect's physical rect under the same uniform scale
+  and logical offset the full-canvas fix uses. The gameplay census that said "86 of 86 calls
+  are full-canvas" was true only of gameplay.
 - **Pre-rendered videos are one native full-surface rect** (AR-017 in the private letterbox
   register): emitted from +E367BB through the rect emitter at +BE090, so they take the window's
   shape. With the HUD fix on that rect becomes the centred 16:9 rect of the surface. The
