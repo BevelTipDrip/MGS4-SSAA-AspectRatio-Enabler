@@ -2707,45 +2707,107 @@ namespace AspectRatio
         }
     }
 
-    // ---- native rect emitter logging ------------------------------------------------------
+    // ---- native rect emitter: movies (AR-017) and logging ---------------------------------
     //
     // The widget backing panels are native solid-rectangle nodes, not textured quads: they
     // pass through the physical-rect emitter, not the layout-object pipeline - which is why
     // no object bias in the live walks could move them. Byte pattern and function shape
     // published by mgs4Ultra120 (MIT-adjacent research, attributed); the hook and use are
     // ours. Shape: uint8_t* emit(uint8_t* dest, u16 x, u16 y, u16 w, u16 h), writing a
-    // 16-byte packet. Log-only; the live command "rectlog" re-arms the budget.
+    // 16-byte packet in physical (render-size) pixels.
+    //
+    // Pre-rendered videos (the opening's TV commercials and the like) are drawn as one such
+    // rect covering the whole surface - (0,0 7680x3240) at 3840x1620 with 2x render scale -
+    // from the call site at +E367BB, so a 16:9 video is stretched to whatever the window is.
+    // Found 2026-09-06 with the "rectfix" experiment: two sites emit a full rect every frame
+    // of the video, +E367BB and +921AD; rewriting +E367BB moved the video into the centred
+    // 16:9 rect, rewriting +921AD changed nothing visible (a full-surface plate). With the
+    // HUD fix on, the video's rect becomes the centred 16:9 rect of the surface: pillarboxed
+    // in a wide window, letterboxed in a tall one, untouched at 16:9. The site is verified at
+    // install as a call to the emitter (E8 rel32 five bytes before the return address).
     constexpr const char* kRectEmitterSignature =
         "0F B7 44 24 28 66 89 41 0E 48 8D 41 10 C6 01 0A 66 89 51 08 66 44 89 41 0A 66 44 89 49 0C C3";
+    constexpr uintptr_t kRvaMovieRectSite = 0x0E367BB;   // return address of the movie's emit call
 
     SafetyHookInline RectEmitter_hook {};
     std::atomic<int> g_RectLogBudget { 0 };
+    std::atomic<uintptr_t> g_MovieRectSite { 0 };        // kRvaMovieRectSite once verified, else 0
+    std::atomic<int> g_MovieRectReported { 0 };
+    // Lab: live "rectfix <rva>" applies the same rewrite to any other return site.
+    std::atomic<uintptr_t> g_RectFixCaller { 0 };
+    std::atomic<int> g_RectFixReported { 0 };
 
-    uint8_t* LoggedRectEmit(uint8_t* dest, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+    bool CentredSixteenNine(uint16_t w, uint16_t h, uint16_t& nx, uint16_t& ny, uint16_t& nw, uint16_t& nh)
     {
+        const int64_t wide = static_cast<int64_t>(w) * 9;
+        const int64_t tall = static_cast<int64_t>(h) * 16;
+        nx = 0; ny = 0; nw = w; nh = h;
+        if (wide > tall) { nw = static_cast<uint16_t>(static_cast<int64_t>(h) * 16 / 9); nx = static_cast<uint16_t>((w - nw) / 2); return true; }
+        if (wide < tall) { nh = static_cast<uint16_t>(static_cast<int64_t>(w) * 9 / 16); ny = static_cast<uint16_t>((h - nh) / 2); return true; }
+        return false;
+    }
+
+    uint8_t* HookedRectEmit(uint8_t* dest, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+    {
+        uintptr_t returnAddress = 0;
+        std::memcpy(&returnAddress, _AddressOfReturnAddress(), sizeof(returnAddress));
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uintptr_t site = (returnAddress >= base) ? returnAddress - base : returnAddress;
+#if MGS4E_LAB_BUILD
         if (g_RectLogBudget.fetch_sub(1) > 0)
         {
-            uintptr_t returnAddress = 0;
-            std::memcpy(&returnAddress, _AddressOfReturnAddress(), sizeof(returnAddress));
-            const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-            spdlog::info("MGS4: rect emit: ({},{} {}x{}) from +{:X}",
-                x, y, w, h, (returnAddress >= base) ? returnAddress - base : returnAddress);
+            spdlog::info("MGS4: rect emit: ({},{} {}x{}) from +{:X}", x, y, w, h, site);
         }
         else
         {
             g_RectLogBudget.store(0);
         }
+#endif
+        const bool movie = site != 0 && site == g_MovieRectSite.load(std::memory_order_relaxed);
+        const bool lab = site != 0 && site == g_RectFixCaller.load(std::memory_order_relaxed);
+        if ((movie || lab) && x == 0 && y == 0 && w > 0 && h > 0)
+        {
+            uint16_t nx, ny, nw, nh;
+            if (CentredSixteenNine(w, h, nx, ny, nw, nh))
+            {
+                if (movie && g_MovieRectReported.fetch_add(1) == 0)
+                {
+                    spdlog::info("MGS4: UI Aspect: movie rect ({},{} {}x{}) -> ({},{} {}x{}), the video keeps 16:9.", x, y, w, h, nx, ny, nw, nh);
+                }
+                if (lab && !movie && g_RectFixReported.fetch_add(1) == 0)
+                {
+                    spdlog::info("MGS4: rect fix: +{:X} ({},{} {}x{}) -> ({},{} {}x{})", site, x, y, w, h, nx, ny, nw, nh);
+                }
+                return RectEmitter_hook.stdcall<uint8_t*>(dest, nx, ny, nw, nh);
+            }
+        }
         return RectEmitter_hook.stdcall<uint8_t*>(dest, x, y, w, h);
     }
 
-    void InstallRectEmitLogging()
+    void InstallRectEmitter()
     {
-        if (uint8_t* at = mgs4e::mem::FindPattern(mgs4e::game::Module(), kRectEmitterSignature, "MGS4: rect emitter"))
+        if (RectEmitter_hook) { return; }
+        uint8_t* at = mgs4e::mem::FindPattern(mgs4e::game::Module(), kRectEmitterSignature, "MGS4: rect emitter");
+        if (!at) { return; }
+        // The movie site must be a call to this very function: E8 rel32 ending at the site.
+        auto* const module = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
+        const uint8_t* call = module + kRvaMovieRectSite - 5;
+        int32_t rel = 0;
+        std::memcpy(&rel, call + 1, sizeof(rel));
+        const bool verified = call[0] == 0xE8 && (module + kRvaMovieRectSite + rel) == at;
+        RectEmitter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&HookedRectEmit));
+        MGS4E_LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
+        if (RectEmitter_hook && verified)
         {
-            RectEmitter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&LoggedRectEmit));
-            MGS4E_LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
+            g_MovieRectSite.store(kRvaMovieRectSite);
+        }
+        else if (RectEmitter_hook)
+        {
+            spdlog::warn("MGS4: UI Aspect: +{:X} is not a call to the rect emitter - wrong executable build, movies are left as they are.", kRvaMovieRectSite);
         }
     }
+
+    void InstallRectEmitLogging() { InstallRectEmitter(); }
 
     // ---- live anchor lab ------------------------------------------------------------------
     //
@@ -4725,6 +4787,13 @@ namespace AspectRatio
                             g_RectLogBudget.store(400);
                             spdlog::info("MGS4: live lab: rect logging armed.");
                         }
+                        else if (std::strncmp(line, "rectfix", 7) == 0)
+                        {
+                            const uintptr_t rva = static_cast<uintptr_t>(std::strtoull(line + 7, nullptr, 16));
+                            g_RectFixCaller.store(rva);
+                            g_RectFixReported.store(0);
+                            spdlog::info("MGS4: live lab: rect fix caller +{:X}.", rva);
+                        }
                         else if (std::strncmp(line, "pooldump", 8) == 0)
                         {
                             g_PoolDumpBudget.store(1);
@@ -5048,6 +5117,12 @@ namespace AspectRatio
         if (letterbox)
         {
             InstallLetterbox();
+        }
+
+        // Pre-rendered videos keep 16:9 (AR-017); rides on the HUD fix like the codec.
+        if (bFixUiAspect)
+        {
+            InstallRectEmitter();
         }
 
         // Debug Logging: the F11 HUD report, which needs the upload probe (the dump runs at

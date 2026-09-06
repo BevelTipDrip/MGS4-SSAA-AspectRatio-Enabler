@@ -455,7 +455,40 @@ it needs.
 
 Verified on DX11: 21:9 3840x1620 and 4:3 2880x2160, Otacon call from the Middle East stage -
 portrait framed as at 16:9 inside the masked codec; the 16:9 window is untouched by
-construction. User's read pending at the time of writing. Not yet run at the
+construction. User's read of the 21:9 and 4:3 calls: "Looks like that fixed it." Not yet run at the
 reporter's exact shape (a native 21:9 desktop, window = chain, where the AR-015 band widening
 also fires); the two fixes act on different passes, but that configuration should be captured
 once the desktop can be set to 2560x1080 again.
+
+## AR-017: pre-rendered videos stretched to the window (2026-09-06)
+
+The opening's TV commercials (NEW GAME, before the prologue) and the other pre-rendered videos
+are drawn as one native rect covering the whole render surface - `(0,0 7680x3240)` at
+3840x1620 with 2x scale - so a 16:9 video takes the window's shape: stretched sideways at
+21:9, squashed at 4:3, and in a fitted window drawn over the whole chain, ignoring the window
+rect and the masking (which never fires, there is no cinematic camera). The user's report:
+"FMV cutscenes are getting stretched".
+
+Found with the rect emitter probe (`rectlog`): during the video two return sites emit a full
+rect every frame, +E367BB and +921AD. The lab command `rectfix <rva>` rewrote one site's
+full rect to the centred 16:9 rect of the surface: +E367BB moved the video into that rect
+(openfix_E367BB, 21:9), +921AD changed nothing visible (a full-surface plate under it). The
+emitter itself (`+BE090`, `emit(dest, x, y, w, h)` writing a 16-byte packet) is the
+mgs4Ultra120-published function, attributed in the source; the site and its use are ours.
+
+Fix (`HookedRectEmit` / `InstallRectEmitter`, installed with the HUD fix in every build, not
+only the lab): a full-surface rect from `kRvaMovieRectSite` (+E367BB) becomes the centred 16:9
+rect of the surface (pillarboxed when wider, letterboxed when taller, untouched at 16:9). The
+site is verified at install as an E8 call to the emitter five bytes before the return address;
+otherwise a warning and the videos are left alone. Log line once: `movie rect (0,0 7680x3240)
+-> (960,0 5760x3240), the video keeps 16:9.` Verified on DX11: 21:9 3840x1620 -> video at
+(960,0 5760x3240) in render units, the whole window's height, black either side; 4:3
+2880x2160 -> `(0,540 5760x3240)`, letterboxed. Faces natural in both. One 21:9 run came back
+dark on every frame with a "HIDEO 1" channel tag and the same log lines - a channel-switch
+accident of the key schedule, not the fix; the repeat run was fine. User's read pending at the
+time of writing.
+
+The harness route: `scratchpad/opening_run.ps1` - boot to the main menu, Up twice, Enter
+(NEW GAME), Enter (difficulty), Enter, then captures every N seconds; the video starts ~10 s
+after the difficulty select and runs for a couple of minutes. The prologue drama stages
+(`s00a00l_D`, `s00a10l_D..D9`) are engine cutscenes, not videos.
