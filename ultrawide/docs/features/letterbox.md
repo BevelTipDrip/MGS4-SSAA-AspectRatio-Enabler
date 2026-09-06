@@ -459,8 +459,12 @@ construction. User's read of the 21:9 and 4:3 calls: "Looks like that fixed it."
 reporter's exact shape (a native 21:9 desktop, window = chain, where the AR-015 band widening
 also fires); the two fixes act on different passes, and the native 4:3 case with the band
 widening active (1600x1200 capture output as primary, DX11, 2026-09-06) shows the call
-framed as at 16:9 inside the masked codec, so the two do not interact. A native 21:9 capture
-is still worth taking when that desktop is available.
+framed as at 16:9 inside the masked codec, so the two do not interact. The reporter's shape
+followed the same day: native 1920x823 (the one 21:9 mode the capture output would take),
+window = chain = display, band `(228,0 1463x823)` widened on the same frames - the call is
+framed as at 16:9, the pillar bands are pure black in the pixel data (the codec's vignette
+makes them look lighter in a capture). The opening video at that size: `movie rect (0,0
+3840x1644) -> (459,0 2922x1644)`, pillarboxed, proportions natural.
 
 ## AR-017: pre-rendered videos stretched to the window (2026-09-06)
 
