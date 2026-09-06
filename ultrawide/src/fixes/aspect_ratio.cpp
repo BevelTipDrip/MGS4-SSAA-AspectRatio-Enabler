@@ -3125,6 +3125,87 @@ namespace AspectRatio
         return true;
     }
 
+    // ---- AR-015: the renderer's 16:9 band -------------------------------------------------
+    //
+    // In a window taller than 16:9 (4:3, say) the renderer draws its whole picture -
+    // the resolved scene and the interface with it - into the centred 16:9 band of a
+    // window-sized target, and the final blit shows that target as is. The scene is
+    // rendered with the window's projection, so the picture comes out squeezed vertically
+    // and the rest of the target is never cleared (garbage in the corners). Measured
+    // 2026-09-05 on a 1600x1200 window: viewport (0,150 1600x900), scissor
+    // (0,150)-(1600,1050), on an offscreen target with a depth buffer, last pass of the
+    // frame. D3D11 does the same (native 4:3 1600x1200 gameplay, 2026-09-06; the earlier
+    // "D3D11 is right" read came from masked menus, where the band is invisible). The same happens the other way round in a window wider than 16:9: a
+    // 2560x1080 window gets the pillar band (320,0 1920x1080), the picture compressed
+    // sideways (user report and census, 2026-09-06). The values arrive through the
+    // renderer's generic submit (the caller walk ends in the frame submit, not at a
+    // computation), so the correction is applied where they are used: a viewport or
+    // scissor that is exactly the window's centred 16:9 band is widened to the whole
+    // window. Nothing else matches - at 16:9 there is no band to match, and the gate is
+    // the window's aspect.
+    struct WindowBand
+    {
+        bool valid = false;
+        int ww = 0, wh = 0;
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;   // the centred 16:9 band
+    };
+
+    WindowBand CurrentWindowBand()
+    {
+        WindowBand b;
+        b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
+        b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
+        if (b.ww <= 0 || b.wh <= 0) { return b; }
+        const int64_t wide = static_cast<int64_t>(b.ww) * 9;
+        const int64_t tall = static_cast<int64_t>(b.wh) * 16;
+        if (wide < tall)
+        {
+            // Taller than 16:9: full width, letterboxed.
+            b.w = static_cast<float>(b.ww);
+            b.h = static_cast<float>(b.ww) * 9.0f / 16.0f;
+            b.x = 0.0f;
+            b.y = (static_cast<float>(b.wh) - b.h) / 2.0f;
+        }
+        else if (wide > tall)
+        {
+            // Wider than 16:9: full height, pillarboxed.
+            b.h = static_cast<float>(b.wh);
+            b.w = static_cast<float>(b.wh) * 16.0f / 9.0f;
+            b.y = 0.0f;
+            b.x = (static_cast<float>(b.ww) - b.w) / 2.0f;
+        }
+        else
+        {
+            return b;
+        }
+        b.valid = true;
+        return b;
+    }
+
+    bool IsWindowBand(float x, float y, float w, float h)
+    {
+        const WindowBand b = CurrentWindowBand();
+        return b.valid && std::fabs(x - b.x) <= 1.0f && std::fabs(y - b.y) <= 1.0f
+            && std::fabs(w - b.w) <= 1.0f && std::fabs(h - b.h) <= 1.0f;
+    }
+
+    bool IsWindowBandScissor(const RECT& r)
+    {
+        const WindowBand b = CurrentWindowBand();
+        return b.valid && std::fabs(static_cast<float>(r.left) - b.x) <= 1.0f && std::fabs(static_cast<float>(r.top) - b.y) <= 1.0f
+            && std::fabs(static_cast<float>(r.right) - (b.x + b.w)) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.y + b.h)) <= 1.0f;
+    }
+
+    std::atomic<int> g_BandExpandReported { 0 };
+
+    void ReportBandExpand(float x, float y, float w, float h, int ww, int wh)
+    {
+        if (g_BandExpandReported.fetch_add(1) == 0)
+        {
+            spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) is widened to the {}x{} window.", x, y, w, h, ww, wh);
+        }
+    }
+
     // D3D11: the immediate context. The back buffer is known by identity (pointer value from
     // GetBuffer, released at once, never dereferenced); a resize clears it.
     SafetyHookInline Fit11_OMSetRenderTargets_hook {};
@@ -3164,26 +3245,64 @@ namespace AspectRatio
 
     void STDMETHODCALLTYPE Fit11_RSSetViewports(ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports)
     {
-        if (g_BackBufferBound11 && g_Fit.active && count > 0 && count <= 16 && viewports)
+        if (count > 0 && count <= 16 && viewports)
         {
             D3D11_VIEWPORT fitted[16];
             std::memcpy(fitted, viewports, sizeof(D3D11_VIEWPORT) * count);
-            for (UINT i = 0; i < count; i++) { FitViewport(fitted[i]); }
-            Fit11_RSSetViewports_hook.stdcall<void>(self, count, fitted);
-            return;
+            bool changed = false;
+            if (RenderPipeline::bBandExpand)
+            {
+                for (UINT i = 0; i < count; i++)
+                {
+                    if (!IsWindowBand(fitted[i].TopLeftX, fitted[i].TopLeftY, fitted[i].Width, fitted[i].Height)) { continue; }
+                    const WindowBand b = CurrentWindowBand();
+                    ReportBandExpand(fitted[i].TopLeftX, fitted[i].TopLeftY, fitted[i].Width, fitted[i].Height, b.ww, b.wh);
+                    fitted[i].TopLeftX = 0.0f;
+                    fitted[i].TopLeftY = 0.0f;
+                    fitted[i].Width = static_cast<float>(b.ww);
+                    fitted[i].Height = static_cast<float>(b.wh);
+                    changed = true;
+                }
+            }
+            if (g_BackBufferBound11 && g_Fit.active)
+            {
+                for (UINT i = 0; i < count; i++) { changed = FitViewport(fitted[i]) || changed; }
+            }
+            if (changed)
+            {
+                Fit11_RSSetViewports_hook.stdcall<void>(self, count, fitted);
+                return;
+            }
         }
         Fit11_RSSetViewports_hook.stdcall<void>(self, count, viewports);
     }
 
     void STDMETHODCALLTYPE Fit11_RSSetScissorRects(ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects)
     {
-        if (g_BackBufferBound11 && g_Fit.active && count > 0 && count <= 16 && rects)
+        if (count > 0 && count <= 16 && rects)
         {
             D3D11_RECT fitted[16];
             std::memcpy(fitted, rects, sizeof(D3D11_RECT) * count);
-            for (UINT i = 0; i < count; i++) { FitScissor(fitted[i]); }
-            Fit11_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
-            return;
+            bool changed = false;
+            if (RenderPipeline::bBandExpand)
+            {
+                for (UINT i = 0; i < count; i++)
+                {
+                    if (!IsWindowBandScissor(fitted[i])) { continue; }
+                    const WindowBand b = CurrentWindowBand();
+                    fitted[i] = D3D11_RECT { 0, 0, b.ww, b.wh };
+                    changed = true;
+                }
+            }
+            if (g_BackBufferBound11 && g_Fit.active)
+            {
+                for (UINT i = 0; i < count; i++) { changed = FitScissor(fitted[i]) || changed; }
+            }
+            if (changed)
+            {
+                Fit11_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
+                return;
+            }
         }
         Fit11_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
     }
@@ -3287,87 +3406,6 @@ namespace AspectRatio
         std::lock_guard lock(g_Fit12Mutex);
         const auto it = g_BoundLists12.find(list);
         return it != g_BoundLists12.end() && it->second;
-    }
-
-    // ---- AR-015: the D3D12 path's 16:9 band ----------------------------------------------
-    //
-    // In a window taller than 16:9 (4:3, say) the D3D12 renderer draws its whole picture -
-    // the resolved scene and the interface with it - into the centred 16:9 band of a
-    // window-sized target, and the final blit shows that target as is. The scene is
-    // rendered with the window's projection, so the picture comes out squeezed vertically
-    // and the rest of the target is never cleared (garbage in the corners). Measured
-    // 2026-09-05 on a 1600x1200 window: viewport (0,150 1600x900), scissor
-    // (0,150)-(1600,1050), on an offscreen target with a depth buffer, last pass of the
-    // frame; the D3D11 renderer paints the same pass over the full window and its picture
-    // is right. The same happens the other way round in a window wider than 16:9: a
-    // 2560x1080 window gets the pillar band (320,0 1920x1080), the picture compressed
-    // sideways (user report and census, 2026-09-06). The values arrive through the
-    // renderer's generic submit (the caller walk ends in the frame submit, not at a
-    // computation), so the correction is applied where they are used: a viewport or
-    // scissor that is exactly the window's centred 16:9 band is widened to the whole
-    // window. Nothing else matches - at 16:9 there is no band to match, and the gate is
-    // the window's aspect.
-    struct WindowBand
-    {
-        bool valid = false;
-        int ww = 0, wh = 0;
-        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;   // the centred 16:9 band
-    };
-
-    WindowBand CurrentWindowBand()
-    {
-        WindowBand b;
-        b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
-        b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
-        if (b.ww <= 0 || b.wh <= 0) { return b; }
-        const int64_t wide = static_cast<int64_t>(b.ww) * 9;
-        const int64_t tall = static_cast<int64_t>(b.wh) * 16;
-        if (wide < tall)
-        {
-            // Taller than 16:9: full width, letterboxed.
-            b.w = static_cast<float>(b.ww);
-            b.h = static_cast<float>(b.ww) * 9.0f / 16.0f;
-            b.x = 0.0f;
-            b.y = (static_cast<float>(b.wh) - b.h) / 2.0f;
-        }
-        else if (wide > tall)
-        {
-            // Wider than 16:9: full height, pillarboxed.
-            b.h = static_cast<float>(b.wh);
-            b.w = static_cast<float>(b.wh) * 16.0f / 9.0f;
-            b.y = 0.0f;
-            b.x = (static_cast<float>(b.ww) - b.w) / 2.0f;
-        }
-        else
-        {
-            return b;
-        }
-        b.valid = true;
-        return b;
-    }
-
-    bool IsWindowBand(float x, float y, float w, float h)
-    {
-        const WindowBand b = CurrentWindowBand();
-        return b.valid && std::fabs(x - b.x) <= 1.0f && std::fabs(y - b.y) <= 1.0f
-            && std::fabs(w - b.w) <= 1.0f && std::fabs(h - b.h) <= 1.0f;
-    }
-
-    bool IsWindowBandScissor(const D3D12_RECT& r)
-    {
-        const WindowBand b = CurrentWindowBand();
-        return b.valid && std::fabs(static_cast<float>(r.left) - b.x) <= 1.0f && std::fabs(static_cast<float>(r.top) - b.y) <= 1.0f
-            && std::fabs(static_cast<float>(r.right) - (b.x + b.w)) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.y + b.h)) <= 1.0f;
-    }
-
-    std::atomic<int> g_BandExpandReported { 0 };
-
-    void ReportBandExpand(float x, float y, float w, float h, int ww, int wh)
-    {
-        if (g_BandExpandReported.fetch_add(1) == 0)
-        {
-            spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) is widened to the {}x{} window.", x, y, w, h, ww, wh);
-        }
     }
 
     void STDMETHODCALLTYPE Fit12_RSSetViewports(ID3D12GraphicsCommandList* self, UINT count, const D3D12_VIEWPORT* viewports)

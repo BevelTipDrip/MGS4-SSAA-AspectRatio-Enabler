@@ -401,3 +401,15 @@ fallback), which looks like the band clipping the sides - boot with masking off 
 file for a clean read. The earlier 21:9 verifications on the 4K desktop (3840x1620 in a
 3840x2160 chain) never met this band because the composition targets were chain-sized there
 and the picture was read at 1:1.
+
+AR-015, fourth part (2026-09-06, DX11): D3D11 has the same band. With the user on DX11, the
+native 4:3 1600x1200 gameplay capture showed the picture squeezed into the 16:9 band with the
+uncleared corners, exactly as DX12 had. The earlier "D3D11 is right at 4:3" was read from
+masked menus, where the 16:9 band and the masking coincide and the squeeze is invisible - a
+lesson in what a capture can and cannot show. The band helpers moved above the D3D11 section
+and `Fit11_RSSetViewports` / `Fit11_RSSetScissorRects` now widen the band on any target and
+fit on the back buffer, the same shape as the D3D12 hooks. Verified on DX11 on the 1600x1200
+display: native 4:3 gameplay fills the window ("band (0,150 1600x900) is widened"), HUD in the
+corners, ring and reticle round; 21:9 1600x686 fitted at (0,257), full width, no band line on
+this backend at that size; 4:3 1400x1050 scaled x1.1429 to fill with the masking bands ("band
+(0,132 1400x787) is widened"). User's read pending at the time of writing.
