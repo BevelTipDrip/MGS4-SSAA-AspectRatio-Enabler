@@ -1,14 +1,12 @@
 # Start here
 
-**MGS4 SSAA and Aspect Ratio Enabler** is the standalone home of the MGS4 graphics work that
-earlier shipped inside a fork of another mod. It has its own ASI (`MGS4Enabler.asi`), its own
-settings file (`MGS4Enabler.settings`) and its own wxWidgets tool (`MGS4Enabler.exe`); no code
-from any other mod is compiled in. Mod compatibility (`shared/compat_table.hpp`) lists the
-mods it knows how to share the game with and reads their settings files read-only to stand
-aside where both patch the same thing. The old fork repository (`..\repo`) is frozen at its
-0.2.6 release. The project name and short id (`MGS4Enabler`) date from 2026-09-04; the earlier
-working name was "PF Companion", and the user wants no reference to the other mod in the name
-or the wording beyond the compatibility feature itself.
+**MGS4 SSAA and Aspect Ratio Enabler** is a standalone graphics mod for MGS4 in the Master
+Collection. It has its own ASI (`MGS4Enabler.asi`), its own settings file
+(`MGS4Enabler.settings`) and its own wxWidgets tool (`MGS4Enabler.exe`); no code from any
+other mod is compiled in. Mod compatibility (`shared/compat_table.hpp`) lists the mods it
+knows how to share the game with and reads their settings files read-only to stand aside
+where both patch the same thing; that table is the one place another mod is named by design.
+The project name and short id (`MGS4Enabler`) date from 2026-09-04.
 
 **Next task: aspect ratio fixes — ultrawide (21:9, 32:9) and 4:3.**
 
