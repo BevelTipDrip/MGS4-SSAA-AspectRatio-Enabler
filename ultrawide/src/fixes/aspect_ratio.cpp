@@ -3299,16 +3299,19 @@ namespace AspectRatio
     // 2026-09-05 on a 1600x1200 window: viewport (0,150 1600x900), scissor
     // (0,150)-(1600,1050), on an offscreen target with a depth buffer, last pass of the
     // frame; the D3D11 renderer paints the same pass over the full window and its picture
-    // is right. The values arrive through the renderer's generic submit (the caller walk
-    // ends in the frame submit, not at a computation), so the correction is applied where
-    // they are used: a viewport or scissor that is exactly that band of the window is
-    // widened to the whole window. Nothing else matches - at 16:9 and wider there is no
-    // band to match, and the gate is the window's aspect.
+    // is right. The same happens the other way round in a window wider than 16:9: a
+    // 2560x1080 window gets the pillar band (320,0 1920x1080), the picture compressed
+    // sideways (user report and census, 2026-09-06). The values arrive through the
+    // renderer's generic submit (the caller walk ends in the frame submit, not at a
+    // computation), so the correction is applied where they are used: a viewport or
+    // scissor that is exactly the window's centred 16:9 band is widened to the whole
+    // window. Nothing else matches - at 16:9 there is no band to match, and the gate is
+    // the window's aspect.
     struct WindowBand
     {
         bool valid = false;
         int ww = 0, wh = 0;
-        float bandH = 0.0f, bandY = 0.0f;
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;   // the centred 16:9 band
     };
 
     WindowBand CurrentWindowBand()
@@ -3316,9 +3319,29 @@ namespace AspectRatio
         WindowBand b;
         b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
         b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
-        if (b.ww <= 0 || b.wh <= 0 || static_cast<int64_t>(b.ww) * 9 >= static_cast<int64_t>(b.wh) * 16) { return b; }
-        b.bandH = static_cast<float>(b.ww) * 9.0f / 16.0f;
-        b.bandY = (static_cast<float>(b.wh) - b.bandH) / 2.0f;
+        if (b.ww <= 0 || b.wh <= 0) { return b; }
+        const int64_t wide = static_cast<int64_t>(b.ww) * 9;
+        const int64_t tall = static_cast<int64_t>(b.wh) * 16;
+        if (wide < tall)
+        {
+            // Taller than 16:9: full width, letterboxed.
+            b.w = static_cast<float>(b.ww);
+            b.h = static_cast<float>(b.ww) * 9.0f / 16.0f;
+            b.x = 0.0f;
+            b.y = (static_cast<float>(b.wh) - b.h) / 2.0f;
+        }
+        else if (wide > tall)
+        {
+            // Wider than 16:9: full height, pillarboxed.
+            b.h = static_cast<float>(b.wh);
+            b.w = static_cast<float>(b.wh) * 16.0f / 9.0f;
+            b.y = 0.0f;
+            b.x = (static_cast<float>(b.ww) - b.w) / 2.0f;
+        }
+        else
+        {
+            return b;
+        }
         b.valid = true;
         return b;
     }
@@ -3326,15 +3349,15 @@ namespace AspectRatio
     bool IsWindowBand(float x, float y, float w, float h)
     {
         const WindowBand b = CurrentWindowBand();
-        return b.valid && std::fabs(x) <= 1.0f && std::fabs(w - static_cast<float>(b.ww)) <= 1.0f
-            && std::fabs(h - b.bandH) <= 1.0f && std::fabs(y - b.bandY) <= 1.0f;
+        return b.valid && std::fabs(x - b.x) <= 1.0f && std::fabs(y - b.y) <= 1.0f
+            && std::fabs(w - b.w) <= 1.0f && std::fabs(h - b.h) <= 1.0f;
     }
 
     bool IsWindowBandScissor(const D3D12_RECT& r)
     {
         const WindowBand b = CurrentWindowBand();
-        return b.valid && std::abs(r.left) <= 1 && std::abs(r.right - b.ww) <= 1
-            && std::fabs(static_cast<float>(r.top) - b.bandY) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.bandY + b.bandH)) <= 1.0f;
+        return b.valid && std::fabs(static_cast<float>(r.left) - b.x) <= 1.0f && std::fabs(static_cast<float>(r.top) - b.y) <= 1.0f
+            && std::fabs(static_cast<float>(r.right) - (b.x + b.w)) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.y + b.h)) <= 1.0f;
     }
 
     std::atomic<int> g_BandExpandReported { 0 };

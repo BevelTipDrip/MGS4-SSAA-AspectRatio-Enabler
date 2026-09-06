@@ -387,3 +387,17 @@ over), with the masking bands on top; the rect array grew to six. Verified on DX
 with the 16:9 masking; 21:9 1600x686 -> "1600x686 rect at (0,257)", menu centred with black
 above and below and the pillar bands inside. User's read pending at the time of writing. The
 tester's DX12 4:3-on-16:9-desktop case goes through this path.
+
+AR-015, third part (2026-09-06): the band goes the other way too. The user set a 2560x1080
+desktop and the same in the launcher and saw the picture compressed sideways; the census
+showed the centred 16:9 pillar band `(320,0 1920x1080)`, scissor `(320,0)-(2240,1080)`, on
+the 2560x1080 composition target. `CurrentWindowBand` now yields the letterbox band for a
+window taller than 16:9 and the pillar band (full height, `wh*16/9` wide, centred) for one
+wider, and the viewport and scissor matches use all four edges. Verified at 2560x1080 native
+on DX12: gameplay fills the width, HUD in the 21:9 corners, compass ring and reticle round.
+Note for the harness: a gameplay capture taken within 15 s of a stage-automation load still
+shows the boot-phase masking bands (no loaded-save plate on that path, the 15 s camera-alone
+fallback), which looks like the band clipping the sides - boot with masking off in the lab
+file for a clean read. The earlier 21:9 verifications on the 4K desktop (3840x1620 in a
+3840x2160 chain) never met this band because the composition targets were chain-sized there
+and the picture was read at 1:1.
