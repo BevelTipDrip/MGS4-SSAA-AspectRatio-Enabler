@@ -149,13 +149,14 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
-- **The D3D12 renderer squeezes any non-16:9 window's picture into a centred 16:9 band**
-  (AR-015 in the private letterbox register): its last offscreen pass uses that band as its
-  viewport, letterbox at 4:3 and pillarbox at 21:9, scene and HUD together, so everything
-  comes out squeezed with uncleared margins; D3D11 paints the same pass over the whole window. The fit hooks widen that band to the window
-  (`Band Expand` lab key). Log line: the engine's 16:9 band ... is widened. Two wrong icon
-  crops can look right when two errors cancel - the Stretched HUD looked round under DX12 for
-  exactly that reason; read the whole picture, not one icon.
+- **The renderer squeezes any non-16:9 window's picture into a centred 16:9 band** (AR-015
+  in the private letterbox register), on D3D12 and D3D11 alike: its last offscreen pass uses
+  that band as its viewport, letterbox at 4:3 and pillarbox at 21:9, scene and HUD together,
+  so everything comes out squeezed with uncleared margins. The fit hooks on both backends
+  widen that band to the window (`Band Expand` lab key). Log line: the engine's 16:9 band ...
+  is widened. Two wrong icon crops can look right when two errors cancel - the Stretched HUD
+  looked round under DX12 for exactly that reason - and a masked menu hides the band entirely,
+  which is how D3D11 passed for a day. Read the whole picture, in gameplay, not one icon.
 - **Under DX12 the engine's composition targets are chain-sized while its viewports are
   window-sized** (AR-015, second part): with the override on, the picture landed 1:1 in the
   top-left of the chain and the back-buffer blit copied it as is. The D3D12 fit therefore
