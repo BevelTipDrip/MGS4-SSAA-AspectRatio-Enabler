@@ -8,6 +8,17 @@ ultrawide (21:9, 32:9) and 4:3 displays instead of being stretched to fit.
 It comes as an `.asi` that patches the game in memory as it starts, plus a small settings tool.
 No game files are modified.
 
+## Known issues
+
+Things that still take the window's shape on a 21:9 or 4:3 display. All of them are on the list;
+none of them affect 16:9.
+
+1. The in-game options menu, the one with the Nomad interior behind it, has the same scaling
+   problem the codec calls had and needs the same kind of fix.
+2. The 3D renders of items, weapons and the camo screen are not corrected yet.
+3. The map render is not corrected yet.
+4. Subtitles, in gameplay and in cutscenes, are stretched.
+
 ## The HUD at three aspect ratios
 
 The game draws its entire interface in a 16:9 space and stretches that to whatever the window
