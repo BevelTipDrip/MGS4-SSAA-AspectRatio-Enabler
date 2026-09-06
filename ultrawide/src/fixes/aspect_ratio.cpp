@@ -183,12 +183,56 @@ namespace AspectRatio
 #endif
         const uint8_t result = UiLayoutConverter_hook.stdcall<uint8_t>(object, x, y, width, height);
 
-        // Only the full-canvas call is understood well enough to adjust. Nothing else has
-        // ever been observed (86 of 86 calls in a full boot-to-gameplay flow), but if a
-        // partial-canvas call exists somewhere, passing it through unmodified degrades to
-        // the game's own behaviour rather than to a guess.
-        if (!object || x != 0 || y != 0 || width != 1280 || height != 720)
+        if (!object)
         {
+            return result;
+        }
+
+        // Partial-canvas calls (AR-018, 2026-09-06). The 86-of-86 census only covered gameplay:
+        // the system menus - difficulty select, the load list, options - lay their panels out
+        // with sub-rects of the canvas, e.g. (100,87 1180x532) for the difficulty screen and a
+        // sliding (80,0 Nx720) series for the list, all from la2 0060288E. The game maps such
+        // a rect with two independent scales, renderW/1280 across and renderH/720 down:
+        // physical (300,198 3540x1214) for that first one at 3840x1644 - the whole width of a
+        // 21:9 surface, which is exactly the stretch. The full-canvas fix above widens the
+        // logical range instead; a sub-rect keeps its logical range and gets its physical
+        // rect placed where the same rect lands under the widened full mapping: one uniform
+        // scale (the smaller of the two) and the same logical offset (extraX or extraY).
+        if (x != 0 || y != 0 || width != 1280 || height != 720)
+        {
+            if (width <= 0 || height <= 0) { return result; }
+            int32_t phys[4] {};
+            std::memcpy(phys, reinterpret_cast<const void*>(object + 0x200), sizeof(phys));
+            if (phys[2] <= 0 || phys[3] <= 0) { return result; }
+            const double scaleX = static_cast<double>(phys[2]) / width;     // renderW / 1280
+            const double scaleY = static_cast<double>(phys[3]) / height;    // renderH / 720
+            if (std::fabs(scaleX - scaleY) < 1e-3) { return result; }        // a 16:9 surface: nothing to do
+            const double scale = (std::min)(scaleX, scaleY);
+            double offsetX = 0.0, offsetY = 0.0;                              // logical units, as extraX / extraY above
+            if (scaleX > scaleY) { offsetX = (1280.0 * scaleX / scale - 1280.0) / 2.0; }
+            else { offsetY = (720.0 * scaleY / scale - 720.0) / 2.0; }
+            const int32_t fixed[4] {
+                static_cast<int32_t>(std::lround((x + offsetX) * scale)),
+                static_cast<int32_t>(std::lround((y + offsetY) * scale)),
+                static_cast<int32_t>(std::lround(width * scale)),
+                static_cast<int32_t>(std::lround(height * scale)) };
+            std::memcpy(reinterpret_cast<void*>(object + 0x200), fixed, sizeof(fixed));
+#if MGS4E_LAB_BUILD
+            {
+                static std::mutex mutex;
+                static std::vector<uint64_t> seen;
+                uint32_t strcode = 0;
+                std::memcpy(&strcode, reinterpret_cast<const void*>(object + 0x1C), sizeof(strcode));
+                const uint64_t key = (static_cast<uint64_t>(strcode) << 32) | (static_cast<uint64_t>(static_cast<uint16_t>(width)) << 16) | static_cast<uint16_t>(height);
+                std::lock_guard lock(mutex);
+                if (seen.size() < 40 && std::find(seen.begin(), seen.end(), key) == seen.end())
+                {
+                    seen.push_back(key);
+                    spdlog::info("MGS4: UI Aspect: sub-canvas ({},{} {}x{}) la2 {:08X} physical ({},{} {}x{}) -> ({},{} {}x{})",
+                        x, y, width, height, strcode, phys[0], phys[1], phys[2], phys[3], fixed[0], fixed[1], fixed[2], fixed[3]);
+                }
+            }
+#endif
             return result;
         }
 

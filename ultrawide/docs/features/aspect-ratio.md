@@ -758,3 +758,26 @@ presents back from 99/s to 116/s, average frame 8.7 ms against 8.8 ms at 16:9, a
 menu second (30,000 reads) costs 6 ms. User confirmed in play. The 50 ms+ hitches that remain
 appear identically at 16:9 with our hooks idle; they are the game's own. A slot-learning fast
 path for the identity was tried and dropped: unnecessary at 0.25 us a walk, and more to go wrong.
+
+## AR-018: the system menus stretch over the full window (2026-09-06)
+
+User report, with a 1920x823 capture: the difficulty select is stretched across the whole
+window while the main list beside it is not; the load list and the options screen do the
+same. Cause: the layout converter hook only rewrote the full-canvas call `(0,0 1280x720)` -
+the 86-of-86 census behind that gate was a gameplay flow. The system menus lay their panels
+out with sub-rects of the canvas, from la2 `0060288E`: `(100,87 1180x532)` for the difficulty
+screen, and a sliding `(80,0 Nx720)` series (838, 635, 482, ... 25 wide) for the list's
+animation. The game maps a sub-rect with two independent scales, renderW/1280 across and
+renderH/720 down - `(100,87 1180x532)` became physical `(300,198 3540x1214)` on a 3840x1644
+surface, the whole width - which is the stretch. (Lab log: `UI Aspect: other canvas ...`.)
+
+Fix, in `ConvertLayout`: a sub-rect keeps its logical range and has its physical rect
+(`+0x200..0x20C`) rewritten to where the same rect lands under the widened full mapping - one
+uniform scale, the smaller of the two the game used, and the same logical offset the
+full-canvas path adds (`extraX` or `extraY`, derived here from the two scales). The
+difficulty rect at 1920x823 becomes `(688,199 2693x1214)`; the list's `(80,0 838x720)` becomes
+`(641,0 1913x1644)`. A 16:9 surface has equal scales and is left alone. Verified at native
+1920x823: the difficulty screen sits in the 16:9 area with the MENU/DIFFICULTY side bars
+visible again and the text at 16:9 proportions. The options screen was not captured (the
+menu walk's keys ran into NEW GAME); it comes from the same la2 and the same call shape, so
+it is expected to follow, pending a capture. User's read pending at the time of writing.
