@@ -443,17 +443,19 @@ Fix (`PatchCodecPortrait`, called from the projection setter hook): while a scre
 (`ScreenLive()`), a matrix whose |m11/m00| is the window's aspect x 1.0171 within 0.5 % has m11
 replaced by copysign(|m00| x 16/9 x 1.0171), i.e. its 16:9 value; the render target keeps the
 window's shape, so the frame is stretched sideways there and the pane's squeeze undoes it. Each
-sighting stamps `g_CodecCallTick`; `CodecCallLive()` (150 ms) takes the screen term out of the
-band gate, so the call is unmasked while the codec select screen and the pause menu keep their
-bands. `CameraHooksWanted()` now includes `bFixUiAspect` so the setter hook is present without
-any masking. Lab key `Codec Portrait Fix` (`bCodecPortraitFix`, on in Release). Log line once:
-`codec portrait camera m00=... held at 16:9: m11=...; the bands stand down for the call.` The
-transition also carries an m00 = 3 camera with the same signature (the codec zoom-in); it gets
-the same treatment, which is what it needs.
+sighting stamps `g_CodecCallTick` (`CodecCallLive()`, 150 ms); a first version took the screen
+term out of the band gate with it, so the call ran unmasked, and the user's read of that was
+that the bands vanishing at the moment the call connects is a visible jump - the gate is back
+to `ScreenLive()` alone and the bands stay up through the call like the rest of the codec.
+`CameraHooksWanted()` now includes `bFixUiAspect` so the setter hook is present without any
+masking. Lab key `Codec Portrait Fix` (`bCodecPortraitFix`, on in Release). Log line once:
+`codec portrait camera m00=... held at 16:9: m11=...`. The transition also carries an m00 = 3
+camera with the same signature (the codec zoom-in); it gets the same treatment, which is what
+it needs.
 
 Verified on DX11: 21:9 3840x1620 and 4:3 2880x2160, Otacon call from the Middle East stage -
-portrait framed as at 16:9, no bands, world visible past the codec frame; the 16:9 window is
-untouched by construction. User's read pending at the time of writing. Not yet run at the
+portrait framed as at 16:9 inside the masked codec; the 16:9 window is untouched by
+construction. User's read pending at the time of writing. Not yet run at the
 reporter's exact shape (a native 21:9 desktop, window = chain, where the AR-015 band widening
 also fires); the two fixes act on different passes, but that configuration should be captured
 once the desktop can be set to 2560x1080 again.

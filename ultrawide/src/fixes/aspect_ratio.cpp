@@ -3002,8 +3002,9 @@ namespace AspectRatio
     // The signature is the projection itself: while a screen is live (codec identities in
     // the pool), a matrix whose |m11/m00| is the window's aspect x 1.0171 within 0.5 % is
     // the portrait camera. The gameplay camera behind the pause menu has |m11/m00| equal to
-    // the aspect itself and is left alone. A sighting also marks the call as live for the
-    // band gate: the user wants no masking over codec calls.
+    // the aspect itself and is left alone. A sighting also stamps CodecCallLive(); the band
+    // gate does not use it (the bands stay up through the call, the user's call after seeing
+    // them drop at the connect), it is there for the lab.
     std::atomic<ULONGLONG> g_CodecCallTick { 0 };
     std::atomic<int> g_CodecPortraitReported { 0 };
 
@@ -3030,7 +3031,7 @@ namespace AspectRatio
         g_CodecCallTick.store(GetTickCount64());
         if (g_CodecPortraitReported.fetch_add(1) == 0)
         {
-            spdlog::info("MGS4: letterbox: codec portrait camera m00={:.5f} m11={:.5f} (window aspect {:.4f}) held at 16:9: m11={:.5f}; the bands stand down for the call.",
+            spdlog::info("MGS4: letterbox: codec portrait camera m00={:.5f} m11={:.5f} (window aspect {:.4f}) held at 16:9: m11={:.5f}.",
                 matrix[0], matrix[5], aspect, patched[5]);
         }
         return true;
@@ -4203,8 +4204,10 @@ namespace AspectRatio
                 // lands ~0.6 s after the key, and the camera was back for ~7 presents
                 // before the grace began (split_a, 2026-09-04) - a visible blink.
                 const bool plateUp = static_cast<BootStage>(g_BootStage.load(std::memory_order_relaxed)) == BootStage::PlateUp;
-                // A codec call is a 16:9 picture of its own (AR-016) and stays unmasked.
-                return (bMenuMasking && (boot || (ScreenLive() && !CodecCallLive())))
+                // A codec call keeps the bands like the rest of the codec: dropping them at
+                // the moment the call connects was a visible jump (user, 2026-09-06).
+                // CodecCallLive() stays available for the lab.
+                return (bMenuMasking && (boot || ScreenLive()))
                     || (bCutsceneMasking && CutsceneCameraLive() && !grace && !plateUp);
             }
         }
