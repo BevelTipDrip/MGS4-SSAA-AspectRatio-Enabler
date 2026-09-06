@@ -188,6 +188,7 @@ namespace mgs4e::config
             Read(ini, Graphics, "Stage Automation Exit After Run", StageAutomation::bExitAfterRun);
 
             Read(ini, Graphics, "Log Viewports", RP::bLogViewports);
+            Read(ini, Graphics, "Band Expand", RP::bBandExpand);
             Read(ini, Graphics, "Log UI Layout", RP::bLogUiLayout);
 
             // The shipping "Ultrawide HUD" choice first, so a lab file written like a user file

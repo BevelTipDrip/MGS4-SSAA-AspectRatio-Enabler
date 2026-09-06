@@ -211,4 +211,8 @@ namespace RenderPipeline
     // with the mgs4.exe call sites that requested it, and watches the render size
     // globals for changes. Off by default; only useful when investigating the renderer.
     MGS4E_LAB_SWITCH(bool, bLogRenderTargetAllocations, false);
+
+    // Widen the D3D12 renderer's centred 16:9 band to the whole window in a window taller
+    // than 16:9 (AR-015). On in Release; the lab can turn it off for A/B boots.
+    MGS4E_LAB_SWITCH(bool, bBandExpand, true);
 }

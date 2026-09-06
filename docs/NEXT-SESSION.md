@@ -149,6 +149,19 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
+- **The D3D12 renderer squeezes a 4:3 window's picture into a 16:9 band** (AR-015 in the
+  private letterbox register): its last offscreen pass uses the window's centred 16:9 band as
+  its viewport, scene and HUD together, so everything comes out squeezed with uncleared bars;
+  D3D11 paints the same pass over the whole window. The fit hooks widen that band to the window
+  (`Band Expand` lab key). Log line: the engine's 16:9 band ... is widened. Two wrong icon
+  crops can look right when two errors cancel - the Stretched HUD looked round under DX12 for
+  exactly that reason; read the whole picture, not one icon.
+- **Under DX12 the engine's composition targets are chain-sized while its viewports are
+  window-sized** (AR-015, second part): with the override on, the picture landed 1:1 in the
+  top-left of the chain and the back-buffer blit copied it as is. The D3D12 fit therefore
+  applies to viewports on chain-sized offscreen targets too (RTV sizes tracked from
+  CreateRenderTargetView), and the chain outside the fitted rect is cleared every present.
+  D3D11 sizes those targets by the window, so its back-buffer fit alone was right.
 - **A perf census lives in the Lab build.** With Debug Logging on, a Lab ASI logs one MGS4: perf:
   line a second: presents, frame ms avg/p50/p99/max, and the time spent in each of our per-frame
   hooks (pool append, upload probe, layout converter, bands). Compare two sessions of the same
