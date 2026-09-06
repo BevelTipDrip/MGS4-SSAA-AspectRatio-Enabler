@@ -139,6 +139,11 @@ rediscovered the hard way:
   Steam Cloud synced and must never be edited by us. Engine-side hooks are API-agnostic; the
   masking bands and the anisotropy sampler hook have a D3D11 path and a D3D12 path each
   (AR-012 in the private letterbox register). Verify D3D11 by the log line D3D11 device created.
+- **The engine picks the largest display mode and, under DX12, switches the display to it.**
+  Start-up walks EnumDisplaySettingsW over every mode and keeps the biggest; that is its window
+  size and the fullscreen mode. With the window override on, InstallDisplayModeClamp
+  (render_pipeline.cpp) answers the walk with the current mode only, so the game stays on the
+  desktop's mode. Log line: display mode list is answered with the current mode only.
 - **The engine never scales its picture.** Fullscreen is a borderless desktop-size window and
   the final blit is windowSize pixels at the origin (D3D11 census: bind back buffer, viewport
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit

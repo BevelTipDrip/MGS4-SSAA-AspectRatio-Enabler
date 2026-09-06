@@ -2401,6 +2401,70 @@ namespace
         return result;
     }
 
+    // The game's fullscreen resolution is the largest display mode the monitor lists: at
+    // start-up it walks EnumDisplaySettingsW over every mode and keeps the biggest, uses that
+    // as its window size and, at the fullscreen step, switches the display to it (a real mode
+    // change - measured 2026-09-05 on a 1600x1200 output that was switched to 1920x1080, its
+    // largest listed mode, with the picture then squeezed into a 16:9 mode on a 4:3 screen).
+    // With the Window Aspect Ratio override on, the walk is answered with the current mode
+    // only, so the game's "largest" is the desktop's mode, the window is the desktop, and the
+    // mode switch is a no-op. The fit in the ultrawide module then places the chosen picture
+    // in that window. Queries for the current or registry mode (negative indices) pass through.
+    SafetyHookInline EnumDisplaySettingsW_hook {};
+    SafetyHookInline EnumDisplaySettingsExW_hook {};
+    std::atomic<int> g_ModeWalkReported { 0 };
+
+    BOOL WINAPI Hooked_EnumDisplaySettingsW(LPCWSTR device, DWORD mode, DEVMODEW* dm)
+    {
+        if (static_cast<int>(mode) >= 0 && RenderPipeline::bOverrideWindowSize)
+        {
+            if (mode != 0)
+            {
+                return FALSE;
+            }
+            const BOOL r = EnumDisplaySettingsW_hook.stdcall<BOOL>(device, ENUM_CURRENT_SETTINGS, dm);
+            if (r && dm && g_ModeWalkReported.fetch_add(1) == 0)
+            {
+                spdlog::info("MGS4: Window Size: the display mode list is answered with the current mode only ({}x{}), so the game keeps the desktop's mode.",
+                    dm->dmPelsWidth, dm->dmPelsHeight);
+            }
+            return r;
+        }
+        return EnumDisplaySettingsW_hook.stdcall<BOOL>(device, mode, dm);
+    }
+
+    BOOL WINAPI Hooked_EnumDisplaySettingsExW(LPCWSTR device, DWORD mode, DEVMODEW* dm, DWORD flags)
+    {
+        if (static_cast<int>(mode) >= 0 && RenderPipeline::bOverrideWindowSize)
+        {
+            if (mode != 0)
+            {
+                return FALSE;
+            }
+            return EnumDisplaySettingsExW_hook.stdcall<BOOL>(device, ENUM_CURRENT_SETTINGS, dm, flags);
+        }
+        return EnumDisplaySettingsExW_hook.stdcall<BOOL>(device, mode, dm, flags);
+    }
+
+    void InstallDisplayModeClamp()
+    {
+        const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        if (!user32)
+        {
+            return;
+        }
+        if (void* fn = reinterpret_cast<void*>(GetProcAddress(user32, "EnumDisplaySettingsW")))
+        {
+            EnumDisplaySettingsW_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_EnumDisplaySettingsW));
+        }
+        if (void* fn = reinterpret_cast<void*>(GetProcAddress(user32, "EnumDisplaySettingsExW")))
+        {
+            EnumDisplaySettingsExW_hook = safetyhook::create_inline(fn, reinterpret_cast<void*>(Hooked_EnumDisplaySettingsExW));
+        }
+        spdlog::info("MGS4: Window Size: display mode clamp {} (EnumDisplaySettingsW {}, ExW {}).",
+            EnumDisplaySettingsW_hook ? "installed" : "FAILED", EnumDisplaySettingsW_hook ? "ok" : "no", EnumDisplaySettingsExW_hook ? "ok" : "no");
+    }
+
     void InstallRenderTargetLogging()
     {
         // Loading d3d12.dll early is harmless - when the game later resolves it, it
@@ -6040,6 +6104,13 @@ namespace
         // points we do, so while capturing we skip our own D3D12 hooks and leave the API
         // to PIX - but the resolution and shadow overrides below still apply, since the
         // whole point of the capture is to see the bug they produce.
+        // Before the engine walks the display modes (that happens after our init, at its
+        // config parse), so the walk already sees the clamp.
+        if (bOverrideWindowSize)
+        {
+            InstallDisplayModeClamp();
+        }
+
         bool bPixActive = false;
         if (bEnablePixCapture && LoadPixGpuCapturer())
         {
