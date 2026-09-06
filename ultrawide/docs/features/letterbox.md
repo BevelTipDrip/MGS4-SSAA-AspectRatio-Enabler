@@ -464,7 +464,9 @@ followed the same day: native 1920x823 (the one 21:9 mode the capture output wou
 window = chain = display, band `(228,0 1463x823)` widened on the same frames - the call is
 framed as at 16:9, the pillar bands are pure black in the pixel data (the codec's vignette
 makes them look lighter in a capture). The opening video at that size: `movie rect (0,0
-3840x1644) -> (459,0 2922x1644)`, pillarboxed, proportions natural.
+3840x1644) -> (459,0 2922x1644)`, pillarboxed, proportions natural. DX12 at the same size,
+after the user switched the API: codec call, video and difficulty screen all matched the
+DX11 captures (the three hooks are engine-side; the band widening fired on the same frames).
 
 ## AR-017: pre-rendered videos stretched to the window (2026-09-06)
 

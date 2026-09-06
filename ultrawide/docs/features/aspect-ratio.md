@@ -780,4 +780,6 @@ difficulty rect at 1920x823 becomes `(688,199 2693x1214)`; the list's `(80,0 838
 1920x823: the difficulty screen sits in the 16:9 area with the MENU/DIFFICULTY side bars
 visible again and the text at 16:9 proportions. The options screen was not captured (the
 menu walk's keys ran into NEW GAME); it comes from the same la2 and the same call shape, so
-it is expected to follow, pending a capture. User's read pending at the time of writing.
+it is expected to follow, pending a capture. User's read of the 1920x823 difficulty screen:
+"This looks good." Also verified on DX12 at the same size (the hook is engine-side; the
+capture matched the DX11 one).
