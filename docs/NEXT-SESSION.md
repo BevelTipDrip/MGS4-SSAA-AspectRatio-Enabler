@@ -160,7 +160,8 @@ rediscovered the hard way:
 - **Codec calls render the caller with a second camera whose projection follows the window's
   aspect** (AR-016 in the private letterbox register, issue #1): m00 fixed, m11 = window aspect
   x 1.0171, squeezed into a 16:9 pane. The projection setter hook holds m11 at its 16:9 value
-  while a screen is live, and the sighting takes the masking bands down for the call. Lab key
+  while a screen is live; the masking bands stay up through the call (dropping them at the
+  connect was a visible jump, user's read). Lab key
   `Codec Portrait Fix`. To reach a call in the harness: stage boot, Tab, Enter (CODEC is the
   first pause entry), then a *left click* for SEND - synthetic Enter is ignored on that screen.
   Never press Up/Down there (manual tuning); Left/Right pick other contacts.
