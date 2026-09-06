@@ -314,3 +314,15 @@ change), not the desktop (1440x1080 at the time). The window itself is sized fro
 mode (EnumDisplaySettingsW(-1) -> 1440x1080 from mgs4+738C2C / 738138 / 738A1B, and
 GetSystemMetrics 0/1 from the DXGI runtime). So stock play only lines up when the desktop runs
 at the panel's largest mode. The fix stands as is: chain sized to the window, picture fitted.
+
+AR-014, third part (2026-09-05, capture card as a 1600x1200 primary display, DX12): the largest
+mode is not just the chain size - under DX12 the fullscreen step **switches the display to it**
+(the 1600x1200 output went to 1920x1080 while the game ran and back when it closed; the window
+was 1920x1080 and the fit landed inside a 16:9 mode on a 4:3 screen). Fix, public tree
+(`render_pipeline.cpp`, `InstallDisplayModeClamp`, only with the window override on): the
+mode walk (`EnumDisplaySettingsW` with non-negative indices) is answered with the current mode
+for index 0 and nothing after it, so the game's "largest" is the desktop's mode, its window
+is the desktop, and the switch is a no-op. Verified: display stayed 1600x1200, window
+1600x1200, chain 1600x1200, picture 1400x1050 scaled x1.1429 to fill it. This is most likely
+the tester's case: a 4:3 panel whose driver lists a larger 16:9 mode gets switched to it, and
+the monitor letterboxes the result - bars around a squeezed picture.
