@@ -381,8 +381,10 @@ namespace AspectRatio
         static std::atomic<int> reported { 0 };
         if (reported.fetch_add(1) < 2)
         {
-            spdlog::info("MGS4: UI Aspect: {}x{} output, logical range {}..{} x {}..{}.",
-                outputWidth, outputHeight, -extraX, 1280 + extraX, -extraY, 720 + extraY);
+            int32_t phys[4] {};
+            std::memcpy(phys, reinterpret_cast<const void*>(object + 0x200), sizeof(phys));
+            spdlog::info("MGS4: UI Aspect: {}x{} output, physical {} {} {} {}, logical range {}..{} x {}..{}.",
+                outputWidth, outputHeight, phys[0], phys[1], phys[2], phys[3], -extraX, 1280 + extraX, -extraY, 720 + extraY);
         }
 
         return result;
@@ -3073,6 +3075,7 @@ namespace AspectRatio
         float ox = 0.0f, oy = 0.0f;
         UINT w = 0, h = 0;     // the fitted rect
         int ww = 0, wh = 0;    // the window size it was computed for
+        UINT cw = 0, ch = 0;   // the chain size it was computed for
     };
     FitRect g_Fit;   // recomputed at each present; read on the render thread
 
@@ -3081,6 +3084,8 @@ namespace AspectRatio
         FitRect f;
         f.w = chainW;
         f.h = chainH;
+        f.cw = chainW;
+        f.ch = chainH;
         f.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
         f.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
         if (f.ww <= 0 || f.wh <= 0 || chainW == 0 || chainH == 0
@@ -3229,6 +3234,23 @@ namespace AspectRatio
         return false;
     }
 
+    // Every RTV handle's resource size (AR-015, second part). Under D3D12 the engine sizes
+    // its composition targets by the swap chain and its viewports by the window, so with
+    // the override on it draws a window-sized picture into the top-left of a chain-sized
+    // target and the final blit copies that 1:1 (census 2026-09-05: the 16:9-band pass on a
+    // 1600x1200 target with a 1400x1050 window, the back-buffer blit at (0,0 1600x1200)).
+    // The fit therefore applies to viewports set on chain-sized targets as well as on the
+    // back buffer; the blit's own chain-sized viewport is left alone by FitViewport.
+    std::unordered_map<SIZE_T, std::pair<UINT, UINT>> g_RtvSizes12;   // under g_Fit12Mutex
+#if MGS4E_LAB_BUILD
+    std::string RtvSize12(SIZE_T handle)
+    {
+        std::lock_guard lock(g_Fit12Mutex);
+        const auto it = g_RtvSizes12.find(handle);
+        return it == g_RtvSizes12.end() ? "?" : std::format("{}x{}", it->second.first, it->second.second);
+    }
+#endif
+
     void STDMETHODCALLTYPE Fit12_CreateRenderTargetView(ID3D12Device* self, ID3D12Resource* res,
         const D3D12_RENDER_TARGET_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
     {
@@ -3236,6 +3258,11 @@ namespace AspectRatio
         std::lock_guard lock(g_Fit12Mutex);
         std::erase(g_BackBufferRtvs12, dest.ptr);
         if (IsSwapChainBuffer12(res)) { g_BackBufferRtvs12.push_back(dest.ptr); }
+        if (res)
+        {
+            const D3D12_RESOURCE_DESC rd = res->GetDesc();
+            g_RtvSizes12[dest.ptr] = { static_cast<UINT>(rd.Width), static_cast<UINT>(rd.Height) };
+        }
     }
 
     void STDMETHODCALLTYPE Fit12_OMSetRenderTargets(ID3D12GraphicsCommandList* self, UINT count,
@@ -3243,8 +3270,13 @@ namespace AspectRatio
     {
         {
             std::lock_guard lock(g_Fit12Mutex);
-            const bool bound = count > 0 && handles
+            bool bound = count > 0 && handles
                 && std::find(g_BackBufferRtvs12.begin(), g_BackBufferRtvs12.end(), handles[0].ptr) != g_BackBufferRtvs12.end();
+            if (!bound && count > 0 && handles && g_Fit.active)
+            {
+                const auto it = g_RtvSizes12.find(handles[0].ptr);
+                bound = it != g_RtvSizes12.end() && it->second.first == g_Fit.cw && it->second.second == g_Fit.ch;
+            }
             g_BoundLists12[self] = bound;
         }
         Fit12_OMSetRenderTargets_hook.stdcall<void>(self, count, handles, single, depth);
@@ -3257,28 +3289,124 @@ namespace AspectRatio
         return it != g_BoundLists12.end() && it->second;
     }
 
+    // ---- AR-015: the D3D12 path's 16:9 band ----------------------------------------------
+    //
+    // In a window taller than 16:9 (4:3, say) the D3D12 renderer draws its whole picture -
+    // the resolved scene and the interface with it - into the centred 16:9 band of a
+    // window-sized target, and the final blit shows that target as is. The scene is
+    // rendered with the window's projection, so the picture comes out squeezed vertically
+    // and the rest of the target is never cleared (garbage in the corners). Measured
+    // 2026-09-05 on a 1600x1200 window: viewport (0,150 1600x900), scissor
+    // (0,150)-(1600,1050), on an offscreen target with a depth buffer, last pass of the
+    // frame; the D3D11 renderer paints the same pass over the full window and its picture
+    // is right. The values arrive through the renderer's generic submit (the caller walk
+    // ends in the frame submit, not at a computation), so the correction is applied where
+    // they are used: a viewport or scissor that is exactly that band of the window is
+    // widened to the whole window. Nothing else matches - at 16:9 and wider there is no
+    // band to match, and the gate is the window's aspect.
+    struct WindowBand
+    {
+        bool valid = false;
+        int ww = 0, wh = 0;
+        float bandH = 0.0f, bandY = 0.0f;
+    };
+
+    WindowBand CurrentWindowBand()
+    {
+        WindowBand b;
+        b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
+        b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
+        if (b.ww <= 0 || b.wh <= 0 || static_cast<int64_t>(b.ww) * 9 >= static_cast<int64_t>(b.wh) * 16) { return b; }
+        b.bandH = static_cast<float>(b.ww) * 9.0f / 16.0f;
+        b.bandY = (static_cast<float>(b.wh) - b.bandH) / 2.0f;
+        b.valid = true;
+        return b;
+    }
+
+    bool IsWindowBand(float x, float y, float w, float h)
+    {
+        const WindowBand b = CurrentWindowBand();
+        return b.valid && std::fabs(x) <= 1.0f && std::fabs(w - static_cast<float>(b.ww)) <= 1.0f
+            && std::fabs(h - b.bandH) <= 1.0f && std::fabs(y - b.bandY) <= 1.0f;
+    }
+
+    bool IsWindowBandScissor(const D3D12_RECT& r)
+    {
+        const WindowBand b = CurrentWindowBand();
+        return b.valid && std::abs(r.left) <= 1 && std::abs(r.right - b.ww) <= 1
+            && std::fabs(static_cast<float>(r.top) - b.bandY) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.bandY + b.bandH)) <= 1.0f;
+    }
+
+    std::atomic<int> g_BandExpandReported { 0 };
+
+    void ReportBandExpand(float x, float y, float w, float h, int ww, int wh)
+    {
+        if (g_BandExpandReported.fetch_add(1) == 0)
+        {
+            spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) is widened to the {}x{} window.", x, y, w, h, ww, wh);
+        }
+    }
+
     void STDMETHODCALLTYPE Fit12_RSSetViewports(ID3D12GraphicsCommandList* self, UINT count, const D3D12_VIEWPORT* viewports)
     {
-        if (g_Fit.active && count > 0 && count <= 16 && viewports && ListBound12(self))
+        if (count > 0 && count <= 16 && viewports)
         {
             D3D12_VIEWPORT fitted[16];
             std::memcpy(fitted, viewports, sizeof(D3D12_VIEWPORT) * count);
-            for (UINT i = 0; i < count; i++) { FitViewport(fitted[i]); }
-            Fit12_RSSetViewports_hook.stdcall<void>(self, count, fitted);
-            return;
+            bool changed = false;
+            if (RenderPipeline::bBandExpand)
+            {
+                for (UINT i = 0; i < count; i++)
+                {
+                    if (!IsWindowBand(fitted[i].TopLeftX, fitted[i].TopLeftY, fitted[i].Width, fitted[i].Height)) { continue; }
+                    const WindowBand b = CurrentWindowBand();
+                    ReportBandExpand(fitted[i].TopLeftX, fitted[i].TopLeftY, fitted[i].Width, fitted[i].Height, b.ww, b.wh);
+                    fitted[i].TopLeftX = 0.0f;
+                    fitted[i].TopLeftY = 0.0f;
+                    fitted[i].Width = static_cast<float>(b.ww);
+                    fitted[i].Height = static_cast<float>(b.wh);
+                    changed = true;
+                }
+            }
+            if (g_Fit.active && ListBound12(self))
+            {
+                for (UINT i = 0; i < count; i++) { changed = FitViewport(fitted[i]) || changed; }
+            }
+            if (changed)
+            {
+                Fit12_RSSetViewports_hook.stdcall<void>(self, count, fitted);
+                return;
+            }
         }
         Fit12_RSSetViewports_hook.stdcall<void>(self, count, viewports);
     }
 
     void STDMETHODCALLTYPE Fit12_RSSetScissorRects(ID3D12GraphicsCommandList* self, UINT count, const D3D12_RECT* rects)
     {
-        if (g_Fit.active && count > 0 && count <= 16 && rects && ListBound12(self))
+        if (count > 0 && count <= 16 && rects)
         {
             D3D12_RECT fitted[16];
             std::memcpy(fitted, rects, sizeof(D3D12_RECT) * count);
-            for (UINT i = 0; i < count; i++) { FitScissor(fitted[i]); }
-            Fit12_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
-            return;
+            bool changed = false;
+            if (RenderPipeline::bBandExpand)
+            {
+                for (UINT i = 0; i < count; i++)
+                {
+                    if (!IsWindowBandScissor(fitted[i])) { continue; }
+                    const WindowBand b = CurrentWindowBand();
+                    fitted[i] = D3D12_RECT { 0, 0, b.ww, b.wh };
+                    changed = true;
+                }
+            }
+            if (g_Fit.active && ListBound12(self))
+            {
+                for (UINT i = 0; i < count; i++) { changed = FitScissor(fitted[i]) || changed; }
+            }
+            if (changed)
+            {
+                Fit12_RSSetScissorRects_hook.stdcall<void>(self, count, fitted);
+                return;
+            }
         }
         Fit12_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
     }
@@ -3696,7 +3824,79 @@ namespace AspectRatio
             spdlog::info("MGS4: display census: EnumAdapters1 {}.", EnumAdapters1_hook ? "ok" : "FAILED");
         }
     }
+
+    SafetyHookInline C12_RSSetViewports_hook {};
+    SafetyHookInline C12_RSSetScissorRects_hook {};
+    SafetyHookInline C12_OMSetRenderTargets_hook {};
+    std::atomic<int> g_C12Budget { 600 };
+    bool C12On() { const int fr = g_D3D11Frame.load(std::memory_order_relaxed); return fr >= 150 && fr <= 151 && g_C12Budget.load(std::memory_order_relaxed) > 0 && g_C12Budget.fetch_sub(1) > 0; }
+    void STDMETHODCALLTYPE C12_OMSetRenderTargets(ID3D12GraphicsCommandList* self, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* handles, BOOL single, const D3D12_CPU_DESCRIPTOR_HANDLE* depth)
+    {
+        if (C12On())
+        {
+            bool back = false;
+            { std::lock_guard lock(g_Fit12Mutex); back = count > 0 && handles && std::find(g_BackBufferRtvs12.begin(), g_BackBufferRtvs12.end(), handles[0].ptr) != g_BackBufferRtvs12.end(); }
+            spdlog::info("MGS4: d3d12 census: f{} list {:X} OMSetRenderTargets count={} rtv0={:X} ({}){} depth={}", g_D3D11Frame.load(), reinterpret_cast<uintptr_t>(self), count,
+                (count > 0 && handles) ? handles[0].ptr : 0, (count > 0 && handles) ? RtvSize12(handles[0].ptr) : "-", back ? " BACKBUFFER" : "", depth ? "yes" : "no");
+        }
+        C12_OMSetRenderTargets_hook.stdcall<void>(self, count, handles, single, depth);
+    }
+#if MGS4E_LAB_BUILD
+    // Who sets the band? A few return addresses up from the RSSetViewports call, logged once.
+    std::atomic<int> g_BandWalkBudget { 2 };
+    void LogBandCallers()
+    {
+        if (g_BandWalkBudget.load(std::memory_order_relaxed) <= 0 || g_BandWalkBudget.fetch_sub(1) <= 0) { return; }
+        CONTEXT c {};
+        RtlCaptureContext(&c);
+        std::string walk;
+        for (int i = 0; i < 12; i++)
+        {
+            DWORD64 imageBase = 0;
+            auto* entry = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
+            if (!entry)
+            {
+                if (!mgs4e::mem::Readable(reinterpret_cast<const void*>(c.Rsp), sizeof(DWORD64))) { break; }
+                std::memcpy(&c.Rip, reinterpret_cast<const void*>(c.Rsp), sizeof(c.Rip));
+                c.Rsp += 8;
+            }
+            else
+            {
+                PVOID handlerData = nullptr;
+                DWORD64 establisher = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, entry, &c, &handlerData, &establisher, nullptr);
+            }
+            if (!c.Rip) { break; }
+            walk += (walk.empty() ? "" : " < ") + CallerTag(reinterpret_cast<void*>(c.Rip));
+        }
+        spdlog::info("MGS4: d3d12 census: band viewport callers: {}", walk);
+    }
 #endif
+
+    void STDMETHODCALLTYPE C12_RSSetViewports(ID3D12GraphicsCommandList* self, UINT count, const D3D12_VIEWPORT* vps)
+    {
+#if MGS4E_LAB_BUILD
+        if (count > 0 && vps && IsWindowBand(vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height))
+        {
+            LogBandCallers();
+        }
+#endif
+        if (C12On() && count > 0 && vps)
+        {
+            spdlog::info("MGS4: d3d12 census: f{} list {:X} RSSetViewports count={} vp0=({:.0f},{:.0f} {:.0f}x{:.0f}){}", g_D3D11Frame.load(), reinterpret_cast<uintptr_t>(self), count,
+                vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height, ListBound12(self) ? " [backbuffer bound]" : "");
+        }
+        C12_RSSetViewports_hook.stdcall<void>(self, count, vps);
+    }
+    void STDMETHODCALLTYPE C12_RSSetScissorRects(ID3D12GraphicsCommandList* self, UINT count, const D3D12_RECT* rects)
+    {
+        if (C12On() && count > 0 && rects)
+        {
+            spdlog::info("MGS4: d3d12 census: f{} list {:X} RSSetScissorRects count={} r0=({},{} {},{}){}", g_D3D11Frame.load(), reinterpret_cast<uintptr_t>(self), count,
+                rects[0].left, rects[0].top, rects[0].right, rects[0].bottom, ListBound12(self) ? " [backbuffer bound]" : "");
+        }
+        C12_RSSetScissorRects_hook.stdcall<void>(self, count, rects);
+    }
 
     void InstallDrawCensus(ID3D12GraphicsCommandList* list)
     {
@@ -3704,11 +3904,16 @@ namespace AspectRatio
         if (installed || !list) { return; }
         installed = true;
         void** vtable = *reinterpret_cast<void***>(list);
+        C12_RSSetViewports_hook = safetyhook::create_inline(vtable[21], reinterpret_cast<void*>(C12_RSSetViewports));
+        C12_RSSetScissorRects_hook = safetyhook::create_inline(vtable[22], reinterpret_cast<void*>(C12_RSSetScissorRects));
+        C12_OMSetRenderTargets_hook = safetyhook::create_inline(vtable[46], reinterpret_cast<void*>(C12_OMSetRenderTargets));
         DrawInstanced_hook = safetyhook::create_inline(vtable[kListDrawInstancedSlot], reinterpret_cast<void*>(Hooked_DrawInstancedCensus));
         DrawIndexedInstanced_hook = safetyhook::create_inline(vtable[kListDrawIndexedInstancedSlot], reinterpret_cast<void*>(Hooked_DrawIndexedInstancedCensus));
         spdlog::info("MGS4: letterbox: draw census hooks (DrawInstanced {}, DrawIndexedInstanced {}).",
             DrawInstanced_hook ? "ok" : "FAILED", DrawIndexedInstanced_hook ? "ok" : "FAILED");
     }
+
+#endif
 
     void BandWaitIdle(BandRenderer& b)
     {
@@ -3827,7 +4032,9 @@ namespace AspectRatio
         }
         b.list->Close();
         InstallFit12Lists(b.list);
-        if (mgs4e::config::LabMode()) { InstallDrawCensus(b.list); }
+#if MGS4E_LAB_BUILD
+        if (mgs4e::log::Verbose()) { InstallDrawCensus(b.list); }
+#endif
         if (FAILED(b.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void**>(&b.fence))))
         {
             spdlog::error("MGS4: letterbox: fence creation failed."); return false;
@@ -3930,22 +4137,39 @@ namespace AspectRatio
             g_Fit = fit;
         }
 
-        if (!BandsWanted()) { return; }
-
-        // The bands frame the 16:9 picture inside the fitted rect.
-        D3D12_RECT rects[2] {};
-        const UINT count = BandRects(g_Fit.w, g_Fit.h, rects);
-        for (UINT i = 0; i < count; i++)
+        // Outside the fitted rect the chain holds whatever was there - under D3D12 the
+        // engine's own uncleared margins are copied over 1:1 - so it is cleared to black
+        // every present the fit is active. The bands then frame the 16:9 picture inside
+        // the fitted rect.
+        D3D12_RECT rects[6] {};
+        UINT count = 0;
+        if (g_Fit.active)
         {
-            rects[i].left += static_cast<LONG>(g_Fit.ox);
-            rects[i].right += static_cast<LONG>(g_Fit.ox);
-            rects[i].top += static_cast<LONG>(g_Fit.oy);
-            rects[i].bottom += static_cast<LONG>(g_Fit.oy);
+            const LONG cw = static_cast<LONG>(b.width), chh = static_cast<LONG>(b.height);
+            const LONG ox = static_cast<LONG>(g_Fit.ox), oy = static_cast<LONG>(g_Fit.oy);
+            const LONG fw = static_cast<LONG>(g_Fit.w), fh = static_cast<LONG>(g_Fit.h);
+            if (oy > 0) { rects[count++] = { 0, 0, cw, oy }; }
+            if (oy + fh < chh) { rects[count++] = { 0, oy + fh, cw, chh }; }
+            if (ox > 0) { rects[count++] = { 0, 0, ox, chh }; }
+            if (ox + fw < cw) { rects[count++] = { ox + fw, 0, cw, chh }; }
         }
-        g_BandLastPainted[0] = g_Fit.w;
-        g_BandLastPainted[1] = g_Fit.h;
-        g_BandLastRects[0] = rects[0];
-        g_BandLastRects[1] = rects[1];
+        if (BandsWanted())
+        {
+            D3D12_RECT band[2] {};
+            const UINT bands = BandRects(g_Fit.w, g_Fit.h, band);
+            for (UINT i = 0; i < bands; i++)
+            {
+                band[i].left += static_cast<LONG>(g_Fit.ox);
+                band[i].right += static_cast<LONG>(g_Fit.ox);
+                band[i].top += static_cast<LONG>(g_Fit.oy);
+                band[i].bottom += static_cast<LONG>(g_Fit.oy);
+                rects[count++] = band[i];
+            }
+            g_BandLastPainted[0] = g_Fit.w;
+            g_BandLastPainted[1] = g_Fit.h;
+            g_BandLastRects[0] = band[0];
+            g_BandLastRects[1] = band[1];
+        }
         if (count == 0) { return; }
 
         if (b.device11)

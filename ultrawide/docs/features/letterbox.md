@@ -326,3 +326,64 @@ is the desktop, and the switch is a no-op. Verified: display stayed 1600x1200, w
 1600x1200, chain 1600x1200, picture 1400x1050 scaled x1.1429 to fill it. This is most likely
 the tester's case: a 4:3 panel whose driver lists a larger 16:9 mode gets switched to it, and
 the monitor letterboxes the result - bars around a squeezed picture.
+
+## AR-015: the D3D12 renderer squeezes the whole picture into a 16:9 band (2026-09-05)
+
+With the three AR-014 layers in place (1600x1200 display, window = chain = display, masking
+off) the user's read of two DX12 gameplay captures, layout fix on and off, was "the game is
+squished in both". The captures: black bands top and bottom with uncleared garbage in the
+corners, scene and HUD squeezed vertically between them. The D3D12 command-list census from
+the same boot (frames 150-151) shows the pass: the scene is rendered at 3200x2400 (4:3, 2x),
+and the last offscreen pass of the frame binds a window-sized target with a depth buffer and
+sets viewport `(0,150 1600x900)` with scissor `(0,150)-(1600,1050)` - the centred 16:9 band
+of the window - before the full-size back-buffer blit `(0,0 1600x1200)`. So the 4:3 picture,
+scene and interface together, is drawn into a 16:9 band of a 4:3 target and shown as is.
+The D3D11 renderer paints the same pass over the full window (AR-014 census) and its 4:3
+picture is right.
+
+This also explained the four earlier icon crops that had pointed at layer 1: layer 1 on gives
+round icons in the target, which the band squeezes wide by 4/3; layer 1 off (Stretched HUD)
+gives icons stretched tall by 4/3, which the band squeezes back to round - two errors
+cancelling, not a working configuration. Layer 1 is untouched by this fix; its physical
+viewport in the layout object is the render size (`physical 0 0 3200 2400` at 1600x1200),
+the logical range `0..1280 x -120..840` as designed.
+
+A caller walk from the band viewport (`band viewport callers: ... mgs4+7A5F6C < mgs4+76628F
+< mgs4+7663D7 < mgs4+7664AE < thread start`) ends in the renderer's frame submit, not at a
+computation - the rect arrives as data through the generic view path - so the correction is
+applied where the values are used. `Fit12_RSSetViewports` / `Fit12_RSSetScissorRects` now run
+on every command list: in a window taller than 16:9 (`ww*9 < wh*16`), a viewport that is
+exactly the window's centred 16:9 band (`x 0, w ww, h ww*9/16, y (wh-h)/2`, within a pixel)
+is widened to `(0,0,ww,wh)`, and the matching scissor to the whole window; the AR-014 fit
+then applies on top when the back buffer is bound. `Band Expand` (lab key, `bBandExpand`,
+on in Release) switches it off for A/B boots. Log: `fit: the engine's 16:9 band (0,150
+1600x900) is widened to the 1600x1200 window.` At 16:9 and wider nothing can match and the
+gate is the window aspect; 16:9 and 21:9 overrides on the same display logged no band line.
+
+Verified on DX12, 1600x1200, Expanded HUD: gameplay fills the window, HUD in the window's
+corners, compass ring and reticle round in the crops; with menu masking on, the main menu
+sits in the 16:9 band with the bands over the rest and round OK/Back icons. The harness's
+`in_game.ps1` recognises the 4:3 gameplay layout only with this fix (before it, the squeezed
+HUD failed the check and the boot reported "never reached gameplay" with the gameplay
+capture in `stuck.png`). User's read of the captures pending at the time of writing.
+
+AR-015, second part (same day): under DX12 with the override not equal to the display (16:9
+1600x900 and 21:9 1600x686 in a 1600x1200 chain) the picture sat 1:1 at the top-left of the
+chain and only the masking bands landed in the centred rect. Census with the 1400x1050
+override (RTV sizes added to the D3D12 census): the scene targets are window-based
+(2800x2100 at 2x), but the composition targets are **chain-sized** (1600x1200, with a depth
+buffer) while the viewports set on them are window-sized (`(0,0 1400x1050)` and the band
+`(0,132 1400x787)`), and the back-buffer blit is `(0,0 1600x1200)` - a 1:1 copy of a
+chain-sized target with the picture in its corner. D3D11 sizes those targets by the window,
+which is why the AR-014 fit on the back buffer was enough there. Fix: `Fit12_OMSetRenderTargets`
+marks a list fit-bound when its target is the back buffer *or* an offscreen target of the
+chain's size (`g_RtvSizes12`, filled by the CreateRenderTargetView hook in every build;
+`FitRect` carries the chain size), so the window-space viewports on those targets are
+fitted and the 1:1 blit carries the fitted picture across; the blit's own chain-sized
+viewport is skipped by `FitViewport` as before. `DrawBands` now clears the chain outside the
+fitted rect every present the fit is active (the engine's uncleared margins were being copied
+over), with the masking bands on top; the rect array grew to six. Verified on DX12: 4:3
+1400x1050 -> "picture scaled x1.1429 into a 1600x1200 rect at (0,0)", menu fills the screen
+with the 16:9 masking; 21:9 1600x686 -> "1600x686 rect at (0,257)", menu centred with black
+above and below and the pillar bands inside. User's read pending at the time of writing. The
+tester's DX12 4:3-on-16:9-desktop case goes through this path.
