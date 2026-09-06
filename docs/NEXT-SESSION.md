@@ -157,6 +157,13 @@ rediscovered the hard way:
   is widened. Two wrong icon crops can look right when two errors cancel - the Stretched HUD
   looked round under DX12 for exactly that reason - and a masked menu hides the band entirely,
   which is how D3D11 passed for a day. Read the whole picture, in gameplay, not one icon.
+- **Codec calls render the caller with a second camera whose projection follows the window's
+  aspect** (AR-016 in the private letterbox register, issue #1): m00 fixed, m11 = window aspect
+  x 1.0171, squeezed into a 16:9 pane. The projection setter hook holds m11 at its 16:9 value
+  while a screen is live, and the sighting takes the masking bands down for the call. Lab key
+  `Codec Portrait Fix`. To reach a call in the harness: stage boot, Tab, Enter (CODEC is the
+  first pause entry), then a *left click* for SEND - synthetic Enter is ignored on that screen.
+  Never press Up/Down there (manual tuning); Left/Right pick other contacts.
 - **Under DX12 the engine's composition targets are chain-sized while its viewports are
   window-sized** (AR-015, second part): with the override on, the picture landed 1:1 in the
   top-left of the chain and the back-buffer blit copied it as is. The D3D12 fit therefore

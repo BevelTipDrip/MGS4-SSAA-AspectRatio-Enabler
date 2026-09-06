@@ -215,4 +215,8 @@ namespace RenderPipeline
     // Widen the D3D12 renderer's centred 16:9 band to the whole window in a window taller
     // than 16:9 (AR-015). On in Release; the lab can turn it off for A/B boots.
     MGS4E_LAB_SWITCH(bool, bBandExpand, true);
+
+    // Hold the codec portrait camera at 16:9 in a non-16:9 window and leave codec calls
+    // unmasked (AR-016). On in Release; the lab can turn it off for A/B boots.
+    MGS4E_LAB_SWITCH(bool, bCodecPortraitFix, true);
 }
