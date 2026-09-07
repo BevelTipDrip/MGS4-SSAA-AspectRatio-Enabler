@@ -26,6 +26,11 @@ namespace mgs4e::tool
             "\n"
             "Leave on \"Use Game Setting\" to keep the game's own choice.";
 
+        constexpr const char* kHelp_ReplacedShadersDx12 =
+            "Applies pixel-shader replacements when the game runs on DirectX 12.\n"
+            "\n"
+            "Mods built with 3Dmigoto (FusionFix's shadow shaders, for one) ship a ReplacedShadersPS folder and swap its shaders in through a DirectX 11 hook, so on DirectX 12 they do nothing. The game's DirectX 12 shaders are a separate build of the same code, so with the map this mod ships each replacement is ported to its DirectX 12 counterpart when the game builds the pipeline for it. Nothing happens when no such folder is installed.";
+
         constexpr const char* kHelp_WindowAspectRatio =
             "Overrides the resolution the game runs its window at.\n"
             "\n"
@@ -252,6 +257,7 @@ namespace mgs4e::tool
                     F::Int(G, K::InternalResolutionScale, kHelp_InternalResolutionScale, 100, 100, 400),
                     F::Int(G, K::ShadowResolutionScale, kHelp_ShadowResolutionScale, 100, 100, 400),
                     F::Int(G, K::ShadowSampleCount, kHelp_ShadowSampleCount, 0, 0, 32),
+                    F::Bool(G, K::ReplacedShadersDx12, kHelp_ReplacedShadersDx12, true),
                     F::Int(G, K::AnisotropicFiltering, kHelp_AnisotropicFiltering, 0, 0, 16),
                 }},
 

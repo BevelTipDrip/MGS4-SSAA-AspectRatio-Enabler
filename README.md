@@ -149,6 +149,18 @@ some mods' config tools hang if they find one.
 
 Everything is on the **Graphics** tab. Hover a setting in the tool for a longer explanation.
 
+**Replaced Shaders (DirectX 12)** makes FusionFix's shadow shaders work under DirectX 12.
+Mods built with 3Dmigoto ship a `ReplacedShadersPS` folder and swap its shaders in through a
+DirectX 11 hook, so on DirectX 12 they do nothing. The game's DirectX 12 shaders are a
+separate build of the same code: every constant buffer is declared larger and every constant
+read shifted to match, and the vertex shaders feed narrower inputs. With the map this zip
+ships (`MGS4\scripts\ReplacedShadersPS.dx12.map`, 458 of FusionFix's 519 shaders), the
+`.asi` ports each replacement to its DirectX 12 counterpart the first time a pipeline is built
+with it: indices shifted, signature taken from the DirectX 12 original, container re-signed.
+Nothing of FusionFix's is redistributed; it reads the files you installed. A mod that ships
+DirectX 12 replacements of its own in a `ReplacedShadersPS12` folder gets those used directly.
+On by default; with nothing to port it does nothing.
+
 **Window Mode** and **DirectX Version** override the game's own choices at every start:
 Fullscreen (the game's exclusive mode), Borderless (a frameless window the size of the
 display) or Windowed; DirectX 11 or 12. Neither writes the game's settings files - the mod

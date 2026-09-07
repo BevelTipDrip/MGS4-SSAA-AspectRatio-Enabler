@@ -158,6 +158,12 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
+- **FusionFix's shaders under DirectX 12** (`docs/features/shader-replacement.md`,
+  `asi/src/features/shader_port.*`, `shaders/ReplacedShadersPS.dx12.map`): the DirectX 12
+  shader build is the DirectX 11 one with larger constant buffers (indices shifted by the
+  size difference) and narrower input masks; replacements are ported at pipeline creation.
+  Lab keys `Dump Pixel Shaders`, `D3D12 Debug Layer`; the scratchpad scripts that built the
+  map (match/port/binport) are described in the doc.
 - **Features, one owner each** (`shared/features.hpp`, `shared/manifest_claims.hpp`): manifest
   blocks carry `Feature`/`Off`/`AlwaysOn`; our own claims are `features::kOurs`. The tool
   (`ActiveOwners`/`ResolveOverlaps` in ui.cpp) annotates rows and asks at save; the ASI

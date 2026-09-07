@@ -56,6 +56,11 @@ namespace mgs4e::keys
     constexpr const char* ShadowSampleCount = "Shadow Softness (Samples)";
     constexpr const char* AnisotropicFiltering = "Anisotropic Filtering";
 
+    // Pixel-shader replacements for DirectX 12: DXBC blobs in a ReplacedShadersPS12 folder,
+    // each named by the DirectX 12 original's container checksum (the convention FusionFix
+    // uses for its DirectX 11 set in ReplacedShadersPS), swapped in at pipeline creation.
+    constexpr const char* ReplacedShadersDx12 = "Replaced Shaders (DirectX 12)";
+
     constexpr const char* Fxaa = "FXAA";
     constexpr const char* FxaaQuality = "FXAA Quality";
     constexpr const char* FxaaQuality_Slow = "Slow (best quality)";

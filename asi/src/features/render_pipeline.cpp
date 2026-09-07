@@ -1,4 +1,9 @@
 #include "pch.hpp"
+#include <array>
+#include <charconv>
+#include <d3d12sdklayers.h>
+#include "shader_port.hpp"
+#include <map>
 
 #include "render_pipeline.hpp"
 
@@ -931,6 +936,39 @@ namespace
 
     // The same for D3D11, the renderer the game ships set to: MaxAnisotropy on CreateSamplerState.
     SafetyHookInline CreateSamplerState_hook {};
+#if MGS4E_LAB_BUILD
+    uint64_t ShaderCodeHash(const void* blob, size_t length, uint32_t* chunkLength);
+    SafetyHookInline CreatePixelShader11_hook {};
+    constexpr size_t kCreatePixelShaderSlot = 15;
+    HRESULT STDMETHODCALLTYPE Hooked_CreatePixelShader11(ID3D11Device* self, const void* bytecode, SIZE_T length, ID3D11ClassLinkage* linkage, ID3D11PixelShader** shader)
+    {
+        static std::atomic<int> shown { 0 };
+        if (bytecode && length >= 32 && shown.fetch_add(1) < 100000)
+        {
+            const auto* b = static_cast<const uint8_t*>(bytecode);
+            std::string hex;
+            for (int i = 0; i < 24; ++i) { hex += std::format("{:02x}", b[i]); if (i == 3 || i == 19) { hex += ' '; } }
+            uint32_t codeLength = 0;
+            const uint64_t code = ShaderCodeHash(bytecode, length, &codeLength);
+            spdlog::info("MGS4: Replaced shaders: PS11 blob {} bytes, header {} code {:016x} ({} bytes)", length, hex, code, codeLength);
+            if (RenderPipeline::bDumpPixelShaders12)
+            {
+                std::error_code ec;
+                const std::filesystem::path dir = mgs4e::game::Root() / "logs" / "dx11_pixel_shaders";
+                std::filesystem::create_directories(dir, ec);
+                uint32_t w[4] {};
+                std::memcpy(w, b + 4, 16);
+                const std::filesystem::path file = dir / std::format("{:08x}-{:08x}-{:08x}-{:08x}.dxbc", w[0], w[1], w[2], w[3]);
+                if (!std::filesystem::exists(file, ec))
+                {
+                    std::ofstream out(file, std::ios::binary);
+                    out.write(static_cast<const char*>(bytecode), static_cast<std::streamsize>(length));
+                }
+            }
+        }
+        return CreatePixelShader11_hook.stdcall<HRESULT>(self, bytecode, length, linkage, shader);
+    }
+#endif
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSamplerState(ID3D11Device* self,
         const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** sampler)
@@ -1041,9 +1079,239 @@ namespace
         return {};
     }
 
+    // ---- Replaced pixel shaders under DirectX 12 --------------------------------------------
+    //
+    // FusionFix (and any mod built the same way with 3Dmigoto) ships pixel-shader
+    // replacements as DXBC blobs in a ReplacedShadersPS folder, each named by the 16-byte
+    // checksum in the original shader's DXBC header, and swaps them in from a hook on the
+    // DirectX 11 device's CreatePixelShader. Under DirectX 12 the shader arrives inside the
+    // pipeline-state description instead, so nothing of that runs - and the game's DirectX 12
+    // backend uses a separately compiled shader set: measured 2026-09-07 with lab probes on
+    // both devices, DirectX 11 creates 751 pixel shaders (509 of them FusionFix's targets),
+    // DirectX 12 717 with different containers and different code chunks, 24 programs in
+    // common and none of those a target. So a DirectX 11 replacement cannot be re-keyed for
+    // DirectX 12; the mod's transformation has to be applied to the DirectX 12 shaders
+    // themselves (the lab's "Dump Pixel Shaders" writes them out for that). This hook then
+    // does the swap at CreateGraphicsPipelineState from a ReplacedShadersPS12 folder, keyed
+    // the same way by the DirectX 12 originals' checksums. A refused pipeline falls back to
+    // the original blob and is logged.
+    std::map<std::array<uint8_t, 16>, std::vector<uint8_t>> g_ReplacedShaders;   // DirectX 12 checksum -> blob to use
+    // DirectX 11 replacements (FusionFix's own set), by the DirectX 12 checksum they stand in
+    // for according to the map file; ported on first use and moved into g_ReplacedShaders.
+    std::map<std::array<uint8_t, 16>, std::vector<uint8_t>> g_Dx11Replacements;
+    std::mutex g_ReplacedMutex;
+    std::atomic<int> g_PortedShaders { 0 };
+    std::atomic<int> g_PortFailures { 0 };
+
+    // The FNV-1a hash of a DXBC container's code chunk (SHEX or SHDR): the compiled program
+    // alone, without the container's signature and reflection chunks, so two containers that
+    // differ only in those still compare equal. Zero when there is no such chunk.
+    uint64_t ShaderCodeHash(const void* blob, size_t length, uint32_t* chunkLength)
+    {
+        const auto* b = static_cast<const uint8_t*>(blob);
+        if (!b || length < 0x24 || std::memcmp(b, "DXBC", 4) != 0) { return 0; }
+        uint32_t chunks = 0;
+        std::memcpy(&chunks, b + 0x1C, 4);
+        if (chunks > 64 || 0x20 + static_cast<size_t>(chunks) * 4 > length) { return 0; }
+        for (uint32_t i = 0; i < chunks; ++i)
+        {
+            uint32_t at = 0;
+            std::memcpy(&at, b + 0x20 + i * 4, 4);
+            if (static_cast<size_t>(at) + 8 > length) { continue; }
+            if (std::memcmp(b + at, "SHEX", 4) != 0 && std::memcmp(b + at, "SHDR", 4) != 0) { continue; }
+            uint32_t size = 0;
+            std::memcpy(&size, b + at + 4, 4);
+            if (static_cast<size_t>(at) + 8 + size > length) { return 0; }
+            uint64_t h = 1469598103934665603ull;
+            for (uint32_t k = 0; k < size; ++k) { h ^= b[at + 8 + k]; h *= 1099511628211ull; }
+            if (chunkLength) { *chunkLength = size; }
+            return h;
+        }
+        return 0;
+    }
+    std::filesystem::path g_ReplacedShadersFolder;
+    std::atomic<int> g_ReplacedPipelines { 0 };
+    std::atomic<int> g_ReplacedFailures { 0 };
+
+    void LoadReplacedShaders()
+    {
+        if (!RenderPipeline::bReplacedShadersDx12)
+        {
+            return;
+        }
+        const std::filesystem::path exeDir = mgs4e::game::ExePath().parent_path();
+        std::error_code ec;
+        for (const char* sub : { "scripts", "plugins", "update", "." })
+        {
+            const std::filesystem::path folder = exeDir / sub / "ReplacedShadersPS12";
+            if (!std::filesystem::is_directory(folder, ec))
+            {
+                continue;
+            }
+            int loaded = 0, skipped = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
+            {
+                if (!entry.is_regular_file(ec)) { continue; }
+                const std::string name = entry.path().stem().string();   // 8-8-8-8 hex dwords
+                std::array<uint8_t, 16> key {};
+                bool ok = name.size() == 35;
+                for (int dword = 0; ok && dword < 4; ++dword)
+                {
+                    const std::string part = name.substr(static_cast<size_t>(dword) * 9, 8);
+                    uint32_t value = 0;
+                    ok = std::from_chars(part.data(), part.data() + part.size(), value, 16).ec == std::errc();
+                    std::memcpy(key.data() + dword * 4, &value, 4);   // little-endian, as in the header
+                }
+                if (!ok) { skipped++; continue; }
+                std::ifstream in(entry.path(), std::ios::binary);
+                std::vector<uint8_t> blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (blob.size() < 32 || std::memcmp(blob.data(), "DXBC", 4) != 0) { skipped++; continue; }
+                g_ReplacedShaders[key] = std::move(blob);
+                loaded++;
+            }
+            g_ReplacedShadersFolder = folder;
+            spdlog::info("MGS4: Replaced shaders: {} pixel shader replacement(s) read from {}{}; applied under DirectX 12 at pipeline creation.",
+                loaded, folder.string(), skipped ? std::format(" ({} file(s) skipped)", skipped) : "");
+            break;
+        }
+
+        // A DirectX 11 set with a map beside it (ReplacedShadersPS.dx12.map, shipped in this
+        // mod's zip for FusionFix's shaders): each file is ported to its DirectX 12
+        // counterpart the first time a pipeline is built with that shader.
+        for (const char* sub : { "scripts", "plugins", "update", "." })
+        {
+            const std::filesystem::path folder = exeDir / sub / "ReplacedShadersPS";
+            const std::filesystem::path mapFile = exeDir / sub / "ReplacedShadersPS.dx12.map";
+            if (!std::filesystem::is_directory(folder, ec) || !std::filesystem::exists(mapFile, ec))
+            {
+                continue;
+            }
+            const auto map = mgs4e::shaderport::LoadMap(mapFile);   // dx12 -> dx11
+            int loaded = 0, missing = 0;
+            for (const auto& [dx12, dx11] : map)
+            {
+                if (g_ReplacedShaders.count(dx12)) { continue; }   // a pre-ported file wins
+                std::ifstream in(folder / (mgs4e::shaderport::ChecksumName(dx11) + ".compiled"), std::ios::binary);
+                if (!in) { missing++; continue; }
+                std::vector<uint8_t> blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (blob.size() < 32 || std::memcmp(blob.data(), "DXBC", 4) != 0) { missing++; continue; }
+                g_Dx11Replacements[dx12] = std::move(blob);
+                loaded++;
+            }
+            spdlog::info("MGS4: Replaced shaders: {} DirectX 11 replacement(s) in {} have a DirectX 12 counterpart in {}{}; each is ported when its pipeline is first built.",
+                loaded, folder.string(), mapFile.filename().string(), missing ? std::format(" ({} listed file(s) not present)", missing) : "");
+            break;
+        }
+    }
+
     HRESULT STDMETHODCALLTYPE Hooked_CreateGraphicsPipelineState(ID3D12Device* self,
         const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipelineState)
     {
+#if MGS4E_LAB_BUILD
+        // What the DirectX 12 backend actually hands over: the first pixel-shader headers.
+        if (desc && desc->PS.pShaderBytecode && desc->PS.BytecodeLength >= 32)
+        {
+            static std::atomic<int> shown { 0 };
+            if (shown.fetch_add(1) < 100000)
+            {
+                const auto* b = static_cast<const uint8_t*>(desc->PS.pShaderBytecode);
+                std::string hex;
+                for (int i = 0; i < 24; ++i) { hex += std::format("{:02x}", b[i]); if (i == 3 || i == 19) { hex += ' '; } }
+                uint32_t codeLength = 0;
+                const uint64_t code = ShaderCodeHash(desc->PS.pShaderBytecode, desc->PS.BytecodeLength, &codeLength);
+                spdlog::info("MGS4: Replaced shaders: PS blob {} bytes, header {} code {:016x} ({} bytes)", desc->PS.BytecodeLength, hex, code, codeLength);
+                // Lab: keep every DirectX 12 pixel shader as a file named the way FusionFix names
+                // its targets (the container checksum's four little-endian dwords), so its
+                // shader transformation can be run over the DirectX 12 set.
+                if (RenderPipeline::bDumpPixelShaders12)
+                {
+                    std::error_code ec;
+                    const std::filesystem::path dir = mgs4e::game::Root() / "logs" / "dx12_pixel_shaders";
+                    std::filesystem::create_directories(dir, ec);
+                    uint32_t w[4] {};
+                    std::memcpy(w, b + 4, 16);
+                    const std::filesystem::path file = dir / std::format("{:08x}-{:08x}-{:08x}-{:08x}.dxbc", w[0], w[1], w[2], w[3]);
+                    if (!std::filesystem::exists(file, ec))
+                    {
+                        std::ofstream out(file, std::ios::binary);
+                        out.write(static_cast<const char*>(desc->PS.pShaderBytecode), static_cast<std::streamsize>(desc->PS.BytecodeLength));
+                    }
+                }
+            }
+        }
+#endif
+        // The swap, first: a copy of the description with our blob in the PS slot.
+        if (desc && (!g_ReplacedShaders.empty() || !g_Dx11Replacements.empty()) && desc->PS.pShaderBytecode && desc->PS.BytecodeLength >= 32
+            && std::memcmp(desc->PS.pShaderBytecode, "DXBC", 4) == 0)
+        {
+            std::array<uint8_t, 16> key {};
+            std::memcpy(key.data(), static_cast<const uint8_t*>(desc->PS.pShaderBytecode) + 4, 16);
+            std::lock_guard lock(g_ReplacedMutex);
+            if (const auto dx11 = g_Dx11Replacements.find(key); dx11 != g_Dx11Replacements.end())
+            {
+                // First pipeline with this DirectX 12 shader: port the DirectX 11 replacement
+                // against it now. Either way the entry leaves the pending set.
+                std::string why;
+                std::vector<uint8_t> ported = mgs4e::shaderport::Port(dx11->second, static_cast<const uint8_t*>(desc->PS.pShaderBytecode), desc->PS.BytecodeLength, why);
+                if (!ported.empty())
+                {
+                    g_ReplacedShaders[key] = std::move(ported);
+                    g_PortedShaders.fetch_add(1);
+                }
+                else if (g_PortFailures.fetch_add(1) < 5)
+                {
+                    spdlog::warn("MGS4: Replaced shaders: the DirectX 11 replacement for {} could not be ported: {}; the original is used.",
+                        mgs4e::shaderport::ChecksumName(key), why);
+                }
+                g_Dx11Replacements.erase(dx11);
+            }
+            if (const auto it = g_ReplacedShaders.find(key); it != g_ReplacedShaders.end())
+            {
+                D3D12_GRAPHICS_PIPELINE_STATE_DESC replaced = *desc;
+                replaced.PS.pShaderBytecode = it->second.data();
+                replaced.PS.BytecodeLength = it->second.size();
+                const HRESULT swapped = Hooked_CreateGraphicsPipelineState(self, &replaced, riid, pipelineState);
+                if (SUCCEEDED(swapped))
+                {
+                    const int n = g_ReplacedPipelines.fetch_add(1) + 1;
+                    if (n <= 3 || n % 100 == 0)
+                    {
+                        spdlog::info("MGS4: Replaced shaders: pipeline {} uses the replacement for {} ({} ported so far).",
+                            n, mgs4e::shaderport::ChecksumName(key), g_PortedShaders.load());
+                    }
+                    return swapped;
+                }
+                if (g_ReplacedFailures.fetch_add(1) < 5)
+                {
+                    spdlog::warn("MGS4: Replaced shaders: the replacement for {:08x}-{:08x}-{:08x}-{:08x} was refused (0x{:08X}); the original is used.",
+                        *reinterpret_cast<const uint32_t*>(key.data()), *reinterpret_cast<const uint32_t*>(key.data() + 4),
+                        *reinterpret_cast<const uint32_t*>(key.data() + 8), *reinterpret_cast<const uint32_t*>(key.data() + 12),
+                        static_cast<uint32_t>(swapped));
+#if MGS4E_LAB_BUILD
+                    ID3D12InfoQueue* queue = nullptr;
+                    if (SUCCEEDED(self->QueryInterface(__uuidof(ID3D12InfoQueue), reinterpret_cast<void**>(&queue))) && queue)
+                    {
+                        const UINT64 count = queue->GetNumStoredMessages();
+                        for (UINT64 i = count > 4 ? count - 4 : 0; i < count; ++i)
+                        {
+                            SIZE_T length = 0;
+                            queue->GetMessage(i, nullptr, &length);
+                            std::vector<uint8_t> buffer(length);
+                            auto* message = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
+                            if (length && SUCCEEDED(queue->GetMessage(i, message, &length)))
+                            {
+                                spdlog::warn("MGS4: Replaced shaders: debug layer: {}", message->pDescription ? message->pDescription : "");
+                            }
+                        }
+                        queue->ClearStoredMessages();
+                        queue->Release();
+                    }
+#endif
+                }
+                // fall through with the original description
+            }
+        }
+
         std::string checksum;
         if (desc)
         {
@@ -2271,6 +2539,29 @@ namespace
     HRESULT WINAPI Hooked_D3D12CreateDevice(IUnknown* adapter, D3D_FEATURE_LEVEL minimumFeatureLevel,
         REFIID riid, void** device)
     {
+#if MGS4E_LAB_BUILD
+        if (RenderPipeline::bD3D12DebugLayer)
+        {
+            static bool enabled = false;
+            if (!enabled)
+            {
+                enabled = true;
+                using GetDebugInterface = HRESULT (WINAPI*)(REFIID, void**);
+                auto getDebug = reinterpret_cast<GetDebugInterface>(GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12GetDebugInterface"));
+                ID3D12Debug* debug = nullptr;
+                if (getDebug && SUCCEEDED(getDebug(__uuidof(ID3D12Debug), reinterpret_cast<void**>(&debug))) && debug)
+                {
+                    debug->EnableDebugLayer();
+                    debug->Release();
+                    spdlog::info("MGS4: D3D12 debug layer enabled.");
+                }
+                else
+                {
+                    spdlog::warn("MGS4: D3D12 debug layer not available (Graphics Tools not installed?).");
+                }
+            }
+        }
+#endif
         const HRESULT result = D3D12CreateDevice_hook.stdcall<HRESULT>(adapter, minimumFeatureLevel, riid, device);
 
         // D3D12CreateDevice is also legitimately called with a null device pointer purely
@@ -2330,10 +2621,15 @@ namespace
             spdlog::info("MGS4: D3D12 CreatePlacedResource hook: {}.",
                 CreatePlacedResource_hook ? "installed" : "FAILED");
 
-            if (RenderPipeline::bLogViewports)
+            LoadReplacedShaders();
+            if (RenderPipeline::bLogViewports || RenderPipeline::bDumpPixelShaders12 || !g_ReplacedShaders.empty() || !g_Dx11Replacements.empty())
             {
                 CreateGraphicsPipelineState_hook = safetyhook::create_inline(vtable[kCreateGraphicsPipelineStateSlot],
                     reinterpret_cast<void*>(Hooked_CreateGraphicsPipelineState));
+                if (!g_ReplacedShaders.empty() || !g_Dx11Replacements.empty())
+                {
+                    spdlog::info("MGS4: Replaced shaders: D3D12 CreateGraphicsPipelineState hook {}.", CreateGraphicsPipelineState_hook ? "installed" : "FAILED");
+                }
             }
 
             if (RenderPipeline::bLogViewports)
@@ -2364,6 +2660,14 @@ namespace
         }
         hooked = true;
         spdlog::info("MGS4: D3D11 device created.");
+
+#if MGS4E_LAB_BUILD
+        {
+            void** vtable = *reinterpret_cast<void***>(device);
+            CreatePixelShader11_hook = safetyhook::create_inline(vtable[kCreatePixelShaderSlot], reinterpret_cast<void*>(Hooked_CreatePixelShader11));
+            spdlog::info("MGS4: Replaced shaders: D3D11 CreatePixelShader probe {}.", CreatePixelShader11_hook ? "installed" : "FAILED");
+        }
+#endif
 
         if (RenderPipeline::iAnisotropicFiltering > 0)
         {

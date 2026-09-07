@@ -71,6 +71,7 @@
     <ClCompile Include="src\core\compat.cpp" />
     <ClCompile Include="src\features\graphics_settings.cpp" />
     <ClCompile Include="src\features\render_pipeline.cpp" />
+    <ClCompile Include="src\features\shader_port.cpp" />
     <ClCompile Include="src\features\stage_automation.cpp" Condition="'$(Configuration)'=='Lab'" />
     <!-- The ultrawide module is a private submodule: built when it is checked out, replaced by a logging stub when it is not. -->
     <ClCompile Include="$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
@@ -110,6 +111,7 @@
     <ClInclude Include="src\features\aspect_ratio.hpp" />
     <ClInclude Include="src\features\graphics_settings.hpp" />
     <ClInclude Include="src\features\render_pipeline.hpp" />
+    <ClInclude Include="src\features\shader_port.hpp" />
     <ClInclude Include="src\features\stage_automation.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
     <ClInclude Include="..\shared\lab.hpp" />

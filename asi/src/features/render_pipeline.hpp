@@ -41,6 +41,7 @@ namespace RenderPipeline
     // the game's, else the engine's own numbering - 0 fullscreen (exclusive), 1 borderless,
     // 2 windowed.
     inline int iDirectXVersion = 0;
+    inline bool bReplacedShadersDx12 = true;
     inline int iWindowMode = -1;
 
     inline bool bOverrideWindowSize = false;
@@ -218,6 +219,12 @@ namespace RenderPipeline
     // are empty. The reticle's draw calls are issued at every render resolution but stop
     // producing output above a 4095-wide buffer, so the pass state is the remaining suspect.
     MGS4E_LAB_SWITCH(bool, bLogViewports, false);
+    // Lab: write every DirectX 12 pixel shader the game creates a pipeline with to
+    // logs\dx12_pixel_shaders, named by its container checksum ("Dump Pixel Shaders").
+    MGS4E_LAB_SWITCH(bool, bDumpPixelShaders12, false);
+    // Lab: turn the D3D12 debug layer on before the device is created and log its messages
+    // when a pipeline with a replaced shader is refused ("D3D12 Debug Layer").
+    MGS4E_LAB_SWITCH(bool, bD3D12DebugLayer, false);
 
     // Diagnostics: hooks D3D12 resource creation to log every render target allocation
     // with the mgs4.exe call sites that requested it, and watches the render size

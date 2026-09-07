@@ -191,6 +191,8 @@ namespace mgs4e::config
             Read(ini, Graphics, "Dump Floats", RP::sDumpFloats);
             Read(ini, Graphics, "Find String", RP::sFindString);
             Read(ini, Graphics, "Find References", RP::sFindReferences);
+            Read(ini, Graphics, "Dump Pixel Shaders", RP::bDumpPixelShaders12);
+            Read(ini, Graphics, "D3D12 Debug Layer", RP::bD3D12DebugLayer);
             Read(ini, Graphics, "Find Displacement", RP::sFindDisplacement);
             Read(ini, Graphics, "Scan Narrowing Conversions", RP::bScanNarrowingConversions);
             Read(ini, Graphics, "Scan Fixed Point Sites", RP::bScanFixedPointSites);
@@ -370,6 +372,8 @@ namespace mgs4e::config
             // from a false one. A settings file written before this option existed must leave
             // the game's own FXAA choice alone rather than forcing it on.
             std::string fxaa;
+            Read(ini, Graphics, ReplacedShadersDx12, RP::bReplacedShadersDx12);
+            Report(Graphics, ReplacedShadersDx12, RP::bReplacedShadersDx12);
             Read(ini, Graphics, Fxaa, fxaa);
             if (!fxaa.empty())
             {

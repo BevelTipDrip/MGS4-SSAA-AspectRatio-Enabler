@@ -73,6 +73,11 @@ Copy-Item $asi (Join-Path $stage 'MGS4\scripts\MGS4Enabler.asi')
 Get-ChildItem (Join-Path $root 'manifests') -Filter '*.MGS4Enabler.ini' | ForEach-Object {
     Copy-Item $_.FullName (Join-Path (Join-Path $stage 'MGS4\scripts') $_.Name)
 }
+# Shader maps: which DirectX 12 shader each of another mod's DirectX 11 replacements stands in
+# for, so the .asi can port them at pipeline creation (shaders\*.dx12.map).
+Get-ChildItem (Join-Path $root 'shaders') -Filter '*.dx12.map' | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path (Join-Path $stage 'MGS4\scripts') $_.Name)
+}
 Copy-Item $exe (Join-Path $stage 'MGS4Enabler.exe')
 Copy-Item (Join-Path $root 'README.md') (Join-Path $stage 'README.md')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
