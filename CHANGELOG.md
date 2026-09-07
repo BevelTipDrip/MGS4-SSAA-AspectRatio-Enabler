@@ -9,6 +9,7 @@ changelog box as is.
 New
 - A Save and Launch Game button: saves, then starts the game through Steam.
 - MGSFPSUnlock's tab now comes from a manifest shipped in the zip (MGS4\scripts\MGSFPSUnlock.MGS4Enabler.ini) instead of being built into the tool; a manifest shows a tab only while its mod is installed.
+- A manifest for MGS4.FusionFix too (MGS4\scripts\MGS4.FusionFix.MGS4Enabler.ini): skip intro, dynamic resolution, shadow texel size and shadow resolution. Its shadow and dynamic-resolution overrides overlap this mod's and MGSPatriotFix's; pick one owner.
 - Window Mode (Fullscreen, Borderless, Windowed) and DirectX Version (11 or 12) overrides. The game's own options are left as they are; the mod changes what the engine reads at start. Note the game saves the running renderer as its own choice on exit.
 - Mod authors can give their own config file a tab in the tool without a code change: ship a `<YourMod>.MGS4Enabler.ini` manifest next to the .ini, describing the file, a blurb, a link and one block per setting (int, bool or choice). Only the listed keys are ever written. Mistakes in the manifest are shown on the tab rather than hiding it. The ini may sit beside the manifest or in the install folder, quoted values stay quoted, and the mod's .asi is looked for wherever the game loads from. Format and example: docs/mod-tabs.md.
 

@@ -214,12 +214,13 @@ that both the `.asi` and the tool read.
 
 Some mods have a small config file and no tool of their own. A **manifest** file named
 `<Mod>.MGS4Enabler.ini`, sitting next to that mod's config, describes it to the tool, and the
-tool grows a tab for it while the mod is installed. This zip ships one such manifest, into
+tool grows a tab for it while the mod is installed. This zip ships these manifests, into
 `MGS4\scripts\`:
 
 | Mod | File | What the tab edits |
 | --- | --- | --- |
 | [MGSFPSUnlock](https://github.com/cipherxof/MGSFPSUnlock) (cipherxof) | `MGSFPSUnlock.ini` | Target frame rate |
+| MGS4.FusionFix | `MGS4.FusionFix.ini` | Skip intro, dynamic resolution, shadow texel size, shadow resolution |
 
 A save writes just those values back into the mod's file; comments and everything else in it
 stay as they were. If the mod's files are sitting somewhere the game does not load from (the
