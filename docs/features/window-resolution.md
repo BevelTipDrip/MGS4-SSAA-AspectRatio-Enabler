@@ -105,6 +105,14 @@ title scene filling it; D3D11 windowed, in-game resolution changed while running
 main menu filling the screen from a desktop grab (the harness's window capture is black for a
 windowed flip-model chain, a capture limitation, not the game).
 
+The window itself is recorded from the swap chain (the public D3D11 creation hook and the
+private module's chain hooks set `RenderPipeline::hGameWindow`), never found by enumeration:
+the first 0.0.4 build looked it up with `EnumWindows` + `GetWindowThreadProcessId`, and the Nexus
+upload scanner flagged that zip as unsafe while 0.0.3 passed - walking other processes' windows
+by id is an injector's signature. With the enumeration gone the import table gained only
+`GetClientRect` and `GetSystemMetrics`. Until the window is known the renderer's own value
+stands; writing the desktop size in that gap cost one spurious chain resize at boot.
+
 Alongside it, the render-config hook now caps the override to the surface it will land in
 (the game window's client area once it exists, the primary desktop before that), shrinking
 it with its shape kept and logging `the AxB override is larger than the CxD window; using ExF`.

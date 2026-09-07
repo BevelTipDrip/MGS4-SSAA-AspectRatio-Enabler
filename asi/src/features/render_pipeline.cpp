@@ -2394,6 +2394,10 @@ namespace
     {
         const HRESULT result = D3D11CreateDeviceAndSwapChain_hook.stdcall<HRESULT>(adapter, driverType, software,
             flags, featureLevels, featureLevelCount, sdkVersion, swapChainDesc, swapChain, device, featureLevel, context);
+        if (SUCCEEDED(result) && swapChainDesc && swapChainDesc->OutputWindow)
+        {
+            RenderPipeline::hGameWindow = swapChainDesc->OutputWindow;
+        }
         if (SUCCEEDED(result) && device && *device)
         {
             HookD3D11Device(*device);
@@ -2472,7 +2476,9 @@ namespace
         // fullscreen. Writing the override itself was wrong in fullscreen (2026-09-07): the
         // renderer's buffers came out smaller than the chain and D3D11 drew nothing. The
         // renderer's resolution must never be smaller than the chain; equal is right.
-        if (context && RenderPipeline::bOverrideWindowSize)
+        // Until the window is known the game's own value stands: the desktop fallback would
+        // be wrong in windowed mode and cost one extra chain resize at boot (seen 2026-09-07).
+        if (context && RenderPipeline::bOverrideWindowSize && RenderPipeline::hGameWindow)
         {
             int w = 0, h = 0;
             if (SurfaceSize(w, h) && w > 0 && h > 0)
@@ -2528,45 +2534,27 @@ namespace
             EnumDisplaySettingsW_hook ? "installed" : "FAILED", EnumDisplaySettingsW_hook ? "ok" : "no", EnumDisplaySettingsExW_hook ? "ok" : "no");
     }
 
-    // The surface the window override must fit into: the game's own top-level window's
-    // client area once the window exists (windowed mode sizes it from the in-game setting;
-    // fullscreen makes it the desktop), else the primary desktop's current mode. The name
-    // says which one was used.
-    BOOL CALLBACK FindGameWindow(HWND hwnd, LPARAM param)
-    {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
-        if (pid != GetCurrentProcessId() || !IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr) { return TRUE; }
-        RECT client {};
-        if (!GetClientRect(hwnd, &client) || client.right < 64 || client.bottom < 64) { return TRUE; }
-        *reinterpret_cast<HWND*>(param) = hwnd;
-        return FALSE;
-    }
-
+    // The surface the window override must fit into: the game window's client area once the
+    // window is known (windowed mode sizes it from the in-game setting; fullscreen makes it
+    // the desktop), else the primary screen. The window comes from the swap chain, recorded by
+    // the D3D11 creation hook below and by the private module's chain hooks; nothing here
+    // enumerates windows - a build that did (0.0.4's first cut) tripped the Nexus upload scan,
+    // since walking other processes' windows by id is an injector's signature.
     const char* SurfaceSize(int& width, int& height)
     {
-        // Called once a frame from the renderer submit hook: the window is remembered and
-        // only looked up again if it has gone.
-        static HWND cached = nullptr;
-        HWND game = (cached && IsWindow(cached)) ? cached : nullptr;
-        if (!game)
-        {
-            EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&game));
-            cached = game;
-        }
         RECT client {};
-        if (game && GetClientRect(game, &client) && client.right > 0 && client.bottom > 0)
+        if (RenderPipeline::hGameWindow && GetClientRect(RenderPipeline::hGameWindow, &client) && client.right > 0 && client.bottom > 0)
         {
             width = client.right;
             height = client.bottom;
             return "window";
         }
-        DEVMODEW mode {};
-        mode.dmSize = sizeof(mode);
-        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) && mode.dmPelsWidth > 0 && mode.dmPelsHeight > 0)
+        const int sw = GetSystemMetrics(SM_CXSCREEN);
+        const int sh = GetSystemMetrics(SM_CYSCREEN);
+        if (sw > 0 && sh > 0)
         {
-            width = static_cast<int>(mode.dmPelsWidth);
-            height = static_cast<int>(mode.dmPelsHeight);
+            width = sw;
+            height = sh;
             return "desktop";
         }
         return nullptr;

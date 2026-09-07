@@ -47,6 +47,9 @@ namespace RenderPipeline
     inline int* pInternalResY = nullptr;
     inline int* pWindowResX = nullptr;
     inline int* pWindowResY = nullptr;
+    // The game's window, recorded from its swap chain when that is created or resized (both
+    // renderers). Nothing enumerates windows to find it.
+    inline HWND hGameWindow = nullptr;
 
     // Maximum internal render buffer width. A flat 8K ceiling.
     //
