@@ -21,7 +21,9 @@ is done at 21:9 and 4:3, and cutscene/menu masking plus the FOV settings shipped
 `letterbox.md` §5.
 
 **Releases are packaged locally** with `build\package.ps1` (7-Zip, needs the Ultimate ASI
-Loader zip). Do not prepare a release unless asked.
+Loader zip). Do not prepare a release unless asked. Every version bump gets its entry in
+`CHANGELOG.md` first (Nexus-ready plain text: Fixes / New / Notes); the packager refuses a
+version with no entry.
 
 **Never push or tag without being asked.** Commit freely; pushing is the user's call every time.
 

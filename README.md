@@ -238,6 +238,7 @@ every HUD element being drawn at that moment goes into the log. Take a screensho
 moment (Steam's F12) and attach both.
 
 Issues: <https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler/issues>
+Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Building
 

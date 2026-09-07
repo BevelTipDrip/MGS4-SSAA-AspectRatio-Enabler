@@ -27,6 +27,13 @@ $parts = 'MAJOR', 'MINOR', 'PATCH' | ForEach-Object {
 $version = $parts -join '.'
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Could not read the version from shared\version.hpp (got '$version')." }
 
+# Every release has a CHANGELOG.md entry before it is packaged; the entry is what goes on
+# GitHub and Nexus. Refuse rather than ship a version nobody wrote up.
+$changelog = Get-Content (Join-Path $root 'CHANGELOG.md') -Raw
+if ($changelog -notmatch "(?m)^## $([regex]::Escape($version)) \(") {
+    throw "CHANGELOG.md has no '## $version (date)' entry. Write the release notes first."
+}
+
 $asi = Join-Path $root 'bin\Release\MGS4Enabler.asi'
 $exe = Join-Path $root 'bin\Release\MGS4Enabler.exe'
 foreach ($f in $asi, $exe) {
