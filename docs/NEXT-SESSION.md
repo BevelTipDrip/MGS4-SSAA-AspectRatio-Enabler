@@ -163,7 +163,10 @@ rediscovered the hard way:
   that band as its viewport, letterbox at 4:3 and pillarbox at 21:9, scene and HUD together,
   so everything comes out squeezed with uncleared margins. The fit hooks on both backends
   widen that band to the window (`Band Expand` lab key). Log line: the engine's 16:9 band ...
-  is widened. Two wrong icon crops can look right when two errors cancel - the Stretched HUD
+  is widened. The band is the **chain's** 16:9 band scaled into the window rect, not the
+  window's own (AR-015 fifth part): a 16:10 override on a 4:3 display got (0,125 1600x750),
+  the 1600x1200 chain's (0,150 1600x900) times 1000/1200; the matcher builds it that way now.
+  A 16:9 chain has no band, which is why every override on a 16:9 desktop was fine. Two wrong icon crops can look right when two errors cancel - the Stretched HUD
   looked round under DX12 for exactly that reason - and a masked menu hides the band entirely,
   which is how D3D11 passed for a day. Read the whole picture, in gameplay, not one icon.
 - **Codec calls render the caller with a second camera whose projection follows the window's

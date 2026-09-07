@@ -9,6 +9,7 @@ changelog box as is.
 Fixes
 - Upload scanners flagged 0.0.4: its windowed-mode fix found the game window by enumerating windows, which is how an injector finds a target. The window is now taken from the game's own swap chain and nothing enumerates. Same behaviour, clean import table.
 - One spurious swap-chain resize at start-up in windowed mode is gone with it.
+- An override of one shape on a display of another, both non-16:9 (a 16:10 or 21:9 setting on a 4:3 monitor, say), came out squeezed: the renderer's 16:9 band was worked out from the window, but the engine derives it from the display and scales it into the window. Now matched the engine's way. 4:3 on 4:3 and every setting on a 16:9 display were already right.
 
 ## 0.0.4 (2026-09-07)
 
