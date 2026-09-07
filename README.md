@@ -149,6 +149,12 @@ some mods' config tools hang if they find one.
 
 Everything is on the **Graphics** tab. Hover a setting in the tool for a longer explanation.
 
+**Window Mode** and **DirectX Version** override the game's own choices at every start:
+Fullscreen (the game's exclusive mode), Borderless (a frameless window the size of the
+display) or Windowed; DirectX 11 or 12. Neither writes the game's settings files - the mod
+changes what the engine reads - but the game itself saves the running renderer as its own
+choice when it exits, so after clearing the DirectX override it stays on whichever ran last.
+
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 16:10, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape. Leave it on Use Game Setting to keep whatever the game's launcher selected. |

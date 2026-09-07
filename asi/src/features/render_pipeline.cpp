@@ -2515,6 +2515,215 @@ namespace
         spdlog::info("MGS4: Window Size: renderer resolution hook {}.", RendererSubmit_hook ? "installed" : "FAILED");
     }
 
+    // ---- DirectX version and window mode -------------------------------------------------
+    //
+    // Both are the game's own options, kept outside the config files: the API in
+    // mgs4.savedsettings (Steam-synced, "api=dx12"), the window mode in the engine's
+    // current-settings block. At boot the saved-settings loader (mgs4.exe+65D880, found
+    // 2026-09-07 through the lab string scan on "render.api") reads that file into a
+    // temporary store, validates "api" against "dx11"/"dx12" and writes the winner into the
+    // global config store's "render.api" string (seeded "dx12" at +3FD52); then it rebuilds
+    // the current-settings block and copies it to globals, the window-mode word first
+    // (+65DD34: 0 fullscreen, 1 borderless, 2 windowed - the engine's names are
+    // full_exclusive, full_borderless, windowed). Everything after that reads the store or
+    // those globals: the renderer start (+660100) takes "render.api" and "render.fullscreen"
+    // from the store, the options screen shows the store's string, the window code asks the
+    // mode word.
+    //
+    // So the override wraps the loader: once it has returned, the store's "render.api"
+    // string is rewritten in place (same length, both values are four characters), the
+    // store's "render.fullscreen" bool is set to whether the mode is fullscreen, and the
+    // mode word is written. Nothing touches mgs4.savedsettings - it is the user's, and
+    // Steam's. An earlier cut hooked a different reader (+65C140), which turned out not to
+    // run at boot.
+    // The window-mode word has a getter (movzx eax,word ptr [word]; ret) that the boot code
+    // asks when it creates the window - before the loader has returned - so the getter is
+    // hooked as well and answers with the override from the first call.
+    SafetyHookInline SavedSettingsLoader_hook {};
+    SafetyHookInline WindowModeGetter_hook {};
+
+    uint32_t Hooked_WindowModeGetter()
+    {
+        return static_cast<uint32_t>(RenderPipeline::iWindowMode);
+    }
+    using ConfigEntryByKey = uint8_t* (*)(const char* key);   // the global store's lookup
+    using ConfigEntryString = uint8_t* (*)(uint8_t* entry);  // the std::string of a string entry
+    ConfigEntryByKey g_ConfigEntryByKey = nullptr;
+    ConfigEntryString g_ConfigEntryString = nullptr;
+    uint16_t* g_WindowModeWord = nullptr;
+
+    // A store entry is a variant: the value at +0, its type tag at +0x20 (1 bool, 2/3
+    // integers, 4 double, 5 std::string with data or pointer at +0, size +0x10, capacity
+    // +0x18).
+    bool RewriteStoreString(const char* key, const char* value)
+    {
+        uint8_t* const entry = g_ConfigEntryByKey(key);
+        if (!entry || !mgs4e::mem::Readable(entry, 0x21) || entry[0x20] != 5)
+        {
+            spdlog::warn("MGS4: Display Mode: the config store's {} is not a string entry; left alone.", key);
+            return false;
+        }
+        uint8_t* const str = g_ConfigEntryString(entry);
+        if (!str || !mgs4e::mem::Readable(str, 0x20))
+        {
+            return false;
+        }
+        uint64_t size = 0, capacity = 0;
+        std::memcpy(&size, str + 0x10, sizeof(size));
+        std::memcpy(&capacity, str + 0x18, sizeof(capacity));
+        const size_t length = std::strlen(value);
+        if (size != length || capacity < length)
+        {
+            spdlog::warn("MGS4: Display Mode: {} holds a {}-character value, not the expected {}; left alone.", key, size, length);
+            return false;
+        }
+        uint8_t* data = str;
+        if (capacity >= 16)
+        {
+            std::memcpy(&data, str, sizeof(data));
+        }
+        if (!data || !mgs4e::mem::Writable(data, length + 1))
+        {
+            return false;
+        }
+        std::memcpy(data, value, length + 1);
+        return true;
+    }
+
+    bool RewriteStoreBool(const char* key, bool value)
+    {
+        uint8_t* const entry = g_ConfigEntryByKey(key);
+        if (!entry || !mgs4e::mem::Readable(entry, 0x21) || entry[0x20] != 1 || !mgs4e::mem::Writable(entry, 1))
+        {
+            spdlog::warn("MGS4: Display Mode: the config store's {} is not a bool entry; left alone.", key);
+            return false;
+        }
+        entry[0] = value ? 1 : 0;
+        return true;
+    }
+
+    void Hooked_SavedSettingsLoader()
+    {
+        SavedSettingsLoader_hook.call<void>();
+
+        if (RenderPipeline::iDirectXVersion == 11 || RenderPipeline::iDirectXVersion == 12)
+        {
+            const char* wanted = RenderPipeline::iDirectXVersion == 12 ? "dx12" : "dx11";
+            char before[8] {};
+            if (uint8_t* const entry = g_ConfigEntryByKey("render.api"); entry && mgs4e::mem::Readable(entry, 0x21) && entry[0x20] == 5)
+            {
+                uint8_t* const str = g_ConfigEntryString(entry);
+                uint64_t capacity = 0;
+                if (str && mgs4e::mem::Readable(str, 0x20))
+                {
+                    std::memcpy(&capacity, str + 0x18, sizeof(capacity));
+                    const uint8_t* data = str;
+                    if (capacity >= 16) { std::memcpy(&data, str, sizeof(data)); }
+                    if (data && mgs4e::mem::Readable(data, 5)) { std::memcpy(before, data, 4); }
+                }
+            }
+            if (RewriteStoreString("render.api", wanted))
+            {
+                spdlog::info("MGS4: Display Mode: the game chose {}; running {} instead.", before[0] ? before : "?", wanted);
+            }
+        }
+
+        if (RenderPipeline::iWindowMode >= 0 && RenderPipeline::iWindowMode <= 2)
+        {
+            static const char* const names[] = { "fullscreen", "borderless", "windowed" };
+            const uint16_t wanted = static_cast<uint16_t>(RenderPipeline::iWindowMode);
+            const uint16_t before = *g_WindowModeWord;
+            RewriteStoreBool("render.fullscreen", wanted == 0);
+            *g_WindowModeWord = wanted;
+            spdlog::info("MGS4: Display Mode: the game chose {}; running {} instead.", before <= 2 ? names[before] : "an unknown mode", names[wanted]);
+        }
+    }
+
+    void InstallDisplayModeOverride()
+    {
+        const HMODULE module = mgs4e::game::Module();
+        auto* const base = reinterpret_cast<uint8_t*>(module);
+
+        // The loader's prologue: mov [rsp+18h],rbx; push rbp; lea rbp,[rsp-57h];
+        // sub rsp,0B0h; lea rbx,[the saved-settings path]; mov rcx,rbx; cmp qword ptr [...],10h.
+        uint8_t* const loader = mgs4e::mem::FindPattern(module,
+            "48 89 5C 24 18 55 48 8D 6C 24 A9 48 81 EC B0 00 00 00 48 8D 1D ?? ?? ?? ?? 48 8B CB 48 83 3D",
+            "Display Mode");
+        if (!loader)
+        {
+            spdlog::warn("MGS4: Display Mode: the saved-settings loader was not found - wrong executable build; the game's API and window mode are left alone.");
+            return;
+        }
+
+        // Inside it: lea rcx,[render.api]; call entry-by-key; mov rcx,rax; call entry-string.
+        const uint8_t* const keyString = mgs4e::mem::FindPattern(module, "72 65 6E 64 65 72 2E 61 70 69 00", "Display Mode");   // "render.api"
+        uint8_t* site = nullptr;
+        for (uint8_t* p = loader; p < loader + 0x700; ++p)
+        {
+            if (p[0] == 0x48 && p[1] == 0x8D && p[2] == 0x0D && p[7] == 0xE8 && p[12] == 0x48 && p[13] == 0x8B && p[14] == 0xC8 && p[15] == 0xE8
+                && keyString && reinterpret_cast<const uint8_t*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(p) + 3)) == keyString)
+            {
+                site = p;
+                break;
+            }
+        }
+        // And the copy-out of the current-settings block: movzx eax,word ptr [rsp+40h];
+        // mov [mode word],ax; mov eax,[rsp+44h]; mov [...],eax.
+        uint8_t* modeStore = nullptr;
+        for (uint8_t* p = loader; p < loader + 0x700; ++p)
+        {
+            static constexpr uint8_t kCopy[] = { 0x0F, 0xB7, 0x44, 0x24, 0x40, 0x66, 0x89, 0x05 };
+            if (std::memcmp(p, kCopy, sizeof(kCopy)) == 0 && p[12] == 0x8B && p[13] == 0x44 && p[14] == 0x24 && p[15] == 0x44 && p[16] == 0x89 && p[17] == 0x05)
+            {
+                modeStore = p;
+                break;
+            }
+        }
+        if (!site || !modeStore)
+        {
+            spdlog::warn("MGS4: Display Mode: the loader at +{:X} is not laid out as expected ({}, {}); left alone.",
+                static_cast<uintptr_t>(loader - base), site ? "api read found" : "no api read", modeStore ? "mode copy found" : "no mode copy");
+            return;
+        }
+        g_ConfigEntryByKey = reinterpret_cast<ConfigEntryByKey>(mgs4e::mem::CallTarget(site + 7));
+        g_ConfigEntryString = reinterpret_cast<ConfigEntryString>(mgs4e::mem::CallTarget(site + 15));
+        g_WindowModeWord = reinterpret_cast<uint16_t*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(modeStore) + 8));
+        if (!mgs4e::mem::Writable(g_WindowModeWord, sizeof(uint16_t)))
+        {
+            spdlog::warn("MGS4: Display Mode: the window-mode word at +{:X} is not writable; left alone.", reinterpret_cast<uintptr_t>(g_WindowModeWord) - reinterpret_cast<uintptr_t>(base));
+            return;
+        }
+
+        if (RenderPipeline::iWindowMode >= 0)
+        {
+            // The getter: movzx eax,word ptr [mode word]; ret; padding; then the next getter.
+            bool hooked = false;
+            for (uint8_t* getter : mgs4e::mem::FindAll(module, "0F B7 05 ?? ?? ?? ?? C3 CC CC CC CC CC CC CC CC 8B 05"))
+            {
+                if (reinterpret_cast<uint16_t*>(mgs4e::mem::RipTarget(reinterpret_cast<uintptr_t>(getter) + 3)) != g_WindowModeWord)
+                {
+                    continue;
+                }
+                WindowModeGetter_hook = safetyhook::create_inline(getter, reinterpret_cast<void*>(&Hooked_WindowModeGetter));
+                hooked = static_cast<bool>(WindowModeGetter_hook);
+                spdlog::info("MGS4: Display Mode: window-mode getter at +{:X} {}.", static_cast<uintptr_t>(getter - base), hooked ? "hooked" : "NOT hooked");
+                break;
+            }
+            if (!hooked)
+            {
+                spdlog::warn("MGS4: Display Mode: the window-mode getter was not found; the window mode is left to the game.");
+                RenderPipeline::iWindowMode = -1;
+            }
+        }
+
+        SavedSettingsLoader_hook = safetyhook::create_inline(loader, reinterpret_cast<void*>(&Hooked_SavedSettingsLoader));
+        spdlog::info("MGS4: Display Mode: override {} on the saved-settings loader at +{:X} (mode word at +{:X}; DirectX {}, window mode {}).",
+            SavedSettingsLoader_hook ? "installed" : "FAILED", static_cast<uintptr_t>(loader - base),
+            reinterpret_cast<uintptr_t>(g_WindowModeWord) - reinterpret_cast<uintptr_t>(base),
+            RenderPipeline::iDirectXVersion == 0 ? std::string("as the game chose") : std::to_string(RenderPipeline::iDirectXVersion),
+            RenderPipeline::iWindowMode < 0 ? "as the game chose" : (RenderPipeline::iWindowMode == 0 ? "fullscreen" : RenderPipeline::iWindowMode == 1 ? "borderless" : "windowed"));
+    }
+
     void InstallDisplayModeClamp()
     {
         const HMODULE user32 = GetModuleHandleW(L"user32.dll");
@@ -5803,6 +6012,70 @@ namespace
         spdlog::info("MGS4: String scan: {} reference(s) to '{}'.", refs, needle);
     }
 
+    // Every .text instruction that refers to a given RVA: a rip-relative operand (a global
+    // read or write, a lea of a string) or a near call/jmp to it (callers of a function).
+    void LogRvaReferences(uintptr_t target)
+    {
+        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        const auto* sections = IMAGE_FIRST_SECTION(nt);
+        uintptr_t textStart = 0;
+        size_t textSize = 0;
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++)
+        {
+            if (std::memcmp(sections[i].Name, ".text", 5) == 0)
+            {
+                textStart = sections[i].VirtualAddress;
+                textSize = sections[i].Misc.VirtualSize;
+                break;
+            }
+        }
+        if (textStart == 0)
+        {
+            return;
+        }
+        ZydisDecoder decoder;
+        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        int refs = 0;
+        size_t offset = 0;
+        while (offset < textSize && refs < 64)
+        {
+            uint8_t* const at = base + textStart + offset;
+            if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, textSize - offset, &instruction, operands)))
+            {
+                offset++;
+                continue;
+            }
+            const uintptr_t rva = textStart + offset;
+            for (ZyanU8 op = 0; op < instruction.operand_count_visible; op++)
+            {
+                uintptr_t to = 0;
+                if (operands[op].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[op].mem.base == ZYDIS_REGISTER_RIP)
+                {
+                    to = rva + instruction.length + static_cast<uintptr_t>(operands[op].mem.disp.value);
+                }
+                else if (operands[op].type == ZYDIS_OPERAND_TYPE_IMMEDIATE && operands[op].imm.is_relative)
+                {
+                    to = rva + instruction.length + static_cast<uintptr_t>(operands[op].imm.value.s);
+                }
+                if (to == target)
+                {
+                    char text[96] {};
+                    ZydisFormatter formatter;
+                    ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+                    ZydisFormatterFormatInstruction(&formatter, &instruction, operands, instruction.operand_count_visible, text, sizeof(text), 0, nullptr);
+                    spdlog::info("MGS4: Reference scan:   mgs4.exe+{:X}  {}", rva, text);
+                    refs++;
+                }
+            }
+            offset += instruction.length;
+        }
+        spdlog::info("MGS4: Reference scan: {} reference(s) to mgs4.exe+{:X}{}.", refs, target, refs >= 64 ? " (capped)" : "");
+    }
+
     // Every instruction that addresses a given struct offset.
     //
     // The UI draw list lives at +0x14FC8 in the renderer object (mgs4.exe+7A5D97 loads its
@@ -6207,6 +6480,11 @@ namespace
             InstallRendererResolution();
         }
 
+        if (iDirectXVersion != 0 || iWindowMode >= 0)
+        {
+            InstallDisplayModeOverride();
+        }
+
         bool bPixActive = false;
         if (bEnablePixCapture && LoadPixGpuCapturer())
         {
@@ -6312,6 +6590,11 @@ namespace
                 pos = comma + 1;
             }
         }
+
+        forEachRva(sFindReferences, "Reference scan", [](uintptr_t rva)
+            {
+                LogRvaReferences(rva);
+            });
 
         if (bScanNarrowingConversions)
         {

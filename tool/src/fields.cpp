@@ -12,6 +12,20 @@ namespace mgs4e::tool
 
         // --- Help text -------------------------------------------------------------------
 
+        constexpr const char* kHelp_DirectXVersion =
+            "Which renderer the game starts with, regardless of what its own options screen says.\n"
+            "\n"
+            "The game keeps this choice in its Steam-synced saved settings and asks for a restart when it changes. Set here, this value wins at every start and the options screen shows it; change it there and it will not stick while this is set. The game saves the running renderer as its own choice when it exits, so after clearing this it stays on whichever ran last.\n"
+            "\n"
+            "Leave on \"Use Game Setting\" to keep the game's own choice.";
+
+        constexpr const char* kHelp_WindowMode =
+            "How the game's window is presented, regardless of its own options.\n"
+            "\n"
+            "Fullscreen is the game's exclusive mode, Borderless a frameless window the size of the display, Windowed a normal window at the resolution chosen in-game (or the Window Resolution above).\n"
+            "\n"
+            "Leave on \"Use Game Setting\" to keep the game's own choice.";
+
         constexpr const char* kHelp_WindowAspectRatio =
             "Overrides the resolution the game runs its window at.\n"
             "\n"
@@ -208,6 +222,12 @@ namespace mgs4e::tool
                     F::Choice(G, K::WindowResolution4x3, kHelp_WindowResolution4x3, "1024x768",
                         { "640x480", "800x600", "1024x768", "1152x864", "1280x960", "1400x1050", "1440x1080", "1600x1200", "1920x1440", "2048x1536", "2560x1920", "2880x2160", "3200x2400" })
                         .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_4_3 }),
+
+                    F::Choice(G, K::WindowMode, kHelp_WindowMode, K::WindowMode_Off,
+                        { K::WindowMode_Off, K::WindowMode_Fullscreen, K::WindowMode_Borderless, K::WindowMode_Windowed }),
+
+                    F::Choice(G, K::DirectXVersion, kHelp_DirectXVersion, K::DirectXVersion_Off,
+                        { K::DirectXVersion_Off, K::DirectXVersion_11, K::DirectXVersion_12 }),
                 }},
 
                 { "Ultrawide and 4:3", {

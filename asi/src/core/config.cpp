@@ -88,6 +88,32 @@ namespace mgs4e::config
             return file;
         }
 
+        void ReadDisplayMode(const mgs4e::Ini& ini)
+        {
+            using namespace mgs4e::keys;
+
+            std::string api = DirectXVersion_Off;
+            Read(ini, Graphics, DirectXVersion, api);
+            if (api == DirectXVersion_11) { RenderPipeline::iDirectXVersion = 11; }
+            else if (api == DirectXVersion_12) { RenderPipeline::iDirectXVersion = 12; }
+            else if (api != DirectXVersion_Off)
+            {
+                spdlog::error("Config: [{}] {} = '{}' is not a choice; leaving the game's API alone.", Graphics, DirectXVersion, api);
+            }
+            Report(Graphics, DirectXVersion, api);
+
+            std::string mode = WindowMode_Off;
+            Read(ini, Graphics, WindowMode, mode);
+            if (mode == WindowMode_Fullscreen) { RenderPipeline::iWindowMode = 0; }
+            else if (mode == WindowMode_Borderless) { RenderPipeline::iWindowMode = 1; }
+            else if (mode == WindowMode_Windowed) { RenderPipeline::iWindowMode = 2; }
+            else if (mode != WindowMode_Off)
+            {
+                spdlog::error("Config: [{}] {} = '{}' is not a choice; leaving the game's window mode alone.", Graphics, WindowMode, mode);
+            }
+            Report(Graphics, WindowMode, mode);
+        }
+
         void ReadWindowSize(const mgs4e::Ini& ini)
         {
             using namespace mgs4e::keys;
@@ -164,6 +190,7 @@ namespace mgs4e::config
             Read(ini, Graphics, "Disassemble Bytes", RP::iDisassembleBytes);
             Read(ini, Graphics, "Dump Floats", RP::sDumpFloats);
             Read(ini, Graphics, "Find String", RP::sFindString);
+            Read(ini, Graphics, "Find References", RP::sFindReferences);
             Read(ini, Graphics, "Find Displacement", RP::sFindDisplacement);
             Read(ini, Graphics, "Scan Narrowing Conversions", RP::bScanNarrowingConversions);
             Read(ini, Graphics, "Scan Fixed Point Sites", RP::bScanFixedPointSites);
@@ -406,6 +433,7 @@ namespace mgs4e::config
         Report(mgs4e::keys::Debugging, mgs4e::keys::DebugLogging, verbose);
 
         ReadWindowSize(ini);
+        ReadDisplayMode(ini);
         ReadGraphicsKeys(ini);
 #if MGS4E_LAB_BUILD
         if (g_LabMode)

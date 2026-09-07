@@ -37,6 +37,12 @@ namespace RenderPipeline
     // Overrides the engine's window / swapchain resolution (render.windowSizeX/Y), which
     // is the game's actual output size. Independent of the internal render buffer, so a
     // smaller window can still be fed by a higher internal resolution.
+    // DirectX Version: 0 leaves the game's choice, 11 or 12 override it. Window Mode: -1 leaves
+    // the game's, else the engine's own numbering - 0 fullscreen (exclusive), 1 borderless,
+    // 2 windowed.
+    inline int iDirectXVersion = 0;
+    inline int iWindowMode = -1;
+
     inline bool bOverrideWindowSize = false;
     inline int iWindowSizeX = 0;
     inline int iWindowSizeY = 0;
@@ -101,6 +107,9 @@ namespace RenderPipeline
     // string ("4E14E0"); empty disables. The .text section is encrypted on disk, so this is
     // the practical way to read the game's code.
     inline std::string sDisassembleRva = "";
+    // Lab: comma-separated hex RVAs; every .text instruction whose rip-relative operand or
+    // near call/jmp targets one of them is logged ("Find References").
+    inline std::string sFindReferences = "";
     MGS4E_LAB_SWITCH(int, iDisassembleBytes, 512);
 
     // Diagnostic: logs the value at each of a comma-separated list of hex RVAs, as float and

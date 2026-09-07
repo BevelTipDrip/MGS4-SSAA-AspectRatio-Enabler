@@ -158,6 +158,14 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
+- **DirectX version and window mode are overridable in-process** (`docs/features/display-mode.md`):
+  the saved-settings loader at +65D880 writes the store's `render.api` and copies the mode
+  word to +3BD1150; the boot code creates the window through the mode getter +65D7B0 before
+  that loader returns. The override wraps the loader (store string and bool rewritten, word
+  written) and hooks the getter. Engine modes: 0 full_exclusive (popup, topmost), 1
+  full_borderless, 2 windowed. Nothing writes mgs4.savedsettings, but the game saves the
+  running API there itself on exit. Lab key `Find References` lists rip-relative and
+  call/jmp references to an RVA.
 - **The renderer squeezes any non-16:9 window's picture into a centred 16:9 band** (AR-015
   in the private letterbox register), on D3D12 and D3D11 alike: its last offscreen pass uses
   that band as its viewport, letterbox at 4:3 and pillarbox at 21:9, scene and HUD together,

@@ -24,6 +24,20 @@ namespace mgs4e::keys
     constexpr const char* WindowResolution32x9 = "Window Resolution (32:9)";
     constexpr const char* WindowResolution4x3 = "Window Resolution (4:3)";
 
+    // The renderer's API and window mode, normally the game's own options (the API is kept
+    // in its Steam-synced saved settings). Set here, the value wins at every boot and the
+    // game's options screen shows it.
+    constexpr const char* DirectXVersion = "DirectX Version";
+    constexpr const char* DirectXVersion_Off = "Use Game Setting";
+    constexpr const char* DirectXVersion_11 = "DirectX 11";
+    constexpr const char* DirectXVersion_12 = "DirectX 12";
+
+    constexpr const char* WindowMode = "Window Mode";
+    constexpr const char* WindowMode_Off = "Use Game Setting";
+    constexpr const char* WindowMode_Fullscreen = "Fullscreen";
+    constexpr const char* WindowMode_Borderless = "Borderless";
+    constexpr const char* WindowMode_Windowed = "Windowed";
+
     constexpr const char* UltrawideHud = "Ultrawide HUD";
     constexpr const char* UltrawideHud_Stretched = "Stretched HUD";
     constexpr const char* UltrawideHud_Centered = "Centered HUD";
