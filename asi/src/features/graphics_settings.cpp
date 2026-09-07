@@ -567,7 +567,8 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
         // id stored into the same slot - 4 rather than 5. More samples soften the edge of a
         // shadow rather than sharpening it, so this is independent of the resolution scale
         // and useful on its own: the highest preset ships 7.
-        if (iShadowSampleCount > 0)
+        if (iShadowSampleCount > 0
+            && !mgs4e::compat::Yields(mgs4e::keys::Graphics, mgs4e::keys::ShadowSampleCount))
         {
             if (uint8_t* ShadowSampleCountResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
                 "48 8D 4B 30 E8 ?? ?? ?? ?? C7 45 ?? 04 00 00 00",

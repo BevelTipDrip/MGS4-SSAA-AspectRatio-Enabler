@@ -226,6 +226,13 @@ A save writes just those values back into the mod's file; comments and everythin
 stay as they were. If the mod's files are sitting somewhere the game does not load from (the
 install folder's own `scripts\` rather than `MGS4\scripts\`, a common slip), the tab says so.
 
+**One mod per feature.** Several mods patch the same few things (shadow resolution, dynamic
+resolution, anisotropic filtering) and two of them on at once stack or fight at start-up. A
+manifest can say which *feature* each of its keys switches on, and this mod's own settings
+declare theirs, so the tool shows beside every row which other mod also has it on and, when
+you save, asks which mod keeps each feature and turns the others off. The `.asi` reads the same
+manifests when the game starts and stands down on anything another mod already has on.
+
 **Mod authors:** nothing in this tool needs to change for yours. Ship your own manifest next
 to your `.ini`: the file to edit, a blurb, a link, and one block per setting (int, bool or
 choice, with label, range or choices, default and tooltip). Only the keys you list are ever

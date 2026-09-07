@@ -156,6 +156,9 @@ namespace mgs4e::tool::modconfig
     //   Choices = Fast|Balanced|Quality   ; choice: required, "|" between the values as written
     //   BoolText = true|false             ; bool: what to write; 1|0 when absent
     //   Help = What it does.              ; the tooltip; "\n" breaks a line
+    //   Feature = shadow-resolution       ; what the key switches on (shared/features.hpp);
+    //   Off = 0                           ;   the value at which it is off (a bool: its false
+    //   AlwaysOn = true                   ;   spelling); or on whenever the mod is installed
     //
     // Only keys with a block are ever written. Mistakes are collected in `problems` and shown
     // on the tab, and the row concerned is left out; the tab itself still appears.
@@ -248,6 +251,9 @@ namespace mgs4e::tool::modconfig
 
             Key row;
             row.label = Keep(*mod, label.empty() ? key : label);
+            const std::string feature(Trim(text(block, "Feature")));
+            const std::string offText(Trim(text(block, "Off")));
+            const bool alwaysOn = Lower(std::string(Trim(text(block, "AlwaysOn")))) == "true" || Trim(text(block, "AlwaysOn")) == "1";
 
             if (type == "int")
             {
@@ -328,6 +334,24 @@ namespace mgs4e::tool::modconfig
             {
                 mod->problems.push_back(where + ": Type \"" + type + "\" is not int, bool or choice.");
                 continue;
+            }
+            if (!feature.empty())
+            {
+                row.feature = Keep(*mod, feature);
+                row.alwaysOn = alwaysOn;
+                if (!offText.empty())
+                {
+                    row.offText = Keep(*mod, offText);
+                }
+                else if (type == "bool")
+                {
+                    row.offText = row.falseText;
+                }
+                else if (!alwaysOn)
+                {
+                    mod->problems.push_back(where + ": Feature needs Off (the value at which the mod does nothing) or AlwaysOn = true.");
+                    row.feature = "";
+                }
             }
             mod->keys.push_back(std::move(row));
         }

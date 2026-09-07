@@ -3,6 +3,7 @@
 
 #include "compat.hpp"
 #include "compat_table.hpp"
+#include "features.hpp"
 #include "ini.hpp"
 #include "settings_keys.hpp"
 #include "version.hpp"
@@ -174,6 +175,7 @@ namespace mgs4e::tool
 
         WriteControls();
         UpdateDependencies();
+        RefreshOverlapNotes();
 
         wxBoxSizer* frameSizer = new wxBoxSizer(wxVERTICAL);
         frameSizer->Add(root, 1, wxEXPAND);
@@ -338,6 +340,7 @@ namespace mgs4e::tool
             ModRow row;
             row.key = &key;
             wxStaticText* label = new wxStaticText(boxParent, wxID_ANY, key.label);
+            row.label = label;
             switch (f.type)
             {
             case Field::Type::Bool:
@@ -718,6 +721,10 @@ namespace mgs4e::tool
     bool MainFrame::Save()
     {
         ReadControls();
+        if (!ResolveOverlaps())
+        {
+            return false;
+        }
         if (const auto error = m_Settings.Save(m_File))
         {
             wxMessageBox(*error, "Could not save", wxOK | wxICON_ERROR, this);
@@ -741,6 +748,180 @@ namespace mgs4e::tool
             saved += mod->file.Path().filename().wstring();
         }
         SetStatus(wxString::Format("Saved %s. Takes effect the next time the game starts.", saved));
+        RefreshOverlapNotes();
+        return true;
+    }
+
+    // ---- feature ownership -------------------------------------------------------------------
+
+    std::vector<MainFrame::Owner> MainFrame::ActiveOwners()
+    {
+        std::vector<Owner> owners;
+        for (Row& row : m_Rows)
+        {
+            const Field* f = ActiveField(row);
+            if (!f) { continue; }
+            const mgs4e::features::Ours* ours = mgs4e::features::OurClaim(f->section, f->key);
+            if (!ours) { continue; }
+            const std::string value = m_Settings.Get(f->section, f->key);
+            if (mgs4e::features::IsOff(value, ours->off)) { continue; }
+            owners.push_back(Owner{ ours->feature, MGS4E_DISPLAY_NAME, f->key, value, false, &row, nullptr, nullptr });
+        }
+        for (auto& page : m_ModPages)
+        {
+            for (ModRow& row : page->rows)
+            {
+                const modconfig::Key& key = *row.key;
+                if (!*key.feature) { continue; }
+                const std::string value = page->file.Get(key.field.section, key.field.key);
+                const bool on = page->found.asi.empty() && !page->found.loadable ? false
+                    : (key.alwaysOn || !mgs4e::features::IsOff(value, key.offText));
+                if (!on) { continue; }
+                owners.push_back(Owner{ key.feature, page->found.mod->name, key.label,
+                    key.alwaysOn ? std::string("always on") : value, key.alwaysOn, nullptr, page.get(), &row });
+            }
+        }
+        return owners;
+    }
+
+    void MainFrame::RefreshOverlapNotes()
+    {
+        const std::vector<Owner> owners = ActiveOwners();
+        // Our rows: their labels are rebuilt from LabelFor plus the note.
+        for (Row& row : m_Rows)
+        {
+            wxString note;
+            const Field* f = ActiveField(row);
+            const mgs4e::features::Ours* ours = f ? mgs4e::features::OurClaim(f->section, f->key) : nullptr;
+            if (ours)
+            {
+                for (const Owner& o : owners)
+                {
+                    if (o.row == &row || o.feature != ours->feature) { continue; }
+                    // The greyed-out note already names the mod that owns this outright.
+                    if (row.override && o.modName == row.override->modName) { continue; }
+                    note += note.empty() ? "  - also on in " : ", ";
+                    note += wxString::Format("%s (%s)", o.modName, o.value);
+                }
+            }
+            row.label->SetLabel(LabelFor(row) + note);
+        }
+        for (auto& page : m_ModPages)
+        {
+            for (ModRow& row : page->rows)
+            {
+                wxString note;
+                if (*row.key->feature)
+                {
+                    for (const Owner& o : owners)
+                    {
+                        if (o.modRow == &row || o.feature != row.key->feature) { continue; }
+                        note += note.empty() ? "  - also on in " : ", ";
+                        note += wxString::Format("%s (%s)", o.modName, o.value);
+                    }
+                }
+                row.label->SetLabel(wxString(row.key->label) + note);
+                if (!note.empty())
+                {
+                    row.label->SetForegroundColour(wxColour(214, 128, 44));
+                }
+                else
+                {
+                    row.label->SetForegroundColour(wxNullColour);
+                }
+            }
+        }
+        Layout();
+    }
+
+    void MainFrame::SetOwnerOff(const Owner& owner)
+    {
+        if (owner.row)
+        {
+            const Field* f = ActiveField(*owner.row);
+            const mgs4e::features::Ours* ours = f ? mgs4e::features::OurClaim(f->section, f->key) : nullptr;
+            if (f && ours)
+            {
+                m_Settings.Set(f->section, f->key, ours->off);
+            }
+        }
+        else if (owner.page && owner.modRow)
+        {
+            const modconfig::Key& key = *owner.modRow->key;
+            owner.page->file.Set(key.field.section, key.field.key, key.offText);
+        }
+    }
+
+    bool MainFrame::ResolveOverlaps()
+    {
+        // Feature -> owners that are on. Two or more means a choice to make.
+        std::vector<Owner> owners = ActiveOwners();
+        std::vector<std::string> features;
+        for (const Owner& o : owners)
+        {
+            if (std::find(features.begin(), features.end(), o.feature) == features.end())
+            {
+                features.push_back(o.feature);
+            }
+        }
+        bool changed = false;
+        for (const std::string& feature : features)
+        {
+            std::vector<const Owner*> on;
+            for (const Owner& o : owners)
+            {
+                if (o.feature == feature) { on.push_back(&o); }
+            }
+            if (on.size() < 2) { continue; }
+
+            const wxString name(std::string(mgs4e::features::DisplayName(feature)));
+            const Owner* forced = nullptr;
+            for (const Owner* o : on)
+            {
+                if (o->alwaysOn) { forced = o; break; }
+            }
+            if (forced)
+            {
+                // One of them cannot be turned off from here: it wins, the rest go off.
+                wxString others;
+                for (const Owner* o : on)
+                {
+                    if (o == forced) { continue; }
+                    others += wxString::Format("\n  - %s: %s = %s", o->modName, o->label, o->value);
+                }
+                const int answer = wxMessageBox(
+                    wxString::Format("%s is set by %s whenever it is installed (%s), and also here:%s\n\nTwo mods patching the same thing stack or fight at start-up. Turn the others off and keep %s's?",
+                                     name, forced->modName, forced->label, others, forced->modName),
+                    "More than one mod owns " + name, wxYES_NO | wxICON_QUESTION, this);
+                if (answer != wxYES) { return false; }
+                for (const Owner* o : on)
+                {
+                    if (o != forced) { SetOwnerOff(*o); changed = true; }
+                }
+                continue;
+            }
+
+            wxArrayString choices;
+            for (const Owner* o : on)
+            {
+                choices.Add(wxString::Format("%s: %s = %s", o->modName, o->label, o->value));
+            }
+            wxSingleChoiceDialog dialog(this,
+                wxString::Format("%s is turned on in more than one mod. Two mods patching the same thing stack or fight at start-up, so only one should have it.\n\nWhich one keeps it? The others are set to their off values.", name),
+                "More than one mod owns " + name, choices);
+            dialog.SetSelection(0);
+            if (dialog.ShowModal() != wxID_OK) { return false; }
+            const int keep = dialog.GetSelection();
+            for (int i = 0; i < static_cast<int>(on.size()); ++i)
+            {
+                if (i != keep) { SetOwnerOff(*on[static_cast<size_t>(i)]); changed = true; }
+            }
+        }
+        if (changed)
+        {
+            WriteControls();
+            UpdateDependencies();
+        }
         return true;
     }
 

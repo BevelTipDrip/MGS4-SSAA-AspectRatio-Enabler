@@ -71,6 +71,8 @@
     <ClInclude Include="src\mod_config.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
     <ClInclude Include="..\shared\compat_table.hpp" />
+    <ClInclude Include="..\shared\features.hpp" />
+    <ClInclude Include="..\shared\manifest_claims.hpp" />
     <ClInclude Include="..\shared\settings_keys.hpp" />
     <ClInclude Include="..\shared\version.hpp" />
   </ItemGroup>

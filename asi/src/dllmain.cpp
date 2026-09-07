@@ -41,6 +41,7 @@ namespace
 
             mgs4e::config::Load();
             mgs4e::compat::Detect();
+            mgs4e::compat::LogOverlaps();
 
             // Render pipeline first: it resolves the render size globals the aspect fixes
             // read, and calls GraphicsSettings and AspectRatio itself in the order they need.

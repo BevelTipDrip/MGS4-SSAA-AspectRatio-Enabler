@@ -66,6 +66,50 @@ file with no section headers at all, write `[Key]`.
 | `Choices` | `choice`, required | The values exactly as they are written in your file, with `\|` between them. |
 | `BoolText` | `bool` | What true and false are written as, true first: `true\|false`, `on\|off`. `1\|0` when absent. |
 
+## Features: saying what a setting switches on
+
+Several MGS4 mods patch the same few things - shadow resolution, dynamic resolution,
+anisotropic filtering - each behind a value in its own config file. Two of them on at once
+stack or fight at start-up, in whatever order the loader ran them. To let the tool keep exactly
+one mod on each thing, a block can say which **feature** its key switches on:
+
+```ini
+[ShadowResolutionOverride]
+Type = int
+Min = 0
+Max = 8192
+Default = 0
+Feature = shadow-resolution
+Off = 0
+
+[Enhancements/Anisotropic Filtering Level]
+Type = int
+Min = 1
+Max = 16
+Feature = anisotropic-filtering
+AlwaysOn = true
+```
+
+| Key | Meaning |
+| --- | --- |
+| `Feature` | The shared name of the thing this key switches on. Use one from the list below, or a new one; ids are compared as text. |
+| `Off` | The value at which your mod does nothing for that feature. Required, except for a `bool` (its false spelling) or with `AlwaysOn`. |
+| `AlwaysOn` | `true` when your mod patches the feature whenever it is installed, whatever the value. |
+
+Known ids: `shadow-resolution`, `shadow-filter`, `dynamic-resolution`, `anisotropic-filtering`,
+`internal-resolution`, `frame-rate`, `skip-intro`, `motion-blur`, `api`, `window-mode`.
+
+With that declared:
+
+- On every tab, a row whose feature is also on in another mod says so beside its label, in
+  orange, naming the mod and its value.
+- On save, for each feature that is on in more than one mod, the tool asks which one keeps it
+  and sets the others to their `Off` values. An `AlwaysOn` claim always wins; the tool says so
+  and offers to turn the others off.
+- The Enabler's own `.asi` reads the manifests at start and stands down on any feature another
+  installed mod has on, so its patch never stacks on yours. It also logs a warning naming any
+  two other mods that both have a feature on.
+
 ## What the tool does with it
 
 - The tab lists only the blocks you wrote. **Nothing else in your file is ever written**: a save

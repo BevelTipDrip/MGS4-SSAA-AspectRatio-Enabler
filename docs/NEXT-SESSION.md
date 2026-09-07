@@ -158,6 +158,11 @@ rediscovered the hard way:
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
   (AR-014 in the private letterbox register): viewports and scissors remapped while the back
   buffer is bound, D3D11 and D3D12 paths. Verify by the MGS4: fit: log line.
+- **Features, one owner each** (`shared/features.hpp`, `shared/manifest_claims.hpp`): manifest
+  blocks carry `Feature`/`Off`/`AlwaysOn`; our own claims are `features::kOurs`. The tool
+  (`ActiveOwners`/`ResolveOverlaps` in ui.cpp) annotates rows and asks at save; the ASI
+  (`compat::Yields` + `LogOverlaps`) stands down and warns. Manifests for the unlocker and
+  FusionFix ship in the zip; PatriotFix's lives only in the user's game folder.
 - **DirectX version and window mode are overridable in-process** (`docs/features/display-mode.md`):
   the saved-settings loader at +65D880 writes the store's `render.api` and copies the mode
   word to +3BD1150; the boot code creates the window through the mode getter +65D7B0 before

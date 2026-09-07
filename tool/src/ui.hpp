@@ -33,6 +33,7 @@ namespace mgs4e::tool
         struct ModRow
         {
             const modconfig::Key* key = nullptr;
+            wxStaticText* label = nullptr;
             wxWindow* control = nullptr;
         };
         struct ModPage
@@ -63,6 +64,25 @@ namespace mgs4e::tool
 
         bool Save();
         bool Dirty();
+
+        // Feature ownership (shared/features.hpp): every setting, ours or a manifest mod's,
+        // that is on for a feature. Overlaps are shown beside the rows concerned and, at
+        // save time, resolved by asking which mod keeps each feature.
+        struct Owner
+        {
+            std::string feature;
+            std::string modName;    // MGS4E_DISPLAY_NAME for ours
+            std::string label;      // the row's label
+            std::string value;
+            bool alwaysOn = false;
+            Row* row = nullptr;         // ours, or
+            ModPage* page = nullptr;    // theirs
+            ModRow* modRow = nullptr;
+        };
+        std::vector<Owner> ActiveOwners();
+        void RefreshOverlapNotes();
+        bool ResolveOverlaps();
+        void SetOwnerOff(const Owner& owner);
         void OnResetToDefaults(wxCommandEvent&);
         void OnSave(wxCommandEvent&);
         void OnSaveAndExit(wxCommandEvent&);

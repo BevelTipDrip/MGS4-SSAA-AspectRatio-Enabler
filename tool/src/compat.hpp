@@ -1,5 +1,7 @@
 #pragma once
 
+#include "manifest_claims.hpp"
+
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -37,4 +39,7 @@ namespace mgs4e::tool::compat
         std::string value;     // e.g. "16", or "default" when their key is absent
     };
     std::optional<Override> Overrides(const std::string& section, const std::string& key);
+
+    // The manifest mods' feature claims as found on disk at Detect() (shared/manifest_claims.hpp).
+    const std::vector<mgs4e::manifests::Mod>& Manifests();
 }

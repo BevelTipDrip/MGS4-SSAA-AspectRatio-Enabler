@@ -3,6 +3,7 @@
 
 #include "ini.hpp"
 #include "compat_table.hpp"
+#include "features.hpp"
 #include "version.hpp"
 
 namespace mgs4e::tool::compat
@@ -11,6 +12,12 @@ namespace mgs4e::tool::compat
     {
         std::vector<Status> g_Status;
         std::vector<mgs4e::Ini> g_Settings;
+        std::vector<mgs4e::manifests::Mod> g_Manifests;
+    }
+
+    const std::vector<mgs4e::manifests::Mod>& Manifests()
+    {
+        return g_Manifests;
     }
 
     void Detect(const std::filesystem::path& gameRoot)
@@ -39,6 +46,7 @@ namespace mgs4e::tool::compat
             s.settingsPath = gameRoot / kMods[i].settingsFile;
             s.settingsFound = g_Settings[i].Load(s.settingsPath);
         }
+        g_Manifests = mgs4e::manifests::Scan(gameRoot, std::string(MGS4E_NAME) + ".settings");
     }
 
     const std::vector<Status>& All()
@@ -61,16 +69,29 @@ namespace mgs4e::tool::compat
 
     std::optional<Override> Overrides(const std::string& section, const std::string& key)
     {
-        const mgs4e::compat::Entry* entry = mgs4e::compat::Find(section.c_str(), key.c_str());
-        if (!entry || entry->mod >= g_Status.size())
+        if (const mgs4e::compat::Entry* entry = mgs4e::compat::Find(section.c_str(), key.c_str()); entry && entry->mod < g_Status.size())
         {
-            return std::nullopt;
+            const std::string theirs = g_Settings[entry->mod].Raw(entry->theirSection, entry->theirKey).value_or(std::string());
+            if (mgs4e::compat::TheirsWins(*entry, g_Status[entry->mod].asiInstalled, theirs))
+            {
+                return Override{ mgs4e::compat::kMods[entry->mod].name, entry->theirKey, theirs.empty() ? "default" : theirs };
+            }
         }
-        const std::string theirs = g_Settings[entry->mod].Raw(entry->theirSection, entry->theirKey).value_or(std::string());
-        if (!mgs4e::compat::TheirsWins(*entry, g_Status[entry->mod].asiInstalled, theirs))
+        // Only an always-on claim greys our field out for good: a value-gated one the user
+        // can turn off from its own tab, so it is reported as an overlap instead (ui.cpp).
+        if (const mgs4e::features::Ours* ours = mgs4e::features::OurClaim(section, key))
         {
-            return std::nullopt;
+            for (const auto& m : g_Manifests)
+            {
+                for (const auto& c : m.claims)
+                {
+                    if (c.active && c.alwaysOn && c.feature == ours->feature)
+                    {
+                        return Override{ m.name.c_str(), c.key, "always on" };
+                    }
+                }
+            }
         }
-        return Override{ mgs4e::compat::kMods[entry->mod].name, entry->theirKey, theirs.empty() ? "default" : theirs };
+        return std::nullopt;
     }
 }

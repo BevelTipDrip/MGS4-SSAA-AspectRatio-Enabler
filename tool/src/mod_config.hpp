@@ -36,6 +36,12 @@ namespace mgs4e::tool::modconfig
         // What a bool is written as. Most small inis use 1/0; a manifest may say otherwise.
         const char* trueText = "1";
         const char* falseText = "0";
+        // The feature this key gates (shared/features.hpp), the value at which the mod's
+        // patch is off, and whether it is on regardless of the value while the mod is there.
+        // Empty feature: the key claims nothing.
+        const char* feature = "";
+        const char* offText = "";
+        bool alwaysOn = false;
     };
 
     struct Mod

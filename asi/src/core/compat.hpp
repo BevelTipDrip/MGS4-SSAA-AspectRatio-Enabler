@@ -24,4 +24,13 @@ namespace mgs4e::compat
 
     // The raw value of one of a known mod's settings, or empty when absent.
     std::string Value(std::size_t mod, const char* theirSection, const char* theirKey);
+
+    // Feature claims from other mods' manifests (shared/manifest_claims.hpp), read at
+    // Detect(). Yields() consults them too: a feature another mod's manifest says it has on
+    // makes our setting for that feature stand down, table or no table.
+    //
+    // LogOverlaps() reports every feature that two or more *other* mods have on at once -
+    // their patches will stack and nothing here can stop that - so the game log names the
+    // pair and points at the tool, which resolves it.
+    void LogOverlaps();
 }

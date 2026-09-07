@@ -7,6 +7,7 @@ changelog box as is.
 ## 0.0.6 (2026-09-07)
 
 New
+- One mod per feature: manifests (and this mod's own settings) declare which feature each key switches on. The tool marks every row another installed mod also has on, and on save asks which mod keeps each feature, turning the others off. The .asi reads the same manifests at start, stands down on features another mod has on, and warns in its log when two other mods both have one on.
 - A Save and Launch Game button: saves, then starts the game through Steam.
 - MGSFPSUnlock's tab now comes from a manifest shipped in the zip (MGS4\scripts\MGSFPSUnlock.MGS4Enabler.ini) instead of being built into the tool; a manifest shows a tab only while its mod is installed.
 - A manifest for MGS4.FusionFix too (MGS4\scripts\MGS4.FusionFix.MGS4Enabler.ini): skip intro, dynamic resolution, shadow texel size and shadow resolution. Its shadow and dynamic-resolution overrides overlap this mod's and MGSPatriotFix's; pick one owner.
