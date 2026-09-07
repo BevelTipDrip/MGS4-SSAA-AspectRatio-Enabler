@@ -46,8 +46,8 @@ BoolText = true|false
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `Name` | yes | The tab's title. |
-| `Ini` | yes | The file the tab edits. A bare file name; it must sit beside the manifest. If it does not exist yet it is created on the first save. |
-| `Asi` | no | Your `.asi`. The tool uses it to tell the user when the files sit somewhere the game does not load from. |
+| `Ini` | yes | The file the tab edits. A bare file name, looked for beside the manifest and then in the game's install folder (where some mods keep their settings, beside the launcher). If it exists in neither it is created beside the manifest on the first save. |
+| `Asi` | no | Your `.asi`. The tool looks for it in the folders the game's loader scans and tells the user when it is only found somewhere the game does not load from. Leave it out and no such check is made. |
 | `Url` | no | A link shown on the tab. |
 | `Blurb` | no | Text above the settings. `\n` breaks a line. |
 
@@ -70,7 +70,8 @@ file with no section headers at all, write `[Key]`.
 
 - The tab lists only the blocks you wrote. **Nothing else in your file is ever written**: a save
   replaces the value part of each changed line and leaves comments, order and unknown keys as
-  they were. A key that has no line yet is added at the end of its section.
+  they were. A value your file had in quotes is written back in quotes. A key that has no line
+  yet is added at the end of its section.
 - A mistake in the manifest (a missing `Type`, an `int` without `Min`/`Max`, a `Default` that is
   not one of the `Choices`) does not hide the tab. The tab shows the problem in orange and
   leaves that row out, so you see it the first time you try it.

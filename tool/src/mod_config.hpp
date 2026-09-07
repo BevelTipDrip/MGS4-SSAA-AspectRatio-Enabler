@@ -79,6 +79,12 @@ namespace mgs4e::tool::modconfig
 
     // One entry per mod found - manifests first, then table entries whose file exists and
     // has no manifest - preferring a loadable copy of each.
+    //
+    // For a manifest: the ini is looked for beside the manifest, then in the game root (some
+    // mods keep their settings there, beside the launcher, while the .asi sits in
+    // MGS4\scripts). `loadable` is judged by the .asi the manifest names - present in any
+    // folder the game's loader scans - and is true when it names none, since there is then
+    // nothing to judge. Table entries keep the old rule: ini and asi beside each other.
     std::vector<Found> Detect(const std::filesystem::path& gameRoot);
 
     // An editable copy of one file. Values are read with the shared INI parser; Save() puts

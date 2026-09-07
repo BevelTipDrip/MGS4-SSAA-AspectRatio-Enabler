@@ -400,14 +400,46 @@ namespace mgs4e::tool::modconfig
                 }
                 Found f;
                 f.mod = mod;
-                f.loadable = place.loadable;
                 if (*mod->fileName)
                 {
+                    // Beside the manifest, else in the game root; beside the manifest when
+                    // neither exists yet (the tab creates it there on save).
                     f.file = dir / mod->fileName;
+                    if (!std::filesystem::exists(f.file, ec) && std::filesystem::exists(gameRoot / mod->fileName, ec))
+                    {
+                        f.file = gameRoot / mod->fileName;
+                    }
                 }
-                if (*mod->asiFile && std::filesystem::exists(dir / mod->asiFile, ec))
+                if (*mod->asiFile)
                 {
-                    f.asi = dir / mod->asiFile;
+                    // The .asi decides whether the mod runs: the first copy in a folder the
+                    // game's loader scans, else wherever a copy sits (flagged), else nothing.
+                    f.loadable = false;
+                    for (const Place& where : places)
+                    {
+                        const std::filesystem::path asi = gameRoot / where.dir / mod->asiFile;
+                        if (!std::filesystem::exists(asi, ec))
+                        {
+                            continue;
+                        }
+                        if (f.asi.empty() || (!f.loadable && where.loadable))
+                        {
+                            f.asi = asi;
+                            f.loadable = where.loadable;
+                        }
+                        if (f.loadable)
+                        {
+                            break;
+                        }
+                    }
+                    if (f.asi.empty())
+                    {
+                        f.loadable = place.loadable;   // no .asi anywhere: judge by the manifest's own folder
+                    }
+                }
+                else
+                {
+                    f.loadable = true;
                 }
                 const std::string id = Lower(*mod->fileName ? mod->fileName : manifest.filename().string());
                 const auto seen = byIni.find(id);
@@ -584,7 +616,11 @@ namespace mgs4e::tool::modconfig
                     {
                         ++cut;
                     }
-                    m_Lines[i] = line.substr(0, cut) + value;
+                    // A value the file had in quotes stays in quotes: some mods' readers want
+                    // them (and a value with spaces needs them).
+                    const std::string_view rest = Trim(std::string_view(line).substr(cut));
+                    const bool quoted = rest.size() >= 2 && rest.front() == '"' && rest.back() == '"';
+                    m_Lines[i] = line.substr(0, cut) + (quoted ? "\"" + value + "\"" : value);
                     replaced = true;
                     break;
                 }

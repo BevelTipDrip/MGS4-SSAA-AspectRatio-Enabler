@@ -4,10 +4,10 @@ Every release gets an entry here before it is packaged; `build\package.ps1` refu
 zip whose version has no heading below. The text is written to be pasted into the Nexus Mods
 changelog box as is.
 
-## 0.0.6 (unreleased)
+## 0.0.6 (2026-09-07)
 
 New
-- Mod authors can give their own config file a tab in the tool without a code change: ship a `<YourMod>.MGS4Enabler.ini` manifest next to the .ini, describing the file, a blurb, a link and one block per setting (int, bool or choice). Only the listed keys are ever written. Mistakes in the manifest are shown on the tab rather than hiding it. Format and example: docs/mod-tabs.md.
+- Mod authors can give their own config file a tab in the tool without a code change: ship a `<YourMod>.MGS4Enabler.ini` manifest next to the .ini, describing the file, a blurb, a link and one block per setting (int, bool or choice). Only the listed keys are ever written. Mistakes in the manifest are shown on the tab rather than hiding it. The ini may sit beside the manifest or in the install folder, quoted values stay quoted, and the mod's .asi is looked for wherever the game loads from. Format and example: docs/mod-tabs.md.
 
 ## 0.0.5 (2026-09-07)
 
