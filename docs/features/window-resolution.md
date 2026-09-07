@@ -64,6 +64,47 @@ None recorded.
   window the same way it handles a wider one. It stays filed here because this is the setting
   that exposes it; the fix belongs to the aspect-ratio feature
 
+### WR-002 — windowed mode with the in-game resolution below the override: black on D3D11, misaligned on D3D12
+
+**Reported** by the user 2026-09-07: windowed mode, 2560x1440 chosen in the game's own options,
+the override at 3200x1800 on a 3840x2160 desktop. D3D11 showed nothing, D3D12 drew the picture
+offset. Setting the in-game resolution at or above the override was fine.
+
+**Cause (Measured).** The engine keeps its resolution twice. The window-size globals, which the
+override writes at config time, size the window (in windowed mode the window's client area was
+our 3200x1800) and the engine's own render targets and viewports. The renderer context keeps a
+second copy in its init record (`context+0x4C1230C/+0x4C12310`), filled by the game's own
+resolution setting, which the per-frame submit at `+76DFF0` copies into each frame
+(`movups [frame+0x24D35C8], xmm0` at `+76E01D`, found with a displacement search over the
+whole executable). The backends size their own buffers from that copy, clamp view rects to it
+and ask for the swap chain resize with it: a lab caller walk from `ResizeBuffers1` went
+`+7E2078 < +7A9767 < +7A5779 < +76628F`, the D3D12 backend's `updateResolution` reading the
+frame record. So the window and the engine's targets were 3200x1800 while the renderer's
+buffers and clamp were 2560x1440: D3D11 drops draws whose colour and depth targets differ in
+size (black), D3D12 clamps the view rects (misaligned). With the in-game value at or above
+the override the clamp never bites, which is why fullscreen and the earlier tests passed.
+(This also re-reads AR-014: what the engine "asks for" at the fullscreen resize is this copy,
+i.e. the game's own resolution setting, which defaults to the largest display mode.)
+
+**Fix.** `InstallRendererResolution` (render_pipeline.cpp) hooks the submit at `+76DFF0`
+(prologue verified) and, with the override on, writes the window-size globals into the init
+record's width and height before it runs, so every frame's resolution is the window's. In
+windowed mode the chain request then equals the window and the private module's
+`SizeToWindow` has nothing to substitute; in fullscreen the chain still follows the desktop and
+the fit places the picture as before. Log lines: `renderer resolution hook installed`, then
+`the renderer's own resolution 2560x1440 -> 3200x1800 (the window size)` and
+`ResizeBuffers1(3200x1800) requested` in a lab build. Verified on D3D12 in the reported
+configuration: window client 3200x1800 on the 3840x2160 desktop, title scene filling it, from
+a desktop grab (the harness's window capture is black for a windowed flip-model chain, which
+is a capture limitation, not the game). D3D11 and an in-game resolution change while running
+are pending the user's test.
+
+Alongside it, the render-config hook now caps the override to the surface it will land in
+(the game window's client area once it exists, the primary desktop before that), shrinking
+it with its shape kept and logging `the AxB override is larger than the CxD window; using ExF`.
+That is a separate, lesser problem, an override larger than the screen, and not the cause of
+this bug.
+
 ---
 
 ## Retracted / unverified

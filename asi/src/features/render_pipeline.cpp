@@ -2446,6 +2446,63 @@ namespace
         return EnumDisplaySettingsExW_hook.stdcall<BOOL>(device, mode, dm, flags);
     }
 
+    // The renderer's own resolution (AR-019, 2026-09-07). The engine keeps a second copy of
+    // its resolution inside the renderer context: the init record's width and height, which
+    // the per-frame submit copies into each frame ("movups [frame+0x24D35C8], xmm0" from
+    // context+0x4C12308 at +76E010) and the backends then use to size their buffers, to
+    // clamp view rects and to ask for the swap chain resize. The window-size override never
+    // reached that copy, so with the in-game resolution set below the override - windowed
+    // mode, 2560x1440 chosen in-game under a 3200x1800 override - the window was ours and the
+    // renderer's buffers and clamp were the game's: draws dropped on D3D11 (black), clamped
+    // on D3D12 (misaligned). The submit is hooked and the record is written from the window
+    // size globals before it runs, so every frame's resolution is the window's. In fullscreen
+    // the chain still follows the desktop (SizeToWindow in the private module) and the fit
+    // places the picture, as before.
+    constexpr uintptr_t kRvaRendererSubmit = 0x76DFF0;
+    constexpr uintptr_t kContextResolutionWidth = 0x4C1230C;
+    constexpr uintptr_t kContextResolutionHeight = 0x4C12310;
+    SafetyHookInline RendererSubmit_hook {};
+    std::atomic<int> g_RendererResolutionReported { 0 };
+
+    uint32_t __fastcall Hooked_RendererSubmit(uint8_t* context)
+    {
+        if (context && RenderPipeline::bOverrideWindowSize && RenderPipeline::pWindowResX && RenderPipeline::pWindowResY)
+        {
+            const int32_t w = *RenderPipeline::pWindowResX;
+            const int32_t h = *RenderPipeline::pWindowResY;
+            if (w > 0 && h > 0)
+            {
+                int32_t current[2] {};
+                std::memcpy(&current[0], context + kContextResolutionWidth, sizeof(int32_t));
+                std::memcpy(&current[1], context + kContextResolutionHeight, sizeof(int32_t));
+                if (current[0] != w || current[1] != h)
+                {
+                    if (g_RendererResolutionReported.fetch_add(1) < 4)
+                    {
+                        spdlog::info("MGS4: Window Size: the renderer's own resolution {}x{} -> {}x{} (the window size).", current[0], current[1], w, h);
+                    }
+                    std::memcpy(context + kContextResolutionWidth, &w, sizeof(int32_t));
+                    std::memcpy(context + kContextResolutionHeight, &h, sizeof(int32_t));
+                }
+            }
+        }
+        return RendererSubmit_hook.fastcall<uint32_t>(context);
+    }
+
+    void InstallRendererResolution()
+    {
+        auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaRendererSubmit;
+        // mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,20h; mov rdi,rcx - the prologue seen in-process.
+        constexpr uint8_t kExpected[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9 };
+        if (!mgs4e::mem::Readable(at, sizeof(kExpected)) || std::memcmp(at, kExpected, sizeof(kExpected)) != 0)
+        {
+            spdlog::warn("MGS4: Window Size: the renderer submit at +{:X} does not look as expected - wrong executable build; the renderer's resolution is left to the game.", kRvaRendererSubmit);
+            return;
+        }
+        RendererSubmit_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&Hooked_RendererSubmit));
+        spdlog::info("MGS4: Window Size: renderer resolution hook {}.", RendererSubmit_hook ? "installed" : "FAILED");
+    }
+
     void InstallDisplayModeClamp()
     {
         const HMODULE user32 = GetModuleHandleW(L"user32.dll");
@@ -2463,6 +2520,43 @@ namespace
         }
         spdlog::info("MGS4: Window Size: display mode clamp {} (EnumDisplaySettingsW {}, ExW {}).",
             EnumDisplaySettingsW_hook ? "installed" : "FAILED", EnumDisplaySettingsW_hook ? "ok" : "no", EnumDisplaySettingsExW_hook ? "ok" : "no");
+    }
+
+    // The surface the window override must fit into: the game's own top-level window's
+    // client area once the window exists (windowed mode sizes it from the in-game setting;
+    // fullscreen makes it the desktop), else the primary desktop's current mode. The name
+    // says which one was used.
+    BOOL CALLBACK FindGameWindow(HWND hwnd, LPARAM param)
+    {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid != GetCurrentProcessId() || !IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr) { return TRUE; }
+        RECT client {};
+        if (!GetClientRect(hwnd, &client) || client.right < 64 || client.bottom < 64) { return TRUE; }
+        *reinterpret_cast<HWND*>(param) = hwnd;
+        return FALSE;
+    }
+
+    const char* SurfaceSize(int& width, int& height)
+    {
+        HWND game = nullptr;
+        EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&game));
+        RECT client {};
+        if (game && GetClientRect(game, &client) && client.right > 0 && client.bottom > 0)
+        {
+            width = client.right;
+            height = client.bottom;
+            return "window";
+        }
+        DEVMODEW mode {};
+        mode.dmSize = sizeof(mode);
+        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) && mode.dmPelsWidth > 0 && mode.dmPelsHeight > 0)
+        {
+            width = static_cast<int>(mode.dmPelsWidth);
+            height = static_cast<int>(mode.dmPelsHeight);
+            return "desktop";
+        }
+        return nullptr;
     }
 
     void InstallRenderTargetLogging()
@@ -6109,6 +6203,7 @@ namespace
         if (bOverrideWindowSize)
         {
             InstallDisplayModeClamp();
+            InstallRendererResolution();
         }
 
         bool bPixActive = false;
@@ -6389,13 +6484,37 @@ namespace
                     // a 1920x1080 window at 200% renders internally at 3840x2160.
                     if (bOverrideWindowSize)
                     {
-                        spdlog::info("MGS4: Window Size: {}x{} -> {}x{}.",
-                            *pWindowResX, *pWindowResY, iWindowSizeX, iWindowSizeY);
+                        // The override must never exceed the surface it is drawn into: the
+                        // engine sizes its colour targets from the window size and its depth
+                        // buffers from the swap chain, and D3D11 drops every draw whose two
+                        // targets disagree in size (a black screen; D3D12 draws them
+                        // misaligned instead). The chain is the window's client area in
+                        // windowed mode and the desktop in fullscreen, so when the user's
+                        // in-game resolution or desktop is smaller than the override - the
+                        // report was windowed mode with 1920x1080 chosen in-game under a
+                        // larger override, 2026-09-07 - the override is shrunk to fit,
+                        // keeping its aspect; the fit then places it as usual. This routine
+                        // runs again on an in-game resolution change, so the cap follows it.
+                        int sizeX = iWindowSizeX;
+                        int sizeY = iWindowSizeY;
+                        int capX = 0, capY = 0;
+                        const char* capName = SurfaceSize(capX, capY);
+                        if (capName && capX > 0 && capY > 0 && (sizeX > capX || sizeY > capY))
+                        {
+                            const double scale = (std::min)(static_cast<double>(capX) / sizeX, static_cast<double>(capY) / sizeY);
+                            sizeX = static_cast<int>(std::lround(sizeX * scale)) & ~1;
+                            sizeY = static_cast<int>(std::lround(sizeY * scale)) & ~1;
+                            spdlog::info("MGS4: Window Size: the {}x{} override is larger than the {}x{} {}; using {}x{} (same shape) so the picture fits.",
+                                iWindowSizeX, iWindowSizeY, capX, capY, capName, sizeX, sizeY);
+                        }
 
-                        *pWindowResX = iWindowSizeX;
-                        *pWindowResY = iWindowSizeY;
-                        *pInternalResX = iWindowSizeX;
-                        *pInternalResY = iWindowSizeY;
+                        spdlog::info("MGS4: Window Size: {}x{} -> {}x{}.",
+                            *pWindowResX, *pWindowResY, sizeX, sizeY);
+
+                        *pWindowResX = sizeX;
+                        *pWindowResY = sizeY;
+                        *pInternalResX = sizeX;
+                        *pInternalResY = sizeY;
                     }
 
                     if (fInternalResolutionScale <= 1.0)

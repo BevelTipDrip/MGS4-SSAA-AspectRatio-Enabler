@@ -145,6 +145,12 @@ rediscovered the hard way:
   size and the fullscreen mode. With the window override on, InstallDisplayModeClamp
   (render_pipeline.cpp) answers the walk with the current mode only, so the game stays on the
   desktop's mode. Log line: display mode list is answered with the current mode only.
+- **The engine keeps its resolution twice** (WR-002 in window-resolution.md): the window-size
+  globals the override writes, and the renderer context's init record (`context+0x4C1230C`),
+  which the per-frame submit at `+76DFF0` copies into each frame and the backends size their
+  buffers, clamp their view rects and request the chain resize from. The override now writes
+  both (`InstallRendererResolution`). What the fullscreen resize "asks for" is that second copy,
+  the game's own resolution setting, which defaults to the largest display mode.
 - **The engine never scales its picture.** Fullscreen is a borderless desktop-size window and
   the final blit is windowSize pixels at the origin (D3D11 census: bind back buffer, viewport
   (0,0,windowSize), one triangle). The Window Aspect Ratio override therefore needs the fit
