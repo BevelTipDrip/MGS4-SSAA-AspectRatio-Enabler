@@ -87,17 +87,23 @@ the override the clamp never bites, which is why fullscreen and the earlier test
 i.e. the game's own resolution setting, which defaults to the largest display mode.)
 
 **Fix.** `InstallRendererResolution` (render_pipeline.cpp) hooks the submit at `+76DFF0`
-(prologue verified) and, with the override on, writes the window-size globals into the init
-record's width and height before it runs, so every frame's resolution is the window's. In
-windowed mode the chain request then equals the window and the private module's
-`SizeToWindow` has nothing to substitute; in fullscreen the chain still follows the desktop and
-the fit places the picture as before. Log lines: `renderer resolution hook installed`, then
-`the renderer's own resolution 2560x1440 -> 3200x1800 (the window size)` and
-`ResizeBuffers1(3200x1800) requested` in a lab build. Verified on D3D12 in the reported
-configuration: window client 3200x1800 on the 3840x2160 desktop, title scene filling it, from
-a desktop grab (the harness's window capture is black for a windowed flip-model chain, which
-is a capture limitation, not the game). D3D11 and an in-game resolution change while running
-are pending the user's test.
+(prologue verified) and, with the override on, writes the **game window's client area** into
+the init record's width and height before it runs, so every frame's resolution is the
+surface the chain is sized to: the override in windowed mode, the desktop in fullscreen. A
+first version wrote the override itself; that was right in windowed mode and wrong in
+fullscreen-windowed, where the chain is the desktop and the renderer's buffers came out
+smaller than it - a black screen on D3D11 again (user, same day). The renderer's resolution
+must never be smaller than the chain; equal is the rule. In windowed mode the chain request
+then equals the window and the private module's `SizeToWindow` has nothing to substitute; in
+fullscreen the value equals the game's own (the desktop) and the fit places the picture as
+before. Log lines: `renderer resolution hook installed`, then `the renderer's own resolution
+2560x1440 -> 3200x1800 (the window's client area, which is the chain)` when it differs, and
+`ResizeBuffers1(3200x1800) requested` in a lab build. Verified: D3D12 windowed, override
+3200x1800 with 2560x1440 chosen in-game, window client 3200x1800 on the 3840x2160 desktop,
+title scene filling it; D3D11 windowed, in-game resolution changed while running, fine
+(user); D3D11 fullscreen-windowed on the 3840x2160 desktop with the override at 3200x1800,
+main menu filling the screen from a desktop grab (the harness's window capture is black for a
+windowed flip-model chain, a capture limitation, not the game).
 
 Alongside it, the render-config hook now caps the override to the surface it will land in
 (the game window's client area once it exists, the primary desktop before that), shrinking

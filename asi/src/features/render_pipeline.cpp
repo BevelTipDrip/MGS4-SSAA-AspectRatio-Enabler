@@ -2463,14 +2463,19 @@ namespace
     constexpr uintptr_t kContextResolutionHeight = 0x4C12310;
     SafetyHookInline RendererSubmit_hook {};
     std::atomic<int> g_RendererResolutionReported { 0 };
+    const char* SurfaceSize(int& width, int& height);
 
     uint32_t __fastcall Hooked_RendererSubmit(uint8_t* context)
     {
-        if (context && RenderPipeline::bOverrideWindowSize && RenderPipeline::pWindowResX && RenderPipeline::pWindowResY)
+        // The value written is the game window's client area, which is what the swap chain
+        // is sized to in both modes: the override in windowed mode, the desktop in
+        // fullscreen. Writing the override itself was wrong in fullscreen (2026-09-07): the
+        // renderer's buffers came out smaller than the chain and D3D11 drew nothing. The
+        // renderer's resolution must never be smaller than the chain; equal is right.
+        if (context && RenderPipeline::bOverrideWindowSize)
         {
-            const int32_t w = *RenderPipeline::pWindowResX;
-            const int32_t h = *RenderPipeline::pWindowResY;
-            if (w > 0 && h > 0)
+            int w = 0, h = 0;
+            if (SurfaceSize(w, h) && w > 0 && h > 0)
             {
                 int32_t current[2] {};
                 std::memcpy(&current[0], context + kContextResolutionWidth, sizeof(int32_t));
@@ -2479,10 +2484,11 @@ namespace
                 {
                     if (g_RendererResolutionReported.fetch_add(1) < 4)
                     {
-                        spdlog::info("MGS4: Window Size: the renderer's own resolution {}x{} -> {}x{} (the window size).", current[0], current[1], w, h);
+                        spdlog::info("MGS4: Window Size: the renderer's own resolution {}x{} -> {}x{} (the window's client area, which is the chain).", current[0], current[1], w, h);
                     }
-                    std::memcpy(context + kContextResolutionWidth, &w, sizeof(int32_t));
-                    std::memcpy(context + kContextResolutionHeight, &h, sizeof(int32_t));
+                    const int32_t nw = w, nh = h;
+                    std::memcpy(context + kContextResolutionWidth, &nw, sizeof(int32_t));
+                    std::memcpy(context + kContextResolutionHeight, &nh, sizeof(int32_t));
                 }
             }
         }
@@ -2539,8 +2545,15 @@ namespace
 
     const char* SurfaceSize(int& width, int& height)
     {
-        HWND game = nullptr;
-        EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&game));
+        // Called once a frame from the renderer submit hook: the window is remembered and
+        // only looked up again if it has gone.
+        static HWND cached = nullptr;
+        HWND game = (cached && IsWindow(cached)) ? cached : nullptr;
+        if (!game)
+        {
+            EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&game));
+            cached = game;
+        }
         RECT client {};
         if (game && GetClientRect(game, &client) && client.right > 0 && client.bottom > 0)
         {
