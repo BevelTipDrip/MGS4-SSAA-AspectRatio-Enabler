@@ -414,6 +414,30 @@ corners, ring and reticle round; 21:9 1600x686 fitted at (0,257), full width, no
 this backend at that size; 4:3 1400x1050 scaled x1.1429 to fill with the masking bands ("band
 (0,132 1400x787) is widened"). User's read pending at the time of writing.
 
+AR-015, fifth part (2026-09-07): whose band. The user put a 4:3 display on and reported
+"everything is squished" in fullscreen. Their settings file was still on the 16:10 override
+from the day's earlier test (2880x1800, capped by WR-002's surface cap to 1600x1000 on the
+1600x1200 display), so this was a 16:10 picture on a 4:3 chain, a combination never measured:
+every band case above had window = chain (native 4:3, native 21:9), and every fitted case had
+a 16:9 chain (the 4K desktop), where the engine draws no band at all. The D3D12 census at
+the title (lab, 16:10 lab settings) showed the composition pass into the chain-sized target
+with viewport `(0,125 1600x750)`: the 1600x1200 chain's 16:9 band `(0,150 1600x900)` scaled
+by 1000/1200 into the 1600x1000 window rect. The matcher (`CurrentWindowBand`) built the band
+from the window's own aspect, `(0,50 1600x900)`, matched nothing, and the picture stayed in
+the engine's band, then fitted at (0,100). So the engine works the band out from its own
+resolution (the chain, since WR-002 keeps them equal) and scales it into the window; the two
+formulas coincide only when window = chain. `CurrentWindowBand` now takes the chain's aspect
+(`g_Fit.cw/ch`, the window when no chain is known yet), builds the chain's centred 16:9 band
+and scales it by (ww/cw, wh/ch); the widening target is still the window, and the fit then
+places it in the chain as before. A 16:9 chain yields no band, so the 4K-desktop cases are
+untouched. Verified on the 1600x1200 display, DX12, lab: 16:10 1600x1000 "band (0,125
+1600x750) - the 1600x1200 chain's band, scaled into the window - is widened", title filling
+the (0,100) rect; 21:9 1600x674 "band (0,85 1600x505) ... widened", fitted at (0,263); plain
+4:3 1600x1200 unchanged ("band (0,150 1600x900) is widened"). The log line names the chain
+when it differs from the window. Not a regression of 0.0.4/0.0.5: 0.0.3 had the same
+window-shaped matcher and no cap, so a 2880x1800 window on this display would have failed the
+same way. User's read of the before/after captures pending at the time of writing.
+
 ## AR-016: codec calls - the portrait camera follows the window's aspect (2026-09-06)
 
 Reported as issue #1 on the public repository (RylicTWG, 3440x1440, DX11, 0.0.2: "codec calls at

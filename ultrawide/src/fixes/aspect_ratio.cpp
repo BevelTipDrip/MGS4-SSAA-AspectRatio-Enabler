@@ -3301,13 +3301,25 @@ namespace AspectRatio
     // renderer's generic submit (the caller walk ends in the frame submit, not at a
     // computation), so the correction is applied where they are used: a viewport or
     // scissor that is exactly the window's centred 16:9 band is widened to the whole
-    // window. Nothing else matches - at 16:9 there is no band to match, and the gate is
-    // the window's aspect.
+    // window. Nothing else matches - at 16:9 there is no band to match.
+    //
+    // Whose 16:9 band, though: the chain's, not the window's. The engine works the band out
+    // from its own resolution (the swap chain, see WR-002) and scales it into the window
+    // rect it draws in. With the window the chain size the two are the same thing, which is
+    // every case measured above. They differ when the override's shape is not the display's:
+    // a 16:10 override capped to 1600x1000 on a 1600x1200 display (user, 2026-09-07,
+    // "everything is squished") got viewport (0,125 1600x750) on the chain-sized target -
+    // the chain's band (0,150 1600x900) scaled by 1000/1200 - while the matcher expected the
+    // window's own band (0,50 1600x900) and let it through. On a 16:9 display no chain band
+    // exists and no override ever needs widening, which is why 4:3, 16:10 and 21:9 overrides
+    // on the 4K desktop were fine all along. The band is now built from the chain's aspect
+    // (`g_Fit.cw/ch`, the window when no chain is known yet) and scaled into the window.
     struct WindowBand
     {
         bool valid = false;
         int ww = 0, wh = 0;
-        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;   // the centred 16:9 band
+        UINT cw = 0, ch = 0;   // the chain whose band it is
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;   // the chain's centred 16:9 band, in window space
     };
 
     WindowBand CurrentWindowBand()
@@ -3316,28 +3328,38 @@ namespace AspectRatio
         b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
         b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
         if (b.ww <= 0 || b.wh <= 0) { return b; }
-        const int64_t wide = static_cast<int64_t>(b.ww) * 9;
-        const int64_t tall = static_cast<int64_t>(b.wh) * 16;
+        b.cw = g_Fit.cw > 0 ? g_Fit.cw : static_cast<UINT>(b.ww);
+        b.ch = g_Fit.ch > 0 ? g_Fit.ch : static_cast<UINT>(b.wh);
+        const int64_t wide = static_cast<int64_t>(b.cw) * 9;
+        const int64_t tall = static_cast<int64_t>(b.ch) * 16;
+        // The chain's centred 16:9 band, in chain pixels.
+        float cx = 0.0f, cy = 0.0f, cbw = 0.0f, cbh = 0.0f;
         if (wide < tall)
         {
             // Taller than 16:9: full width, letterboxed.
-            b.w = static_cast<float>(b.ww);
-            b.h = static_cast<float>(b.ww) * 9.0f / 16.0f;
-            b.x = 0.0f;
-            b.y = (static_cast<float>(b.wh) - b.h) / 2.0f;
+            cbw = static_cast<float>(b.cw);
+            cbh = static_cast<float>(b.cw) * 9.0f / 16.0f;
+            cy = (static_cast<float>(b.ch) - cbh) / 2.0f;
         }
         else if (wide > tall)
         {
             // Wider than 16:9: full height, pillarboxed.
-            b.h = static_cast<float>(b.wh);
-            b.w = static_cast<float>(b.wh) * 16.0f / 9.0f;
-            b.y = 0.0f;
-            b.x = (static_cast<float>(b.ww) - b.w) / 2.0f;
+            cbh = static_cast<float>(b.ch);
+            cbw = static_cast<float>(b.ch) * 16.0f / 9.0f;
+            cx = (static_cast<float>(b.cw) - cbw) / 2.0f;
         }
         else
         {
             return b;
         }
+        // Scaled into the window rect the engine draws in (an identity when the window is the
+        // chain size).
+        const float sx = static_cast<float>(b.ww) / static_cast<float>(b.cw);
+        const float sy = static_cast<float>(b.wh) / static_cast<float>(b.ch);
+        b.x = cx * sx;
+        b.y = cy * sy;
+        b.w = cbw * sx;
+        b.h = cbh * sy;
         b.valid = true;
         return b;
     }
@@ -3362,7 +3384,15 @@ namespace AspectRatio
     {
         if (g_BandExpandReported.fetch_add(1) == 0)
         {
-            spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) is widened to the {}x{} window.", x, y, w, h, ww, wh);
+            const WindowBand b = CurrentWindowBand();
+            if (b.valid && (static_cast<int>(b.cw) != ww || static_cast<int>(b.ch) != wh))
+            {
+                spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) - the {}x{} chain's band, scaled into the window - is widened to the {}x{} window.", x, y, w, h, b.cw, b.ch, ww, wh);
+            }
+            else
+            {
+                spdlog::info("MGS4: fit: the engine's 16:9 band ({:.0f},{:.0f} {:.0f}x{:.0f}) is widened to the {}x{} window.", x, y, w, h, ww, wh);
+            }
         }
     }
 
