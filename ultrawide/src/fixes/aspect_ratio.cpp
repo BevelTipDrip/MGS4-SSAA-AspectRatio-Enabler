@@ -4063,11 +4063,10 @@ namespace AspectRatio
         C12_OMSetRenderTargets_hook.stdcall<void>(self, count, handles, single, depth);
     }
 #if MGS4E_LAB_BUILD
-    // Who sets the band? A few return addresses up from the RSSetViewports call, logged once.
-    std::atomic<int> g_BandWalkBudget { 2 };
-    void LogBandCallers()
+    // Who is calling? A few return addresses up from the hooked call, with a tag. Used for
+    // the band viewport (budgeted) and the swap chain resizes (every call, they are rare).
+    void LogCallers(const char* tag)
     {
-        if (g_BandWalkBudget.load(std::memory_order_relaxed) <= 0 || g_BandWalkBudget.fetch_sub(1) <= 0) { return; }
         CONTEXT c {};
         RtlCaptureContext(&c);
         std::string walk;
@@ -4090,7 +4089,13 @@ namespace AspectRatio
             if (!c.Rip) { break; }
             walk += (walk.empty() ? "" : " < ") + CallerTag(reinterpret_cast<void*>(c.Rip));
         }
-        spdlog::info("MGS4: d3d12 census: band viewport callers: {}", walk);
+        spdlog::info("MGS4: callers: {}: {}", tag, walk);
+    }
+    std::atomic<int> g_BandWalkBudget { 2 };
+    void LogBandCallers()
+    {
+        if (g_BandWalkBudget.load(std::memory_order_relaxed) <= 0 || g_BandWalkBudget.fetch_sub(1) <= 0) { return; }
+        LogCallers("band viewport");
     }
 #endif
 
@@ -4532,6 +4537,10 @@ namespace AspectRatio
             std::lock_guard lock(g_BandMutex);
             if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize to {}x{}, band renderer dropped.", width, height); }
         }
+#if MGS4E_LAB_BUILD
+        spdlog::info("MGS4: ResizeBuffers({}x{}) requested", width, height);
+        LogCallers("ResizeBuffers");
+#endif
         SizeToWindow(self, width, height, "ResizeBuffers");
         return ResizeBuffers_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags);
     }
@@ -4546,6 +4555,10 @@ namespace AspectRatio
             std::lock_guard lock(g_BandMutex);
             if (g_Band.swapChain) { BandRelease(g_Band); spdlog::info("MGS4: letterbox: swap chain resize (ResizeBuffers1) to {}x{}, band renderer dropped.", width, height); }
         }
+#if MGS4E_LAB_BUILD
+        spdlog::info("MGS4: ResizeBuffers1({}x{}) requested", width, height);
+        LogCallers("ResizeBuffers1");
+#endif
         SizeToWindow(self, width, height, "ResizeBuffers1");
         return ResizeBuffers1_hook.stdcall<HRESULT>(self, bufferCount, width, height, format, flags, nodeMask, presentQueue);
     }
