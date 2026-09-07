@@ -261,21 +261,59 @@ namespace mgs4e::tool
         wxBoxSizer* outer = new wxBoxSizer(wxVERTICAL);
 
         std::error_code ec;
-        const std::filesystem::path shown = std::filesystem::relative(page.found.file, m_GameRoot, ec);
-        wxStaticText* blurb = new wxStaticText(panel, wxID_ANY,
-            wxString::Format("%s\n\nFile: %s", mod.blurb, (ec || shown.empty() ? page.found.file : shown).wstring()));
+        const auto relative = [&](const std::filesystem::path& path) -> std::wstring
+        {
+            const std::filesystem::path shown = std::filesystem::relative(path, m_GameRoot, ec);
+            return (ec || shown.empty() ? path : shown).wstring();
+        };
+        wxString text = *mod.blurb ? wxString(mod.blurb) + "\n\n" : wxString();
+        if (page.found.file.empty())
+        {
+            text += "File: none (the manifest names no Ini)";
+        }
+        else
+        {
+            text += wxString::Format("File: %s", relative(page.found.file));
+            if (!std::filesystem::exists(page.found.file, ec))
+            {
+                text += " (not there yet; it is created on save)";
+            }
+        }
+        if (!mod.manifest.empty())
+        {
+            text += wxString::Format("\nDescribed by: %s", relative(mod.manifest));
+        }
+        wxStaticText* blurb = new wxStaticText(panel, wxID_ANY, text);
         blurb->Wrap(FromDIP(620));
         outer->Add(blurb, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
-        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, mod.url, mod.url), 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        if (*mod.url)
+        {
+            outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, mod.url, mod.url), 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        }
 
         if (!page.found.loadable)
         {
+            const wxString files = *mod.asiFile ? wxString::Format("%s and %s", mod.asiFile, mod.fileName) : wxString(mod.fileName);
             wxStaticText* warn = new wxStaticText(panel, wxID_ANY,
                 wxString::Format("This copy of %s is not where the game loads mods from, so it is not running. mgs4.exe is in the "
-                                 "MGS4 folder and its loader only picks up .asi files in MGS4 and MGS4\\scripts. Move %s and %s "
+                                 "MGS4 folder and its loader only picks up .asi files in MGS4 and MGS4\\scripts. Move %s "
                                  "into MGS4\\scripts; MGS4\\winmm.dll is already the loader, and a wininet.dll in the install "
                                  "folder does nothing there.",
-                                 mod.name, mod.asiFile, mod.fileName));
+                                 mod.name, files));
+            warn->Wrap(FromDIP(620));
+            warn->SetForegroundColour(wxColour(214, 128, 44));
+            outer->Add(warn, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        }
+
+        if (!mod.problems.empty())
+        {
+            // The manifest's author is the audience here: say what is wrong, in its terms.
+            wxString list = wxString::Format("The manifest %s has problems; the rows concerned are left out:", relative(mod.manifest));
+            for (const std::string& problem : mod.problems)
+            {
+                list += "\n  - " + wxString(problem);
+            }
+            wxStaticText* warn = new wxStaticText(panel, wxID_ANY, list);
             warn->Wrap(FromDIP(620));
             warn->SetForegroundColour(wxColour(214, 128, 44));
             outer->Add(warn, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
@@ -578,7 +616,7 @@ namespace mgs4e::tool
                 switch (f.type)
                 {
                 case Field::Type::Bool:
-                    value = static_cast<wxCheckBox*>(row.control)->GetValue() ? "1" : "0";
+                    value = static_cast<wxCheckBox*>(row.control)->GetValue() ? row.key->trueText : row.key->falseText;
                     break;
                 case Field::Type::Int:
                     value = std::to_string(static_cast<wxSpinCtrl*>(row.control)->GetValue());
