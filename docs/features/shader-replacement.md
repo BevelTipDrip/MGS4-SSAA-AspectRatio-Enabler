@@ -78,9 +78,11 @@ fix every pipeline was refused; before the index shift they were accepted and th
 rendered black with rim highlights only (constants read from the wrong slots). The ASI's own
 `shaderport::Port` was then built standalone (`scratchpad/porttest`) and run over all 458
 mapped pairs: its output is byte-identical to the Python port's, checksums included. The
-map-driven path in the game itself loaded 458 counterparts and installed its hook with no
-failures at the title; the gameplay run of that exact path is still owed (the display was
-off, so the harness could not drive the stage load).
+map-driven path in the game itself then ran to gameplay: 458 ported, over 600 pipelines
+swapped, none refused. Its first build crashed the user's launch at the first shadow
+pipeline: the hook re-enters itself for the swapped description and held a std::mutex across
+that call (locking twice on one thread throws; the game's crash log showed 0xe06d7363 raised
+from the ASI). The lock now covers only the port and the lookup.
 
 ## Offline tooling (scratchpad, not shipped)
 
