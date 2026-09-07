@@ -4509,6 +4509,7 @@ namespace AspectRatio
             DXGI_SWAP_CHAIN_DESC desc {};
             if (SUCCEEDED(chain->GetDesc(&desc))) { window = desc.OutputWindow; }
         }
+        if (window) { RenderPipeline::hGameWindow = window; }   // the public module's surface lookup reads it
         RECT client {};
         if (!window || !GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) { return false; }
         width = static_cast<UINT>(client.right);
@@ -4565,6 +4566,17 @@ namespace AspectRatio
 
     void HookSwapChain(IUnknown* presenter, IUnknown* swapChain)
     {
+        {
+            // The public module's surface lookup reads the window this records; recorded at
+            // creation so the first frames know it, not only the first resize.
+            IDXGISwapChain* chain = nullptr;
+            if (swapChain && SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&chain))) && chain)
+            {
+                UINT w = 0, h = 0;
+                WindowClientSize(chain, w, h);
+                chain->Release();
+            }
+        }
         static bool hooked = false;
         if (hooked || !swapChain) { return; }
         hooked = true;
