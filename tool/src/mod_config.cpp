@@ -9,28 +9,10 @@ namespace mgs4e::tool::modconfig
 {
     const std::vector<Mod>& Known()
     {
-        using F = Field;
-        static const std::vector<Mod> mods = {
-            {
-                "MGSFPSUnlock",
-                "MGSFPSUnlock.ini",
-                "MGSFPSUnlock.asi",
-                "https://github.com/cipherxof/MGSFPSUnlock",
-                "MGSFPSUnlock (cipherxof) lets the game run above or below its 60 fps cap. It has no settings "
-                "tool of its own, so its one setting is here. Only that value is written; the rest of its "
-                "file is left alone.",
-                {
-                    { F::Int("Settings", "TargetFrameRate",
-                        "The frame rate the game is unlocked to. 60 is the game's own limit; MGSFPSUnlock's default "
-                        "when its file is missing is 60 as well.\n\n"
-                        "Anything above 60 depends on the mod's patches, which its author describes as a work in "
-                        "progress, so the odd thing may misbehave at high rates. Your monitor's refresh rate is the "
-                        "usual choice.",
-                        60, 15, 1000),
-                      "Target frame rate" },
-                },
-            },
-        };
+        // Empty since 0.0.6: every mod the tool knows ships as a manifest instead (the
+        // Enabler's own zip carries manifests\*.MGS4Enabler.ini into MGS4\scripts), so a mod
+        // author never needs a change here. The table stays as the fallback it was built as.
+        static const std::vector<Mod> mods = {};
         return mods;
     }
 
@@ -400,6 +382,7 @@ namespace mgs4e::tool::modconfig
                 }
                 Found f;
                 f.mod = mod;
+                bool iniPresent = false;
                 if (*mod->fileName)
                 {
                     // Beside the manifest, else in the game root; beside the manifest when
@@ -409,6 +392,7 @@ namespace mgs4e::tool::modconfig
                     {
                         f.file = gameRoot / mod->fileName;
                     }
+                    iniPresent = std::filesystem::exists(f.file, ec);
                 }
                 if (*mod->asiFile)
                 {
@@ -440,6 +424,14 @@ namespace mgs4e::tool::modconfig
                 else
                 {
                     f.loadable = true;
+                }
+                // A manifest describes a mod; with neither its ini nor its .asi anywhere, the
+                // mod is not installed and there is nothing to edit - no tab. A manifest that
+                // names no .asi stands on its ini alone. (Manifests shipped in the Enabler's
+                // own zip rely on this.)
+                if (!iniPresent && f.asi.empty())
+                {
+                    continue;
                 }
                 const std::string id = Lower(*mod->fileName ? mod->fileName : manifest.filename().string());
                 const auto seen = byIni.find(id);

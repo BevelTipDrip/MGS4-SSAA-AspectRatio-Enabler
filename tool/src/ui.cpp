@@ -7,6 +7,12 @@
 #include "settings_keys.hpp"
 #include "version.hpp"
 
+#include <shellapi.h>
+
+#define MGS4E_WIDEN_(x) L##x
+#define MGS4E_WIDEN(x) MGS4E_WIDEN_(x)
+#define MGS4E_STEAM_APP_ID_W MGS4E_WIDEN(MGS4E_STEAM_APP_ID)
+
 namespace mgs4e::tool
 {
     namespace
@@ -22,6 +28,7 @@ namespace mgs4e::tool
             ID_ResetToDefaults = wxID_HIGHEST + 1,
             ID_Save,
             ID_SaveAndExit,
+            ID_Launch,
             ID_OpenLogs,
         };
 
@@ -151,6 +158,7 @@ namespace mgs4e::tool
         footer->Add(new wxButton(root, ID_ResetToDefaults, "Reset to Defaults"), 0, wxRIGHT, FromDIP(12));
         footer->Add(new wxButton(root, ID_Save, "Save"), 0, wxRIGHT, FromDIP(6));
         footer->Add(new wxButton(root, ID_SaveAndExit, "Save and Exit"), 0, wxRIGHT, FromDIP(6));
+        footer->Add(new wxButton(root, ID_Launch, "Save and Launch Game"), 0, wxRIGHT, FromDIP(6));
         footer->Add(new wxButton(root, wxID_EXIT, "Exit"), 0);
         rootSizer->Add(footer, 0, wxEXPAND | wxALL, FromDIP(10));
 
@@ -159,6 +167,7 @@ namespace mgs4e::tool
         Bind(wxEVT_BUTTON, &MainFrame::OnResetToDefaults, this, ID_ResetToDefaults);
         Bind(wxEVT_BUTTON, &MainFrame::OnSave, this, ID_Save);
         Bind(wxEVT_BUTTON, &MainFrame::OnSaveAndExit, this, ID_SaveAndExit);
+        Bind(wxEVT_BUTTON, &MainFrame::OnLaunch, this, ID_Launch);
         Bind(wxEVT_BUTTON, &MainFrame::OnExit, this, wxID_EXIT);
         Bind(wxEVT_BUTTON, &MainFrame::OnOpenLogs, this, ID_OpenLogs);
         Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnClose, this);
@@ -771,6 +780,28 @@ namespace mgs4e::tool
         {
             Destroy();
         }
+    }
+
+    void MainFrame::OnLaunch(wxCommandEvent&)
+    {
+        // Save first, so what the game reads is what is on screen; then start it the way
+        // Steam's Play button does (through its launcher, with the user's launch options),
+        // and leave this window up - the game reads the file once at start, so nothing here
+        // needs to stay closed.
+        ReadControls();
+        if (Dirty() && !Save())
+        {
+            return;
+        }
+        const wchar_t* const url = L"steam://rungameid/" MGS4E_STEAM_APP_ID_W;
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL));
+        if (result <= 32)
+        {
+            wxMessageBox(wxString::Format("Steam did not take the launch request (%s). Is Steam installed and running?", url),
+                         "Could not launch", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        SetStatus("Launching METAL GEAR SOLID 4 through Steam.");
     }
 
     void MainFrame::OnExit(wxCommandEvent&)

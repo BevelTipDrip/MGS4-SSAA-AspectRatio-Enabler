@@ -212,8 +212,10 @@ Recognised today:
 More will be added as they come up. The list lives in one table (`shared/compat_table.hpp`)
 that both the `.asi` and the tool read.
 
-Some mods have a small config file and no tool of their own. When one of those is installed,
-the tool grows a tab for it, and only then:
+Some mods have a small config file and no tool of their own. A **manifest** file named
+`<Mod>.MGS4Enabler.ini`, sitting next to that mod's config, describes it to the tool, and the
+tool grows a tab for it while the mod is installed. This zip ships one such manifest, into
+`MGS4\scripts\`:
 
 | Mod | File | What the tab edits |
 | --- | --- | --- |
@@ -223,11 +225,10 @@ A save writes just those values back into the mod's file; comments and everythin
 stay as they were. If the mod's files are sitting somewhere the game does not load from (the
 install folder's own `scripts\` rather than `MGS4\scripts\`, a common slip), the tab says so.
 
-**Mod authors:** you do not need to be in that table. Ship a small manifest named
-`<YourMod>.MGS4Enabler.ini` next to your `.ini` and the tool grows a tab from it: the file to
-edit, a blurb, a link, and one block per setting (int, bool or choice, with label, range or
-choices, default and tooltip). Only the keys you list are ever written. The format, with a
-worked example, is in [docs/mod-tabs.md](docs/mod-tabs.md).
+**Mod authors:** nothing in this tool needs to change for yours. Ship your own manifest next
+to your `.ini`: the file to edit, a blurb, a link, and one block per setting (int, bool or
+choice, with label, range or choices, default and tooltip). Only the keys you list are ever
+written. The format, with a worked example, is in [docs/mod-tabs.md](docs/mod-tabs.md).
 
 If you used an earlier build of these fixes that shipped inside another mod, the tool's first
 run imports your graphics settings from that mod's settings file. Do this before running that

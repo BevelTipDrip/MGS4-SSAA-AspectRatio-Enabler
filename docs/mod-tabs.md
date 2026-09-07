@@ -77,7 +77,8 @@ file with no section headers at all, write `[Key]`.
   leaves that row out, so you see it the first time you try it.
 - Values in the file that the tool cannot read (text in an `int`, a choice not in the list) show
   as the `Default`; the file keeps its value until the user changes that row.
-- If the tool's built-in table already knows your `.ini`, the manifest wins.
+- The tab exists only while the mod does: your `.ini` is found, or the `.asi` you named is. A
+  manifest on its own (say, one shipped ahead of the mod) shows nothing.
 - The tool finds the manifest in the install folder's own `scripts\` and friends too, where a
   zip extracted one level too high lands, and tells the user the mod is not running from there.
 

@@ -68,6 +68,11 @@ $loaderVersion = (Get-Item $loaderDll.FullName).VersionInfo.ProductVersion
 Copy-Item $loaderDll.FullName (Join-Path $stage 'MGS4\winmm.dll')
 
 Copy-Item $asi (Join-Path $stage 'MGS4\scripts\MGS4Enabler.asi')
+# Manifests for other mods' tabs go where those mods live; the tool shows a tab only while
+# the mod itself is there.
+Get-ChildItem (Join-Path $root 'manifests') -Filter '*.MGS4Enabler.ini' | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path (Join-Path $stage 'MGS4\scripts') $_.Name)
+}
 Copy-Item $exe (Join-Path $stage 'MGS4Enabler.exe')
 Copy-Item (Join-Path $root 'README.md') (Join-Path $stage 'README.md')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')

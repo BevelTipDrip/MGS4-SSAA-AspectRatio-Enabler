@@ -66,6 +66,7 @@ namespace mgs4e::tool
         void OnResetToDefaults(wxCommandEvent&);
         void OnSave(wxCommandEvent&);
         void OnSaveAndExit(wxCommandEvent&);
+        void OnLaunch(wxCommandEvent&);
         void OnExit(wxCommandEvent&);
         void OnClose(wxCloseEvent&);
         void OnOpenLogs(wxCommandEvent&);

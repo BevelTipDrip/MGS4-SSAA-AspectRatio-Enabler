@@ -10,6 +10,9 @@
 #define MGS4E_NAME          "MGS4Enabler"
 #define MGS4E_DISPLAY_NAME  "MGS4 SSAA and Aspect Ratio Enabler"
 #define MGS4E_REPO_URL      "https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler"
+// METAL GEAR SOLID 4 on Steam; the tool launches it as steam://rungameid/<id>, which goes
+// through the launcher the same way the Play button does.
+#define MGS4E_STEAM_APP_ID  "2492670"
 
 #define MGS4E_VERSION_MAJOR 0
 #define MGS4E_VERSION_MINOR 0
