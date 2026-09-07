@@ -189,6 +189,14 @@ rediscovered the hard way:
   applies to viewports on chain-sized offscreen targets too (RTV sizes tracked from
   CreateRenderTargetView), and the chain outside the fitted rect is cleared every present.
   D3D11 sizes those targets by the window, so its back-buffer fit alone was right.
+- **Windowed mode stutters and it is the game, not us** (2026-09-07). The user saw 100-500 ms
+  frames in windowed mode only, with fullscreen 1 % lows above 100 fps on the same scene. The
+  Lab perf census in windowed mode (2880x1800 window, 200 % internal scale, 240 fps target):
+  median frame 4.2 ms, a recurring ~20 ms p99, our hooks under 9 ms per second in total and 0.1
+  ms at the worst single call, no per-present GPU work of ours in gameplay. Turning the game's
+  own V-Sync off was "a big improvement, but nowhere near fullscreen"; the user's read is the
+  compositor. README carries the note. Do not chase this as a mod bug without a census that
+  puts the time inside a hook.
 - **A perf census lives in the Lab build.** With Debug Logging on, a Lab ASI logs one MGS4: perf:
   line a second: presents, frame ms avg/p50/p99/max, and the time spent in each of our per-frame
   hooks (pool append, upload probe, layout converter, bands). Compare two sessions of the same

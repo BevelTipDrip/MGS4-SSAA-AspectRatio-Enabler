@@ -177,6 +177,9 @@ Notes:
   game on its own paints such a picture unscaled in the top-left corner.
 - Works with the game set to either DirectX 11 or DirectX 12 in its options. The game ships
   set to DirectX 11.
+- Windowed mode stutters compared with fullscreen, with or without this mod: the game presents
+  through the desktop compositor there. Turning the game's own V-Sync off helps a lot; fullscreen
+  is the smooth option.
 - The masking options and FOV Adjustment do nothing at 16:9. They default on because that is
   the framing the game was made for. Turn Cutscene Masking off if you would rather have
   cutscenes fill an ultrawide.
