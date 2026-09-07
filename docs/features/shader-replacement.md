@@ -72,9 +72,15 @@ component mask that is not a subset of the output of the previous stage").
 
 **Verified**, DirectX 12 through the override, same stage as the DirectX 11 comparison: over
 600 pipelines swapped, none refused, and the gameplay capture shows the same softened shadow
-edges as the DirectX 11 run with FusionFix. Before the input-signature fix every pipeline was
-refused; before the index shift they were accepted and the scene rendered black with rim
-highlights only (constants read from the wrong slots).
+edges as the DirectX 11 run with FusionFix (both with the fxc-recompiled set and with the
+Python binary port installed as a `ReplacedShadersPS12` folder). Before the input-signature
+fix every pipeline was refused; before the index shift they were accepted and the scene
+rendered black with rim highlights only (constants read from the wrong slots). The ASI's own
+`shaderport::Port` was then built standalone (`scratchpad/porttest`) and run over all 458
+mapped pairs: its output is byte-identical to the Python port's, checksums included. The
+map-driven path in the game itself loaded 458 counterparts and installed its hook with no
+failures at the title; the gameplay run of that exact path is still owed (the display was
+off, so the harness could not drive the stage load).
 
 ## Offline tooling (scratchpad, not shipped)
 
