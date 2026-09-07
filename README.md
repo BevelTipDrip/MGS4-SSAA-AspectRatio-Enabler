@@ -3,7 +3,7 @@
 A graphics mod for **METAL GEAR SOLID 4** in the Master Collection on PC. It adds supersampling,
 higher resolution shadows, anisotropic filtering and FXAA control, lets you pick the window
 resolution and aspect ratio, and fixes the HUD, menus and cutscenes so they look right on
-ultrawide (21:9, 32:9) and 4:3 displays instead of being stretched to fit.
+ultrawide (21:9, 32:9), 16:10 and 4:3 displays instead of being stretched to fit.
 
 It comes as an `.asi` that patches the game in memory as it starts, plus a small settings tool.
 No game files are modified.
@@ -91,7 +91,7 @@ pass now covers the full window.
 ## Features
 
 **Aspect ratio and HUD**
-- Window resolution and aspect ratio selection (16:9, 21:9, 32:9, 4:3) independent of the
+- Window resolution and aspect ratio selection (16:9, 16:10, 21:9, 32:9, 4:3) independent of the
   game's own launcher settings.
 - Three HUD modes: Stretched (the game's behaviour), Centered (every widget at its proper shape,
   interface centred in a 16:9 area) and Expanded (same, with the life bar, camo meter, weapon
@@ -115,10 +115,10 @@ pass now covers the full window.
   that mod's setting wins and the tool tells you so.
 - Nothing phones home. No updater, no telemetry.
 
-**Planned**
-- 16:10 displays: the same HUD, menu and cutscene treatment. The masking and FOV work is
-  written against the window's real shape, proper offsets just need to be added for 16:10
-  resolutions.
+**16:10**
+- 16:10 displays get the same treatment as 4:3, with thinner bars: the HUD keeps its shape
+  and the corner widgets go to the real edges, menus and cutscenes sit in the 16:9 area. Pick
+  16:10 as the aspect ratio and a resolution from its list.
 
 ## Installation
 
@@ -151,7 +151,7 @@ Everything is on the **Graphics** tab. Hover a setting in the tool for a longer 
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape. Leave it on Use Game Setting to keep whatever the game's launcher selected. |
+| **Window Aspect Ratio** | Use Game Setting | Overrides the output resolution. Choosing 16:9, 16:10, 21:9, 32:9 or 4:3 reveals a list of resolutions for that shape. Leave it on Use Game Setting to keep whatever the game's launcher selected. |
 | **Ultrawide HUD** | Expanded HUD | How the HUD is laid out on a window that is not 16:9. **Stretched HUD** is the game's own behaviour. **Centered HUD** gives every widget its proper shape and centres the interface in a 16:9 area. **Expanded HUD** does that and moves the life bar, camo meter, weapon and item panels out to the real edges. Works from the actual window size, so it also applies on a native ultrawide or 4:3 display with the aspect left on Use Game Setting. No effect at 16:9. |
 | **Solid Eye Overlay Fix** | on | With a Centered or Expanded HUD, keeps the labels that follow things in the world on the objects they mark instead of sliding toward the centre with the rest of the interface. |
 | **Menu Masking** | on | Keeps the title screen, main menu, pause menu, codec and loading screens at 16:9 and blacks out the rest of the window. Needs a Centered or Expanded HUD. |

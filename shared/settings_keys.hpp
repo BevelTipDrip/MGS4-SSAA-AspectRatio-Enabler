@@ -13,11 +13,13 @@ namespace mgs4e::keys
     constexpr const char* WindowAspectRatio = "Window Aspect Ratio";
     constexpr const char* WindowAspectRatio_Off = "Use Game Setting";
     constexpr const char* WindowAspectRatio_16_9 = "16:9";
+    constexpr const char* WindowAspectRatio_16_10 = "16:10";
     constexpr const char* WindowAspectRatio_21_9 = "21:9";
     constexpr const char* WindowAspectRatio_32_9 = "32:9";
     constexpr const char* WindowAspectRatio_4_3 = "4:3";
 
     constexpr const char* WindowResolution16x9 = "Window Resolution (16:9)";
+    constexpr const char* WindowResolution16x10 = "Window Resolution (16:10)";
     constexpr const char* WindowResolution21x9 = "Window Resolution (21:9)";
     constexpr const char* WindowResolution32x9 = "Window Resolution (32:9)";
     constexpr const char* WindowResolution4x3 = "Window Resolution (4:3)";

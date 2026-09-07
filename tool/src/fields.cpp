@@ -15,7 +15,7 @@ namespace mgs4e::tool
         constexpr const char* kHelp_WindowAspectRatio =
             "Overrides the resolution the game runs its window at.\n"
             "\n"
-            "Choose an aspect ratio here, then pick a resolution from the list that appears. 21:9 covers ultrawide monitors and 32:9 super ultrawide ones.\n"
+            "Choose an aspect ratio here, then pick a resolution from the list that appears. 16:10 is the slightly taller widescreen shape; 21:9 covers ultrawide monitors and 32:9 super ultrawide ones.\n"
             "\n"
             "This is the output resolution only. Internal Resolution Scale still applies on top of it, so you can run a smaller window while still rendering at a higher internal resolution.\n"
             "\n"
@@ -25,6 +25,13 @@ namespace mgs4e::tool
             "The widescreen resolution the game's window runs at.\n"
             "\n"
             "Only used when Window Aspect Ratio is set to 16:9.";
+
+        constexpr const char* kHelp_WindowResolution16x10 =
+            "The 16:10 resolution the game's window runs at.\n"
+            "\n"
+            "Only used when Window Aspect Ratio is set to 16:10.\n"
+            "\n"
+            "The interface is authored for 16:9; on a 16:10 panel it is a little taller than the picture, and the Ultrawide HUD setting (Centered or Expanded HUD) corrects that the same way it does on 4:3, with thin bars instead of thick ones.";
 
         constexpr const char* kHelp_WindowResolution21x9 =
             "The ultrawide resolution the game's window runs at.\n"
@@ -177,25 +184,29 @@ namespace mgs4e::tool
             pages.push_back({ "Graphics", {
                 { "Window", {
                     F::Choice(G, K::WindowAspectRatio, kHelp_WindowAspectRatio, K::WindowAspectRatio_Off,
-                        { K::WindowAspectRatio_Off, K::WindowAspectRatio_16_9, K::WindowAspectRatio_21_9, K::WindowAspectRatio_32_9, K::WindowAspectRatio_4_3 }),
+                        { K::WindowAspectRatio_Off, K::WindowAspectRatio_16_9, K::WindowAspectRatio_16_10, K::WindowAspectRatio_21_9, K::WindowAspectRatio_32_9, K::WindowAspectRatio_4_3 }),
 
                     // One resolution list per shape, shown only while its shape is selected.
                     F::Choice(G, K::WindowResolution16x9, kHelp_WindowResolution16x9, "1920x1080",
-                        { "1280x720", "1600x900", "1920x1080", "2560x1440", "3200x1800", "3840x2160" })
+                        { "1280x720", "1366x768", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160", "5120x2880", "7680x4320" })
                         .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_16_9 }),
+
+                    F::Choice(G, K::WindowResolution16x10, kHelp_WindowResolution16x10, "1920x1200",
+                        { "1280x800", "1440x900", "1680x1050", "1920x1200", "2560x1600", "2880x1800", "3840x2400" })
+                        .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_16_10 }),
 
                     // "21:9" is the marketing name; 3440x1440 and 3840x1600 are really 43:18 and
                     // 12:5, so the list carries the panels people own, not only exact 64:27 shapes.
                     F::Choice(G, K::WindowResolution21x9, kHelp_WindowResolution21x9, "3440x1440",
-                        { "2560x1080", "3440x1440", "3840x1600", "3840x1620", "5120x2160" })
+                        { "2560x1080", "2560x1088", "3440x1440", "3440x1600", "3840x1600", "3840x1620", "5120x2160" })
                         .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_21_9 }),
 
                     F::Choice(G, K::WindowResolution32x9, kHelp_WindowResolution32x9, "5120x1440",
-                        { "3840x1080", "5120x1440", "7680x2160" })
+                        { "3840x1080", "3840x1200", "5120x1440", "5120x1600", "7680x2160" })
                         .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_32_9 }),
 
                     F::Choice(G, K::WindowResolution4x3, kHelp_WindowResolution4x3, "1024x768",
-                        { "640x480", "800x600", "1024x768", "1280x960", "1400x1050", "1600x1200", "2048x1536" })
+                        { "640x480", "800x600", "1024x768", "1152x864", "1280x960", "1400x1050", "1440x1080", "1600x1200", "1920x1440", "2048x1536", "2560x1920", "2880x2160", "3200x2400" })
                         .ShownWhen(K::WindowAspectRatio, { K::WindowAspectRatio_4_3 }),
                 }},
 

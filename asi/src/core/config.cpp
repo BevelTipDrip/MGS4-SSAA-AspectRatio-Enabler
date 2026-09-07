@@ -102,6 +102,10 @@ namespace mgs4e::config
             {
                 Read(ini, Graphics, WindowResolution16x9, resolution);
             }
+            else if (aspect == WindowAspectRatio_16_10)
+            {
+                Read(ini, Graphics, WindowResolution16x10, resolution);
+            }
             else if (aspect == WindowAspectRatio_21_9)
             {
                 Read(ini, Graphics, WindowResolution21x9, resolution);
