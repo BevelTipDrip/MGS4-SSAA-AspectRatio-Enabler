@@ -1246,30 +1246,41 @@ namespace
         {
             std::array<uint8_t, 16> key {};
             std::memcpy(key.data(), static_cast<const uint8_t*>(desc->PS.pShaderBytecode) + 4, 16);
-            std::lock_guard lock(g_ReplacedMutex);
-            if (const auto dx11 = g_Dx11Replacements.find(key); dx11 != g_Dx11Replacements.end())
+            // The port and the lookup happen under the lock; the swapped creation below calls
+            // back into this hook, so the lock must be gone by then (a std::mutex taken twice
+            // on one thread crashed the game at the first shadow pipeline, 2026-09-07). Map
+            // entries are never erased, so the blob stays put once found.
+            const std::vector<uint8_t>* blob = nullptr;
             {
-                // First pipeline with this DirectX 12 shader: port the DirectX 11 replacement
-                // against it now. Either way the entry leaves the pending set.
-                std::string why;
-                std::vector<uint8_t> ported = mgs4e::shaderport::Port(dx11->second, static_cast<const uint8_t*>(desc->PS.pShaderBytecode), desc->PS.BytecodeLength, why);
-                if (!ported.empty())
+                std::lock_guard lock(g_ReplacedMutex);
+                if (const auto dx11 = g_Dx11Replacements.find(key); dx11 != g_Dx11Replacements.end())
                 {
-                    g_ReplacedShaders[key] = std::move(ported);
-                    g_PortedShaders.fetch_add(1);
+                    // First pipeline with this DirectX 12 shader: port the DirectX 11 replacement
+                    // against it now. Either way the entry leaves the pending set.
+                    std::string why;
+                    std::vector<uint8_t> ported = mgs4e::shaderport::Port(dx11->second, static_cast<const uint8_t*>(desc->PS.pShaderBytecode), desc->PS.BytecodeLength, why);
+                    if (!ported.empty())
+                    {
+                        g_ReplacedShaders[key] = std::move(ported);
+                        g_PortedShaders.fetch_add(1);
+                    }
+                    else if (g_PortFailures.fetch_add(1) < 5)
+                    {
+                        spdlog::warn("MGS4: Replaced shaders: the DirectX 11 replacement for {} could not be ported: {}; the original is used.",
+                            mgs4e::shaderport::ChecksumName(key), why);
+                    }
+                    g_Dx11Replacements.erase(dx11);
                 }
-                else if (g_PortFailures.fetch_add(1) < 5)
+                if (const auto it = g_ReplacedShaders.find(key); it != g_ReplacedShaders.end())
                 {
-                    spdlog::warn("MGS4: Replaced shaders: the DirectX 11 replacement for {} could not be ported: {}; the original is used.",
-                        mgs4e::shaderport::ChecksumName(key), why);
+                    blob = &it->second;
                 }
-                g_Dx11Replacements.erase(dx11);
             }
-            if (const auto it = g_ReplacedShaders.find(key); it != g_ReplacedShaders.end())
+            if (blob)
             {
                 D3D12_GRAPHICS_PIPELINE_STATE_DESC replaced = *desc;
-                replaced.PS.pShaderBytecode = it->second.data();
-                replaced.PS.BytecodeLength = it->second.size();
+                replaced.PS.pShaderBytecode = blob->data();
+                replaced.PS.BytecodeLength = blob->size();
                 const HRESULT swapped = Hooked_CreateGraphicsPipelineState(self, &replaced, riid, pipelineState);
                 if (SUCCEEDED(swapped))
                 {
