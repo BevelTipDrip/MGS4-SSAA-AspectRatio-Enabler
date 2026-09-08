@@ -150,8 +150,6 @@ Everything is on the Graphics tab. Hover a setting in the tool for a longer expl
 - Shadow Resolution Scale (%) (default: 100). Raises shadow map resolution beyond the game's
   highest Shadow Quality. 200 doubles it in each dimension and costs four times the shadow
   memory.
-- Shadow Softness (Samples) (default: 0, off). How many samples the game takes filtering a
-  shadow edge. The game's highest preset uses 7.
 - Anisotropic Filtering (default: 0, off). Maximum anisotropy for textures seen at a steep
   angle. The game's highest texture setting asks for 8x; 16x is the hardware maximum and
   nearly free.

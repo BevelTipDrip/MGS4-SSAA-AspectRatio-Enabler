@@ -395,10 +395,6 @@ namespace mgs4e::config
                 Report(Graphics, FxaaQuality, fxaaQuality);
             }
 
-            Read(ini, Graphics, ShadowSampleCount, RP::iShadowSampleCount);
-            RP::iShadowSampleCount = std::clamp(RP::iShadowSampleCount, 0, 32);
-            Report(Graphics, ShadowSampleCount, RP::iShadowSampleCount);
-
             Read(ini, Graphics, AnisotropicFiltering, RP::iAnisotropicFiltering);
             RP::iAnisotropicFiltering = std::clamp(RP::iAnisotropicFiltering, 0, 16);
             Report(Graphics, AnisotropicFiltering, RP::iAnisotropicFiltering);

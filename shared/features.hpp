@@ -66,7 +66,6 @@ namespace mgs4e::features
     inline constexpr Ours kOurs[] = {
         { keys::Graphics, keys::InternalResolutionScale, "internal-resolution",   "100" },
         { keys::Graphics, keys::ShadowResolutionScale,   "shadow-resolution",     "100" },
-        { keys::Graphics, keys::ShadowSampleCount,       "shadow-filter",         "0" },
         { keys::Graphics, keys::AnisotropicFiltering,    "anisotropic-filtering", "0" },
         { keys::Graphics, keys::DirectXVersion,          "api",                   keys::DirectXVersion_Off },
         { keys::Graphics, keys::WindowMode,              "window-mode",           keys::WindowMode_Off },

@@ -53,7 +53,12 @@ namespace mgs4e::keys
     constexpr const char* FovAdjustment = "FOV Adjustment (%)";
 
     constexpr const char* ShadowResolutionScale = "Shadow Resolution Scale (%)";
-    constexpr const char* ShadowSampleCount = "Shadow Softness (Samples)";
+    // "Shadow Softness (Samples)" (0.0.1 to 0.0.5) raised the engine's ShadowSampleCount. It
+    // was withdrawn: the value only sets how many taps share the game's one-texel-wide
+    // filter ring, so it never softened anything, and FusionFix pins it to 8 for its own
+    // shaders. Shadow filtering is FusionFix's ShadowTexelOverride, on its tab. The tool
+    // drops the key from a settings file it saves; the .asi ignores it.
+    constexpr const char* ShadowSampleCount_Retired = "Shadow Softness (Samples)";
     constexpr const char* AnisotropicFiltering = "Anisotropic Filtering";
 
     // Pixel-shader replacements for DirectX 12: DXBC blobs in a ReplacedShadersPS12 folder,

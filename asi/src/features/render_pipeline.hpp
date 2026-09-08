@@ -17,11 +17,6 @@ namespace RenderPipeline
     // width x 2*width, so this raises both. 1.0 leaves the game's own value alone.
     inline double fShadowResolutionScale = 1.0;
 
-    // Shadow filter taps. More samples soften a shadow's edge rather than sharpening it, so
-    // this is separate from the resolution scale; the game's highest preset supplies 7.
-    // 0 leaves the engine's own value alone.
-    inline int iShadowSampleCount = 0;
-
     // Maximum anisotropy forced on samplers that already request anisotropic filtering.
     // The game's highest texture preset asks for 8. 0 leaves samplers untouched.
     inline int iAnisotropicFiltering = 0;

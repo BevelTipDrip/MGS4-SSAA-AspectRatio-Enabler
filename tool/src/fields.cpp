@@ -143,15 +143,6 @@ namespace mgs4e::tool
             "\n"
             "Set to 100 to leave the game's shadow resolution untouched.";
 
-        constexpr const char* kHelp_ShadowSampleCount =
-            "How many samples the game takes when filtering a shadow edge.\n"
-            "\n"
-            "More samples give a smoother, less noisy shadow edge. This is separate from Shadow Resolution Scale, which controls how much detail the shadow has rather than how cleanly its edge is filtered.\n"
-            "\n"
-            "The game's highest Shadow Quality setting uses 7. Raising it costs shadow filtering performance but no extra memory.\n"
-            "\n"
-            "Set to 0 to leave the game's own value untouched.";
-
         constexpr const char* kHelp_AnisotropicFiltering =
             "Maximum anisotropy used when sampling textures viewed at a steep angle - floors, walls and terrain seen edge-on.\n"
             "\n"
@@ -256,7 +247,6 @@ namespace mgs4e::tool
                 { "Rendering", {
                     F::Int(G, K::InternalResolutionScale, kHelp_InternalResolutionScale, 100, 100, 400),
                     F::Int(G, K::ShadowResolutionScale, kHelp_ShadowResolutionScale, 100, 100, 400),
-                    F::Int(G, K::ShadowSampleCount, kHelp_ShadowSampleCount, 0, 0, 32),
                     F::Bool(G, K::ReplacedShadersDx12, kHelp_ReplacedShadersDx12, true),
                     F::Int(G, K::AnisotropicFiltering, kHelp_AnisotropicFiltering, 0, 0, 16),
                 }},

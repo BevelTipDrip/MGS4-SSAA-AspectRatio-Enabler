@@ -15,6 +15,9 @@ New
 - Window Mode (Fullscreen, Borderless, Windowed) and DirectX Version (11 or 12) overrides. The game's own options are left as they are; the mod changes what the engine reads at start. Note the game saves the running renderer as its own choice on exit.
 - Mod authors can give their own config file a tab in the tool without a code change: ship a `<YourMod>.MGS4Enabler.ini` manifest next to the .ini, describing the file, a blurb, a link and one block per setting (int, bool or choice). Only the listed keys are ever written. Mistakes in the manifest are shown on the tab rather than hiding it. The ini may sit beside the manifest or in the install folder, quoted values stay quoted, and the mod's .asi is looked for wherever the game loads from. Format and example: docs/mod-tabs.md.
 
+Removed
+- Shadow Softness (Samples). It raised the game's shadow sample count, which turned out to set only how many taps share the game's filter ring, never how wide the ring is: the game filters over one shadow texel, so the setting softened nothing, and a higher Shadow Resolution Scale makes edges harder. The width is what FusionFix's ShadowTexelOverride sets (a fraction of the shadow map, 0.001953125 being 1/512), and FusionFix fixes its shaders' sample count at 8 in any case, so shadow filtering is left to FusionFix, on its tab. The old key is dropped from the settings file on the next save.
+
 ## 0.0.5 (2026-09-07)
 
 Fixes

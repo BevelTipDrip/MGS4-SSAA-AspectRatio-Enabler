@@ -7,7 +7,7 @@ looks like on screen.
 | Feature | Setting |
 | --- | --- |
 | [Supersampling](supersampling.md) | Internal Resolution Scale (%) |
-| [Shadows](shadows.md) | Shadow Resolution Scale (%), Shadow Softness (Samples) |
+| [Shadows](shadows.md) | Shadow Resolution Scale (%) |
 | [Anti-aliasing](anti-aliasing.md) | FXAA, FXAA Quality |
 | [Texture filtering](texture-filtering.md) | Anisotropic Filtering |
 | [Window resolution](window-resolution.md) | Window Aspect Ratio, Window Resolution |

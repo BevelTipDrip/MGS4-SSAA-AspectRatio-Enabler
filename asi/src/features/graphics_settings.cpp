@@ -563,32 +563,13 @@ void GraphicsSettings::ApplyShadowAndAntiAliasing()
             }
         }
 
-        // ShadowSampleCount is the branch immediately above, distinguished only by the group
-        // id stored into the same slot - 4 rather than 5. More samples soften the edge of a
-        // shadow rather than sharpening it, so this is independent of the resolution scale
-        // and useful on its own: the highest preset ships 7.
-        if (iShadowSampleCount > 0
-            && !mgs4e::compat::Yields(mgs4e::keys::Graphics, mgs4e::keys::ShadowSampleCount))
-        {
-            if (uint8_t* ShadowSampleCountResult = mgs4e::mem::FindPattern(mgs4e::game::Module(),
-                "48 8D 4B 30 E8 ?? ?? ?? ?? C7 45 ?? 04 00 00 00",
-                "MGS4: Shadow Samples"))
-            {
-                static SafetyHookMid ShadowSampleCountMidHook {};
-                ShadowSampleCountMidHook = safetyhook::create_mid(ShadowSampleCountResult + 0x9,
-                    [](SafetyHookContext& ctx)
-                    {
-                        const auto base = static_cast<int32_t>(ctx.rax & 0xFFFFFFFF);
-                        if (base <= 0 || base >= iShadowSampleCount)
-                        {
-                            return;
-                        }
-
-                        spdlog::info("MGS4: Shadow Samples: ShadowSampleCount {} -> {}.",
-                            base, iShadowSampleCount);
-                        ctx.rax = (ctx.rax & ~0xFFFFFFFFull) | static_cast<uint32_t>(iShadowSampleCount);
-                    });
-                MGS4E_LOG_HOOK(ShadowSampleCountMidHook, "MGS4: Shadow Samples")
-            }
-        }
+        // The ShadowSampleCount branch immediately above (group 4) was hooked by "Shadow
+        // Softness (Samples)" until 0.0.6. The value reaches the shaders as the uniform
+        // vts_shadowSampleCount (cb0[30].x), but the game's filter is a centre tap and a ring
+        // of (count - 1) taps at 0.7 of one shadow texel (vts_shadowbufferSize, cb0[29], set
+        // by the engine to 1/W and 1/2W of the W x 2W atlas), so more taps never widened it,
+        // and a higher Shadow Resolution Scale makes the edge harder, not softer. Softening
+        // is that texel uniform, which FusionFix's ShadowTexelOverride sets (its hook on the
+        // setter at +663FA0 writes the value into XMM1/XMM2; its upload hook pins the count
+        // to 8 for its shaders). Left to FusionFix, on its tab.
 }

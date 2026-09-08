@@ -105,7 +105,7 @@ pass now covers the full window.
 **Image quality**
 - Internal resolution scaling up to 400 percent (supersampling). The window stays at your
   chosen resolution; the game renders larger and scales down.
-- Shadow map resolution scaling and shadow filter sample count.
+- Shadow map resolution scaling.
 - Anisotropic filtering up to 16x.
 - FXAA on/off and its quality level, which the game never exposes.
 
@@ -178,7 +178,6 @@ choice when it exits, so after clearing the DirectX override it stays on whichev
 | **FOV Adjustment (%)** | 100 | How much of the world the gameplay camera shows, relative to stock. On a 21:9 window, 133 restores the vertical view you would have at 16:9. |
 | **Internal Resolution Scale (%)** | 100 | Renders internally above your display resolution and scales down. Up to 400, with the internal buffer capped at 8192 wide: roughly 400 at 1080p, 200 at 4K. |
 | **Shadow Resolution Scale (%)** | 100 | Raises shadow map resolution beyond the game's highest Shadow Quality. 200 doubles it in each dimension and costs four times the shadow memory. |
-| **Shadow Softness (Samples)** | 0 (off) | How many samples the game takes filtering a shadow edge. The game's highest preset uses 7. |
 | **Anisotropic Filtering** | 0 (off) | Maximum anisotropy for textures seen at a steep angle. The game's highest texture setting asks for 8x; 16x is the hardware maximum and nearly free. |
 | **FXAA** | on | Post-process anti-aliasing. Overrides the game's own toggle. Needs a restart either way. |
 | **FXAA Quality** | Slow | Slow, Medium or Fast, where slower looks better. The game ships Medium. Worth keeping on even with supersampling, since extra resolution does not fix shader aliasing. |

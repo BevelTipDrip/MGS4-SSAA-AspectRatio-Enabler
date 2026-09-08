@@ -55,6 +55,9 @@ namespace mgs4e::tool
             }
         }
 
+        // Withdrawn in 0.0.6 (see settings_keys.hpp); not carried through a save.
+        graphics.erase(mgs4e::keys::ShadowSampleCount_Retired);
+
         ValidateKnown();
         m_Loaded = m_Values;
         return exists;

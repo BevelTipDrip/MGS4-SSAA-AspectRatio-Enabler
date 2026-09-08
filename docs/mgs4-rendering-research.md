@@ -723,7 +723,7 @@ that stores the parsed value, substituting ours.
 
 | Setting | Site | Notes |
 | --- | --- | --- |
-| `ShadowSampleCount` | `+142B39` | Shadow edge filter taps; highest preset ships 7. The branch immediately above `ShadowBufferSize` (`+142BDA`), distinguished only by the group id stored into the same slot — 4 rather than 5 |
+| `ShadowSampleCount` | `+142B39` | Shadow edge filter taps, uploaded as `vts_shadowSampleCount` (cb0[30].x). The branch immediately above `ShadowBufferSize` (`+142BDA`), distinguished only by the group id stored into the same slot — 4 rather than 5. No longer hooked (0.0.6): the game's filter is a centre tap plus a ring of count−1 taps at 0.7 of one shadow texel (`vts_shadowbufferSize`, cb0[29], set by `+663FA0` to 1/W, 1/2W), so the count never widens it; FusionFix's ShadowTexelOverride sets that texel instead, and its upload hook (`+66C48E`) pins the count to 8 |
 | `render.fxaa` | `+65CC49` | Read through a getter that appends a platform suffix to the base key, so there is no single global; the getter is setting-specific and leaves the answer in EAX |
 | `render.fxaaParam` | `+663DA6` | FXAA quality: `Slow(0) / Medium(1) / Fast(2)`, slower being better. Parsed as a double, narrowed with `cvtsd2ss`, stored as a float — the hook sits on that store |
 
