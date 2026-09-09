@@ -12,6 +12,7 @@ looks like on screen.
 | [Texture filtering](texture-filtering.md) | Anisotropic Filtering |
 | [Window resolution](window-resolution.md) | Window Aspect Ratio, Window Resolution |
 | Aspect ratio (ultrawide, 4:3) | Fix UI Aspect, Aspect Pool Spread — the implementation and its notes are a private module at external/ultrawide; the fork builds without it |
+| [Feature ownership](feature-ownership.md) | none of its own — keeps one mod per patched thing |
 | [Tooling](tooling.md) | not user-facing |
 
 **No counts here on purpose.** This table carried Active / Fixed / Unverified totals for about an

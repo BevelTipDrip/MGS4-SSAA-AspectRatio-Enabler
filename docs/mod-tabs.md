@@ -110,6 +110,9 @@ With that declared:
   installed mod has on, so its patch never stacks on yours. It also logs a warning naming any
   two other mods that both have a feature on.
 
+How the claims are read and what is done with them, in full:
+[docs/features/feature-ownership.md](features/feature-ownership.md).
+
 ## What the tool does with it
 
 - The tab lists only the blocks you wrote. **Nothing else in your file is ever written**: a save

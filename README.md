@@ -242,7 +242,8 @@ resolution, anisotropic filtering) and two of them on at once stack or fight at 
 manifest can say which *feature* each of its keys switches on, and this mod's own settings
 declare theirs, so the tool shows beside every row which other mod also has it on and, when
 you save, asks which mod keeps each feature and turns the others off. The `.asi` reads the same
-manifests when the game starts and stands down on anything another mod already has on.
+manifests when the game starts and stands down on anything another mod already has on. How it
+works: [docs/features/feature-ownership.md](docs/features/feature-ownership.md).
 
 **Mod authors:** nothing in this tool needs to change for yours. Ship your own manifest next
 to your `.ini`: the file to edit, a blurb, a link, and one block per setting (int, bool or
