@@ -4,10 +4,12 @@ Every release gets an entry here before it is packaged; `build\package.ps1` refu
 zip whose version has no heading below. The text is written to be pasted into the Nexus Mods
 changelog box as is.
 
-## 0.0.6 (2026-09-07)
+## 0.0.7 (2026-09-11)
 
 Fixes
 - DirectX 12 with an overlay running (RTSS, and likely others): the picture came out stretched at every shape and menu masking was silently off, with "queue MISSING" in the log. The overlay creates a swap chain of its own before the game does, and the mod took its present queue from the first chain only, so the game's real chain got no queue, no bands and no fit. The queue is now taken from every chain, with the game's own direct queue as a fallback. DirectX 11 was never affected.
+
+## 0.0.6 (2026-09-07)
 
 New
 - One mod per feature: manifests (and this mod's own settings) declare which feature each key switches on. The tool marks every row another installed mod also has on, and on save asks which mod keeps each feature, turning the others off. The .asi reads the same manifests at start, stands down on features another mod has on, and warns in its log when two other mods both have one on.
