@@ -40,6 +40,7 @@ namespace
     SafetyHookInline CreatePlacedResource_hook {};
 
     // ID3D12Device vtable slots (stable, part of the public COM ABI).
+    constexpr size_t kCreateCommandQueueSlot = 8;
     constexpr size_t kCreateSamplerSlot = 22;
     constexpr size_t kCreateCommittedResourceSlot = 27;
     constexpr size_t kCreatePlacedResourceSlot = 29;
@@ -904,6 +905,28 @@ namespace
 
     // Raises MaxAnisotropy on samplers that already ask for anisotropic filtering.
     SafetyHookInline CreateSampler_hook {};
+    SafetyHookInline CreateCommandQueue_hook {};
+
+    // Records the game's first direct queue (RenderPipeline::pDirectQueue12) for the private
+    // module's band renderer, which otherwise only learns the present queue from the
+    // argument to CreateSwapChainForHwnd - which an overlay's own throwaway swap chain, or a
+    // wrapped argument, can hide.
+    HRESULT STDMETHODCALLTYPE Hooked_CreateCommandQueue(ID3D12Device* self,
+        const D3D12_COMMAND_QUEUE_DESC* desc, REFIID riid, void** queue)
+    {
+        const HRESULT result = CreateCommandQueue_hook.stdcall<HRESULT>(self, desc, riid, queue);
+        if (SUCCEEDED(result) && desc && queue && *queue && desc->Type == D3D12_COMMAND_LIST_TYPE_DIRECT
+            && !RenderPipeline::pDirectQueue12)
+        {
+            ID3D12CommandQueue* q = nullptr;
+            if (SUCCEEDED(static_cast<IUnknown*>(*queue)->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&q))) && q)
+            {
+                RenderPipeline::pDirectQueue12 = q;   // keeps the reference
+                spdlog::info("MGS4: D3D12 direct command queue recorded.");
+            }
+        }
+        return result;
+    }
 
     void STDMETHODCALLTYPE Hooked_CreateSampler(ID3D12Device* self,
         const D3D12_SAMPLER_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
@@ -2589,6 +2612,11 @@ namespace
                 reinterpret_cast<void*>(Hooked_CreateCommittedResource));
             spdlog::info("MGS4: D3D12 CreateCommittedResource hook: {}.",
                 CreateCommittedResource_hook ? "installed" : "FAILED");
+
+            CreateCommandQueue_hook = safetyhook::create_inline(vtable[kCreateCommandQueueSlot],
+                reinterpret_cast<void*>(Hooked_CreateCommandQueue));
+            spdlog::info("MGS4: D3D12 CreateCommandQueue hook: {}.",
+                CreateCommandQueue_hook ? "installed" : "FAILED");
 
             if (RenderPipeline::iAnisotropicFiltering > 0)
             {

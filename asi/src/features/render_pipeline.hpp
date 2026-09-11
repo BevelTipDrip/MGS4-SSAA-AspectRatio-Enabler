@@ -53,6 +53,14 @@ namespace RenderPipeline
     // renderers). Nothing enumerates windows to find it.
     inline HWND hGameWindow = nullptr;
 
+    // The game's first direct (graphics) D3D12 command queue, an ID3D12CommandQueue* with a
+    // reference held, recorded when the game creates it. The band renderer presents on the
+    // queue the game passes to CreateSwapChainForHwnd; an overlay that creates a swap chain
+    // of its own before the game does (to find the Present vtable), or wraps the argument,
+    // hides that queue, and this is the fallback (2026-09-10, a player's report reproduced
+    // with the RTSS overlay).
+    inline void* pDirectQueue12 = nullptr;
+
     // Maximum internal render buffer width. A flat 8K ceiling.
     //
     // This used to be 4092, and 6720 with the UI shader workaround, because the engine narrowed
