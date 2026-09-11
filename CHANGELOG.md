@@ -8,6 +8,7 @@ changelog box as is.
 
 Fixes
 - DirectX 12 with an overlay running (RTSS, and likely others): the picture came out stretched at every shape and menu masking was silently off, with "queue MISSING" in the log. The overlay creates a swap chain of its own before the game does, and the mod took its present queue from the first chain only, so the game's real chain got no queue, no bands and no fit. The queue is now taken from every chain, with the game's own direct queue as a fallback. DirectX 11 was never affected.
+- Window Aspect Ratio on "Use Game Setting" on a 21:9 or 4:3 display: the game's own 16:9 picture was stretched to the window on DirectX 12, and a Centered or Expanded HUD was laid out for the window and squeezed into the picture. "Use Game Setting" now leaves every resolution and scaling hook off, as its name says, and the HUD modes follow the shape the game is actually rendering, so they do nothing while the game renders 16:9. Nothing changes with an aspect ratio selected.
 
 ## 0.0.6 (2026-09-07)
 
