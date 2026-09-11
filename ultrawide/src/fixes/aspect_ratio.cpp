@@ -3203,6 +3203,7 @@ namespace AspectRatio
         UINT width = 0;
         UINT height = 0;
         bool failed = false;
+        void* failedChain = nullptr;   // the chain the failure was on; another chain gets a fresh try
         uint32_t presents = 0;
         uint32_t cleared = 0;
     };
@@ -3664,15 +3665,17 @@ namespace AspectRatio
 
     void InstallFit12Device(ID3D12CommandQueue* queue, IUnknown* swapChain)
     {
-        static bool installed = false;
-        if (installed || !queue || !swapChain) { return; }
-        installed = true;
+        if (!queue || !swapChain) { return; }
+        // The latest chain, every time: an overlay's throwaway chain may have come first.
         IDXGISwapChain* chain = nullptr;
         if (SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&chain))) && chain)
         {
             g_FitSwapChain12 = chain;
             chain->Release();
         }
+        static bool installed = false;
+        if (installed) { return; }
+        installed = true;
         ID3D12Device* device = nullptr;
         if (SUCCEEDED(queue->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device))) && device)
         {
@@ -4246,7 +4249,23 @@ namespace AspectRatio
         }
 
         // D3D12: a command list of our own on the game's present queue.
-        if (!g_PresentQueue) { spdlog::error("MGS4: letterbox: no command queue captured at swap chain creation."); return false; }
+        if (!g_PresentQueue)
+        {
+            // Nothing came with the chain (see HookSwapChain); the game's own direct queue
+            // is the one it presents on.
+            if (auto* fallback = static_cast<ID3D12CommandQueue*>(RenderPipeline::pDirectQueue12))
+            {
+                fallback->AddRef();
+                g_PresentQueue = fallback;
+                spdlog::info("MGS4: letterbox: presenting bands on the game's direct queue (no queue came with the swap chain).");
+            }
+            else
+            {
+                spdlog::error("MGS4: letterbox: no command queue captured at swap chain creation, and none recorded from the device.");
+                return false;
+            }
+        }
+        InstallFit12Device(g_PresentQueue, swapChain);
         if (FAILED(swapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&b.device))) || !b.device)
         {
             spdlog::error("MGS4: letterbox: the swap chain's device is neither D3D11 nor D3D12."); return false;
@@ -4359,7 +4378,11 @@ namespace AspectRatio
         std::lock_guard lock(g_BandMutex);
         BandRenderer& b = g_Band;
         b.presents++;
-        if (b.failed) { return; }
+        // A failure sticks to the chain it happened on; a different chain presenting (the
+        // game's, after an overlay's) gets its own attempt.
+        if (b.failed && b.failedChain == static_cast<void*>(swapChain)) { return; }
+        b.failed = false;
+        b.failedChain = nullptr;
 
         if (!b.swapChain || b.swapChain != static_cast<void*>(swapChain))
         {
@@ -4371,8 +4394,9 @@ namespace AspectRatio
             if (!same && !BandSetup(b, swapChain))
             {
                 b.failed = true;
+                b.failedChain = swapChain;
                 BandRelease(b);
-                spdlog::error("MGS4: letterbox: bands disabled for this session.");
+                spdlog::error("MGS4: letterbox: bands disabled on this swap chain (another one would get a fresh try).");
                 return;
             }
         }
@@ -4539,7 +4563,12 @@ namespace AspectRatio
             DXGI_SWAP_CHAIN_DESC desc {};
             if (SUCCEEDED(chain->GetDesc(&desc))) { window = desc.OutputWindow; }
         }
-        if (window) { RenderPipeline::hGameWindow = window; }   // the public module's surface lookup reads it
+        // The public module's surface lookup reads it. An overlay's throwaway chain has a
+        // window too, hidden; it must not displace a visible one already recorded.
+        if (window && (IsWindowVisible(window) || !RenderPipeline::hGameWindow || !IsWindow(RenderPipeline::hGameWindow)))
+        {
+            RenderPipeline::hGameWindow = window;
+        }
         RECT client {};
         if (!window || !GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) { return false; }
         width = static_cast<UINT>(client.right);
@@ -4607,20 +4636,77 @@ namespace AspectRatio
                 chain->Release();
             }
         }
-        static bool hooked = false;
-        if (hooked || !swapChain) { return; }
-        hooked = true;
+        if (!swapChain) { return; }
 
-        if (presenter)
+        // The present queue, taken from every chain rather than the first one seen. An
+        // overlay (RTSS, and most others) creates a throwaway swap chain before the game
+        // does, to find the Present vtable, and nothing presents on it; latching on that
+        // chain left the game's own with no queue, so no band renderer and, on D3D12, no fit
+        // (the fit hooks hang off the band renderer's command list): the picture was shown
+        // unscaled (a player's report, 2026-09-10, reproduced with the RTSS overlay). The
+        // game's chain comes with its queue as the presenter; failing that (an overlay that
+        // wraps the argument), the direct queue the game created stands in, for a chain on a
+        // D3D12 device only.
+        ID3D12CommandQueue* queue = nullptr;
+        std::string queueSource = "MISSING";
+        if (presenter && SUCCEEDED(presenter->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&queue))) && queue)
         {
-            ID3D12CommandQueue* queue = nullptr;
-            if (SUCCEEDED(presenter->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&queue))) && queue)
+            queueSource = "captured";
+        }
+        else
+        {
+            IDXGISwapChain* chain = nullptr;
+            if (SUCCEEDED(swapChain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&chain))) && chain)
             {
-                g_PresentQueue = queue;   // keeps its reference
-                InstallFit12Device(queue, swapChain);
+                ID3D12Device* device12 = nullptr;
+                if (SUCCEEDED(chain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device12))) && device12)
+                {
+                    device12->Release();
+                    if (auto* fallback = static_cast<ID3D12CommandQueue*>(RenderPipeline::pDirectQueue12))
+                    {
+                        fallback->AddRef();
+                        queue = fallback;
+                        queueSource = "the game's direct queue (the presenter was not a queue)";
+                    }
+                    else
+                    {
+                        queueSource = "MISSING (a D3D12 chain whose presenter is not a queue, and no direct queue recorded)";
+                    }
+                }
+                else
+                {
+                    queueSource = "not needed (not a D3D12 chain)";
+                }
+                chain->Release();
             }
         }
+        if (queue)
+        {
+            if (g_PresentQueue == queue)
+            {
+                queue->Release();               // one reference is enough
+            }
+            else
+            {
+                if (g_PresentQueue) { g_PresentQueue->Release(); }
+                g_PresentQueue = queue;         // keeps its reference
+            }
+            InstallFit12Device(g_PresentQueue, swapChain);
+        }
+
+        // The vtable hooks, once: every swap chain of the class shares them. A chain of a
+        // different class is reported so the log shows it, since its presents would go unseen.
+        static bool hooked = false;
+        static void* hookedPresent = nullptr;
         void** vtable = *reinterpret_cast<void***>(swapChain);
+        if (hooked)
+        {
+            spdlog::info("MGS4: letterbox: another swap chain created ({} vtable), queue {}.",
+                vtable[kSwapChainPresentSlot] == hookedPresent ? "same" : "DIFFERENT", queueSource);
+            return;
+        }
+        hooked = true;
+        hookedPresent = vtable[kSwapChainPresentSlot];
         Present_hook = safetyhook::create_inline(vtable[kSwapChainPresentSlot], reinterpret_cast<void*>(Hooked_Present));
         ResizeBuffers_hook = safetyhook::create_inline(vtable[kSwapChainResizeBuffersSlot], reinterpret_cast<void*>(Hooked_ResizeBuffers));
         IDXGISwapChain1* one = nullptr;
@@ -4637,7 +4723,7 @@ namespace AspectRatio
         }
         spdlog::info("MGS4: letterbox: swap chain hooked (Present {}, Present1 {}, ResizeBuffers {}, ResizeBuffers1 {}), queue {}.",
             Present_hook ? "ok" : "FAILED", Present1_hook ? "ok" : "absent", ResizeBuffers_hook ? "ok" : "FAILED",
-            ResizeBuffers1_hook ? "ok" : "absent", g_PresentQueue ? "captured" : "MISSING");
+            ResizeBuffers1_hook ? "ok" : "absent", queueSource);
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device,

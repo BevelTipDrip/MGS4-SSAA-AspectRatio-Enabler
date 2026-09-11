@@ -526,3 +526,41 @@ The harness route: `scratchpad/opening_run.ps1` - boot to the main menu, Up twic
 (NEW GAME), Enter (difficulty), Enter, then captures every N seconds; the video starts ~10 s
 after the difficulty select and runs for a couple of minutes. The prologue drama stages
 (`s00a00l_D`, `s00a10l_D..D9`) are engine cutscenes, not videos.
+
+## AR-018: an overlay's swap chain took the queue slot, so D3D12 lost its fit and bands (2026-09-10)
+
+A player's log and screenshots: on DirectX 12 the picture was stretched vertically at every
+shape (4:3, 16:9, 21:9) and the log read `swap chain hooked (...), queue MISSING` then `no
+command queue captured at swap chain creation` and `bands disabled for this session`. Fine on
+DirectX 11. The user reproduced it with RTSS and its overlay on; the player says they run no
+RTSS, so another overlay (Steam's recording is their guess) is doing the same thing.
+
+Mechanism, from the reproduction's log: the `queue MISSING` line lands before the game has
+created either of its devices. RTSS creates a throwaway swap chain of its own (to find the
+Present vtable) before the game does, and `HookSwapChain` latched on the first chain it saw:
+the queue was taken from that chain's presenter only, which is not a D3D12 queue, and the
+game's real chain was never asked. No queue means no band renderer, and on D3D12 the fit
+hooks (`InstallFit12Lists`) hang off the band renderer's command list, so the fit never ran
+either: the engine's picture was left as it draws it, which at a fitted window is the
+stretch. The first failure also set a permanent `failed` flag.
+
+Fix, three parts, none of them changing the no-overlay path:
+- `HookSwapChain` takes the queue from every chain created: the presenter when it is a
+  queue; otherwise, for a chain on a D3D12 device, the game's own direct queue, which the
+  public module now records at `ID3D12Device::CreateCommandQueue`
+  (`RenderPipeline::pDirectQueue12`). The vtable hooks stay once per class; a further chain
+  is logged with whether its vtable is the same, so a chain of another class would show.
+  `InstallFit12Device` updates the fit's chain every time and installs its hook once.
+- `BandSetup` falls back to the recorded direct queue too.
+- A band failure sticks to the chain it happened on (`failedChain`); another chain presenting
+  gets its own attempt.
+- `WindowClientSize` no longer lets a hidden window (the throwaway chain's) displace a visible
+  one already recorded as the game window.
+
+Verified with the RTSS overlay on for mgs4 (the per-game profile had it off, which is why
+the first two attempts here did not reproduce): Release build, 21:9 3440x1440 borderless on
+the 3840x2160 desktop, DirectX 12. Log: first chain `queue not needed (not a D3D12 chain)`,
+then `D3D12 direct command queue recorded`, `another swap chain created (same vtable), queue
+captured`, band renderer ready, `fit: 3440x1440 picture scaled x1.1163 into a 3840x1607 rect
+at (0,276)` - the same lines as a run without the overlay. Gameplay capture from the Lab
+build sent to the user; their read pending at the time of writing.
