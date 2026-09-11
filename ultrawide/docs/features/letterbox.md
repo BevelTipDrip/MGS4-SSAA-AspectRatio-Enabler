@@ -562,5 +562,44 @@ the first two attempts here did not reproduce): Release build, 21:9 3440x1440 bo
 the 3840x2160 desktop, DirectX 12. Log: first chain `queue not needed (not a D3D12 chain)`,
 then `D3D12 direct command queue recorded`, `another swap chain created (same vtable), queue
 captured`, band renderer ready, `fit: 3440x1440 picture scaled x1.1163 into a 3840x1607 rect
-at (0,276)` - the same lines as a run without the overlay. Gameplay capture from the Lab
-build sent to the user; their read pending at the time of writing.
+at (0,276)` - the same lines as a run without the overlay. Verified by the user on
+2026-09-11 from gameplay captures at the reporter's own configuration, a native 3440x1440
+desktop (the capture card's EDID overridden with CRU), RTSS overlay on, 21:9 override at
+3440x1440, DirectX 12 borderless: "the first run looked fine". The reporter's odd first
+chain (3440x1421 before the resize to 3440x1440) reproduces on this machine too and is only
+the start-up transient.
+
+## AR-019: "Use Game Setting" still ran the fit and the band widening, and the HUD spread followed the window (2026-09-11)
+
+Found while verifying AR-018 at native 3440x1440 with Window Aspect Ratio on "Use Game
+Setting". The engine then renders at the game's own resolution (2560x1440, a 16:9 buffer,
+`render buffer 2560x1440 -> 5120x2880 ... Output stays at 3440x1440`) and pillarboxes it
+into the 21:9 window, which is stock behaviour. Two things of ours were wrong with that:
+the AR-015 widening matched the engine's pillarbox band and stretched the 16:9 picture to
+the window (user: "everything is stretched vertically", the same read as the player's
+screenshots, though theirs was AR-018), and the HUD spread, keyed on the window size, laid
+the interface out for 21:9 inside a 16:9 picture, so the engine's band squeezed it ("we are
+squeezing a 21:9 hud into a 16:9 pillarbox, while maintaining a 16:9 render").
+
+Rule, from the user: "Use Game Setting" for the aspect and window mode disables every
+resolution and scaling hook, supersampling aside - those settings live under Ultrawide and
+4:3 for a reason - and "any time the game is rendering in a 16:9 resolution, there is no
+reason to have the expanded hud". The render and the HUD are never to be stretched or
+compressed.
+
+Fix: `ComputeFit` and `CurrentWindowBand` return inactive unless `bOverrideWindowSize`
+(the fit and the widening join `SizeToWindow` and the mode clamp, which were already gated);
+and the HUD spread (`HorizontalSpreadFactor`, `VerticalSpreadFactor`, the layout range in
+the layer-1 hook, the F11 report) reads the render buffer's shape (`PictureSize`,
+`render.bufferSizeX/Y`) instead of the window's. With an override the two shapes are the
+same and nothing changes: the override run's log shows `UI Aspect: 6880x2880 output`, the
+band widened, the compass anchored by 0.2558 as before. Without one a 16:9 render gets a
+16:9 interface and the Expanded HUD setting is inert.
+
+A first attempt at the widening (leave the band alone when the render buffer is 16:9,
+keep everything else) was withdrawn the same day: it kept the pillarbox but still spread
+the HUD for the window, and it was not the rule.
+
+Verified by the user, 2026-09-11, from two Lab captures at the native 3440x1440 desktop,
+DirectX 12 borderless, RTSS overlay on: "Use Game Setting" (16:9 render pillarboxed, 16:9
+HUD, no fit, no widening) and the 21:9 override (unchanged): "Yes, these are correct".

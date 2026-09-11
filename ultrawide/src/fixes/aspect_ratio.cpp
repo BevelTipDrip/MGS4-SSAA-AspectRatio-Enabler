@@ -141,6 +141,22 @@ namespace AspectRatio
     // kept as constants here so this file stands alone if the hook is disabled.
     constexpr uintptr_t kRvaWindowSizeX = 0x1B00460;
     constexpr uintptr_t kRvaWindowSizeY = 0x1B00464;
+    constexpr uintptr_t kRvaRenderBufferSizeX = 0x1B00000;
+    constexpr uintptr_t kRvaRenderBufferSizeY = 0x1B00004;
+
+    // The picture the interface is composed into: the render buffer (the layout object's
+    // physical viewport, "physical 0 0 5120 2880" in the log), not the window. With a Window
+    // Aspect Ratio override the two have the same shape. Without one the engine renders at
+    // the game's own resolution - 16:9 in a 21:9 window - and pillarboxes it, so a HUD spread
+    // for the window is squeezed into the band (user, 2026-09-11: "any time the game is
+    // rendering in a 16:9 resolution, there is no reason to have the expanded hud"). The
+    // spread and the layout range therefore follow the render buffer's shape; the internal
+    // resolution scale keeps it.
+    inline void PictureSize(int32_t& width, int32_t& height)
+    {
+        std::memcpy(&width, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaRenderBufferSizeX), sizeof(width));
+        std::memcpy(&height, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaRenderBufferSizeY), sizeof(height));
+    }
 
     // Field offsets within a layout object. Logical range is left/top/right/bottom.
     constexpr uintptr_t kLayoutLogicalLeft = 0x210;
@@ -238,8 +254,7 @@ namespace AspectRatio
 
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
+        PictureSize(outputWidth, outputHeight);
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -703,8 +718,7 @@ namespace AspectRatio
     {
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
+        PictureSize(outputWidth, outputHeight);
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -727,8 +741,7 @@ namespace AspectRatio
     {
         int32_t outputWidth = 0;
         int32_t outputHeight = 0;
-        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
-        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
+        PictureSize(outputWidth, outputHeight);
 
         if (outputWidth < 320 || outputHeight < 240 || outputWidth > 16384 || outputHeight > 16384)
         {
@@ -3247,6 +3260,9 @@ namespace AspectRatio
         f.h = chainH;
         f.cw = chainW;
         f.ch = chainH;
+        // Window Aspect Ratio on "Use Game Setting" is stock play: no resolution or scaling
+        // hook runs, the fit included (user, 2026-09-11). Only the masking bands may be on.
+        if (!RenderPipeline::bOverrideWindowSize) { return f; }
         f.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
         f.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
         if (f.ww <= 0 || f.wh <= 0 || chainW == 0 || chainH == 0
@@ -3326,6 +3342,9 @@ namespace AspectRatio
     WindowBand CurrentWindowBand()
     {
         WindowBand b;
+        // Stock play ("Use Game Setting"): the engine's band is left as the engine draws it,
+        // like every other scaling hook (see ComputeFit).
+        if (!RenderPipeline::bOverrideWindowSize) { return b; }
         b.ww = RenderPipeline::pWindowResX ? *RenderPipeline::pWindowResX : 0;
         b.wh = RenderPipeline::pWindowResY ? *RenderPipeline::pWindowResY : 0;
         if (b.ww <= 0 || b.wh <= 0) { return b; }
@@ -4897,8 +4916,7 @@ namespace AspectRatio
                     if (down && !wasDown)
                     {
                         int32_t outputWidth = 0, outputHeight = 0;
-                        std::memcpy(&outputWidth, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeX), sizeof(outputWidth));
-                        std::memcpy(&outputHeight, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaWindowSizeY), sizeof(outputHeight));
+                        PictureSize(outputWidth, outputHeight);
                         spdlog::info("MGS4: HUD report (F11): output {}x{}, factor {:.4f} x {:.4f}, layout {}, world tracking {}.",
                             outputWidth, outputHeight, HorizontalSpreadFactor(), VerticalSpreadFactor(),
                             bAspectPoolSpread ? "expanded" : "centered", bAspectWorldTracking ? "on" : "off");
