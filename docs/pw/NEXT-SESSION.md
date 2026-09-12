@@ -49,6 +49,13 @@ vertices at `Unmap`.
 
 ## To do
 
+- **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through
+  Afevis's ini): the flare appears at random and its anchor lands off screen, as if a value
+  overflows. Lead: the half-glare site Afevis patches begins with a sign-extended 16-bit move,
+  so the anchor is int16 somewhere before it becomes a float; a pixel-space step at render
+  scale 10.59 could pass 32767. Plan: census on a hotkey (press when it misbehaves), probes on
+  the glare and half-glare sites logging the registers and the 16-bit anchor, compare
+  3440x1440 against 6880x2880.
 - Record the title-to-menu route; census that menu; then the (texture, rectangle) bias
   command for live editing.
 - A title census with Afevis's ASI removed from `mgspw\scripts` (does his HUD fixup change the

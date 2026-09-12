@@ -90,7 +90,7 @@ namespace
         D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
         void* vs = nullptr;
         void* ps = nullptr;
-        ID3D11Buffer* vsCb0 = nullptr;
+        ID3D11Buffer* vsCb[4] {};   // vertex shader constant buffer slots 0..3
         std::string texture = "-";      // pixel shader resource slot 0
         std::vector<uint8_t> lastVertexUpload;   // head of the last non-constant buffer unmapped on this context
         size_t lastVertexUploadSize = 0;
@@ -105,7 +105,7 @@ namespace
     std::atomic<uint64_t> g_ListsSeen { 0 };
     int g_DrawsThisFrame = 0;   // all contexts, for the frame line
 
-    struct Snapshot { float f[16]; bool valid; };
+    struct Snapshot { float f[64]; size_t count; bool valid; };
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
     std::unordered_map<ID3D11Resource*, Snapshot> g_LatestUpload;  // constant buffer -> latest 16 floats
     struct Mapping { void* data; size_t size; };
@@ -227,9 +227,10 @@ namespace
     void Snapshot16(ID3D11Resource* res, const void* data, size_t size)
     {
         Snapshot s {};
-        const size_t n = std::min<size_t>(16, size / sizeof(float));
+        const size_t n = std::min<size_t>(64, size / sizeof(float));
         if (n == 0) { return; }
         std::memcpy(s.f, data, n * sizeof(float));
+        s.count = n;
         s.valid = true;
         g_LatestUpload[res] = s;
     }
@@ -242,16 +243,21 @@ namespace
         ContextState& st = g_State[self];
         st.draws++;
         g_DrawsThisFrame++;
-        std::string cb = "cb0 -";
-        if (st.vsCb0)
+        // Every bound vertex constant buffer: slot, byte size, and its latest upload (slot 0 in
+        // full, up to 64 floats; the others 16 floats), in rows of four.
+        std::string cb;
+        for (int slot = 0; slot < 4; slot++)
         {
-            const auto it = g_LatestUpload.find(st.vsCb0);
-            if (it != g_LatestUpload.end() && it->second.valid)
-            {
-                cb = "cb0";
-                for (int i = 0; i < 16; i++) { cb += std::format(" {:.4g}", it->second.f[i]); }
-            }
+            if (!st.vsCb[slot]) { continue; }
+            D3D11_BUFFER_DESC d {};
+            st.vsCb[slot]->GetDesc(&d);
+            cb += std::format("{}cb{}[{}B]", cb.empty() ? "" : " ", slot, d.ByteWidth);
+            const auto it = g_LatestUpload.find(st.vsCb[slot]);
+            if (it == g_LatestUpload.end() || !it->second.valid) { cb += " -"; continue; }
+            const size_t n = std::min<size_t>(it->second.count, slot == 0 ? 64 : 16);
+            for (size_t i = 0; i < n; i++) { cb += std::format("{}{:.4g}", (i % 4 == 0) ? " |" : " ", it->second.f[i]); }
         }
+        if (cb.empty()) { cb = "cb -"; }
         const auto vs = g_ShaderHash.find(st.vs);
         const auto ps = g_ShaderHash.find(st.ps);
         spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} vs={} ps={} {} | {}",
@@ -347,7 +353,11 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_VSSetConstantBuffers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11Buffer* const* buffers)
     {
-        if (start == 0 && count > 0 && buffers) { std::lock_guard lock(g_Mutex); g_State[self].vsCb0 = buffers[0]; }
+        if (buffers)
+        {
+            std::lock_guard lock(g_Mutex);
+            for (UINT i = 0; i < count && start + i < 4; i++) { g_State[self].vsCb[start + i] = buffers[i]; }
+        }
         Original<decltype(&Hooked_VSSetConstantBuffers)>(self, kCtxVSSetConstantBuffers)(self, start, count, buffers);
     }
 
