@@ -342,7 +342,7 @@ nothing maps them in menus); leave the post chain at scene size.
 | --- | --- | --- |
 | mean GPU work per frame | 5.9 ms | 7.7 ms |
 | worst frame | 16.9 ms | 16.9 ms |
-| user's reading | steady 60 fps, GPU ~30% at idle clocks | (RTSS reading pending) |
+| user's reading | steady 60 fps, GPU ~30% at idle clocks | steady, GPU usage very low; a couple of hitches at mission load only (user, 2026-09-13) |
 
 With MSAA on the resolves cost 1.4 ms (`2752864a`) + 0.4 ms (`baa9f4b4`) and the fills 0.7 ms
 for both; the DoF composite (`7023c633`, ~90 small draws) 1.2 ms; the resolve/copy 0.7 ms.
