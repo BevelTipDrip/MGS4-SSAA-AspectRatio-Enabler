@@ -110,6 +110,9 @@ target follow it (a 6880x2880 window on a 3440x1440 desktop, measured); his ini 
 values with thousands separators (`6,880` reads as 0 and falls back to the desktop size). What
 the patch does for the HUD and the aspect is in the private module.
 
+The game's own window, display-mode, settings and swap-chain plumbing was read from a live
+dump on 2026-09-13; the notes are in the private module.
+
 ## Open questions (Phase 0 answers these)
 
 - DirectX 11 or 12: answered (11, four runs; the DirectX 11 swap chain presents).
