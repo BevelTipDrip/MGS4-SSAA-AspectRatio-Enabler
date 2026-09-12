@@ -25,6 +25,9 @@ Loader zip). Do not prepare a release unless asked. Every version bump gets its 
 `CHANGELOG.md` first (Nexus-ready plain text: Fixes / New / Notes); the packager refuses a
 version with no entry.
 
+**Peace Walker** has its own build, harness and start-here document: `docs/pw/NEXT-SESSION.md`.
+Nothing under `asi\` changes for it.
+
 **Never push or tag without being asked.** Commit freely; pushing is the user's call every time.
 
 ---

@@ -1,11 +1,13 @@
 # Packages a release zip from bin\Release:
 #
 #   MGS4Enabler_<version>.zip
-#     MGS4Enabler.exe
+#     MGS4Enabler.exe                 the settings tool, one exe for both games
 #     README.md
 #     UltimateASILoader_LICENSE.md
 #     MGS4\winmm.dll                  Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
 #     MGS4\scripts\MGS4Enabler.asi
+#     mgspw\winmm.dll                 the same loader, for Peace Walker
+#     mgspw\scripts\MGSPWEnabler.asi  the Peace Walker build (one version line for both games)
 #
 # The loader is not in this repository. Pass -LoaderZip with the Ultimate-ASI-Loader_x64.zip
 # from https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases (or drop it in build\loader\).
@@ -35,16 +37,19 @@ if ($changelog -notmatch "(?m)^## $([regex]::Escape($version)) \(") {
 }
 
 $asi = Join-Path $root 'bin\Release\MGS4Enabler.asi'
+$asiPw = Join-Path $root 'bin\Release\MGSPWEnabler.asi'
 $exe = Join-Path $root 'bin\Release\MGS4Enabler.exe'
-foreach ($f in $asi, $exe) {
+foreach ($f in $asi, $asiPw, $exe) {
     if (-not (Test-Path $f)) { throw "Missing $f - run build\build.cmd first." }
 }
 if (-not (Test-Path $sevenZip)) { throw "7-Zip not found at $sevenZip." }
 
 # A Lab build must never ship: it carries the research instrumentation (shared\lab.hpp). The
 # lab-mode banner is a string only a Lab ASI contains.
-if (Select-String -Path $asi -Pattern 'LAB MODE: research instrumentation' -Quiet) {
-    throw "$asi is a Lab build. Build the Release configuration before packaging."
+foreach ($f in $asi, $asiPw) {
+    if (Select-String -Path $f -Pattern 'LAB MODE: research instrumentation' -Quiet) {
+        throw "$f is a Lab build. Build the Release configuration before packaging."
+    }
 }
 
 if (-not $LoaderZip) { $LoaderZip = Join-Path $PSScriptRoot 'loader\Ultimate-ASI-Loader_x64.zip' }
@@ -57,6 +62,7 @@ $out = Join-Path $root "release\$version"
 $stage = Join-Path $out 'stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force (Join-Path $stage 'MGS4\scripts') | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $stage 'mgspw\scripts') | Out-Null
 
 # Loader: the zip holds dinput8.dll; MGS4 loads it under the winmm.dll name.
 $loaderDir = Join-Path $out 'loader'
@@ -66,6 +72,7 @@ $loaderDll = Get-ChildItem $loaderDir -Filter '*.dll' | Select-Object -First 1
 if (-not $loaderDll) { throw "No DLL inside $LoaderZip." }
 $loaderVersion = (Get-Item $loaderDll.FullName).VersionInfo.ProductVersion
 Copy-Item $loaderDll.FullName (Join-Path $stage 'MGS4\winmm.dll')
+Copy-Item $loaderDll.FullName (Join-Path $stage 'mgspw\winmm.dll')
 
 Copy-Item $asi (Join-Path $stage 'MGS4\scripts\MGS4Enabler.asi')
 # Manifests for other mods' tabs go where those mods live; the tool shows a tab only while
@@ -77,6 +84,13 @@ Get-ChildItem (Join-Path $root 'manifests') -Filter '*.MGS4Enabler.ini' | ForEac
 # for, so the .asi can port them at pipeline creation (shaders\*.dx12.map).
 Get-ChildItem (Join-Path $root 'shaders') -Filter '*.dx12.map' | ForEach-Object {
     Copy-Item $_.FullName (Join-Path (Join-Path $stage 'MGS4\scripts') $_.Name)
+}
+# Peace Walker: its plugin and the manifests for its mods' tabs.
+Copy-Item $asiPw (Join-Path $stage 'mgspw\scripts\MGSPWEnabler.asi')
+if (Test-Path (Join-Path $root 'manifests\pw')) {
+    Get-ChildItem (Join-Path $root 'manifests\pw') -Filter '*.MGSPWEnabler.ini' | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path (Join-Path $stage 'mgspw\scripts') $_.Name)
+    }
 }
 Copy-Item $exe (Join-Path $stage 'MGS4Enabler.exe')
 Copy-Item (Join-Path $root 'README.md') (Join-Path $stage 'README.md')
@@ -95,5 +109,6 @@ Remove-Item $loaderDir -Recurse -Force
 
 Write-Host "Packaged $zip"
 Write-Host "  MGS4Enabler.asi  $((Get-Item $asi).Length) bytes"
+Write-Host "  MGSPWEnabler.asi $((Get-Item $asiPw).Length) bytes"
 Write-Host "  MGS4Enabler.exe $((Get-Item $exe).Length) bytes"
-Write-Host "  Ultimate ASI Loader $loaderVersion as MGS4\winmm.dll"
+Write-Host "  Ultimate ASI Loader $loaderVersion as MGS4\winmm.dll and mgspw\winmm.dll"

@@ -11,6 +11,10 @@ Fixes
 - Window Aspect Ratio on "Use Game Setting" on a 21:9 or 4:3 display: the game's own 16:9 picture was stretched to the window on DirectX 12, and a Centered or Expanded HUD was laid out for the window and squeezed into the picture. "Use Game Setting" now leaves every resolution and scaling hook off, as its name says, and the HUD modes follow the shape the game is actually rendering, so they do nothing while the game renders 16:9. Nothing changes with an aspect ratio selected.
 - A 16:10 (or other narrower) resolution on a 21:9 display: black strips covered the sides of the picture and cut off the HUD and menu text. The engine's own 16:9 band scaled into the window by a fraction, and a one-pixel rounding difference left its scissor unmatched while the viewport was widened. The match now allows two pixels.
 
+Peace Walker
+- A second plugin, MGSPWEnabler.asi, for METAL GEAR SOLID: Peace Walker - Master Collection Version, in the same zip: mgspw\winmm.dll (the loader), mgspw\scripts\MGSPWEnabler.asi, its own MGSPWEnabler.settings and logs\MGSPWEnabler_Game.log. At this release it loads, reads its settings and logs, and patches nothing: the engine research comes first. It works without the tool.
+- The settings tool now serves whichever game's folder it is placed in (MGS4 or Peace Walker); the MGS4 window is unchanged.
+
 ## 0.0.6 (2026-09-07)
 
 New
