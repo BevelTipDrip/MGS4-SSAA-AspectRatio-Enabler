@@ -21,6 +21,10 @@ namespace UiBias
     // the census's description of the texture bound to pixel-shader slot 0 ("WxH fmtN 0x...").
     void OnVertexUnmap(const std::string& texture, void* data, size_t size);
 
+    // True once the mission HUD has been drawn (the timer group's constant upload seen); logged
+    // once as "GAMEPLAY HUD" so a run script can wait for it before measuring.
+    bool GameplaySeen();
+
     // How many uploads each kind of bias has rewritten so far (for the census frame line).
     uint64_t AppliedVertex();
     uint64_t AppliedTranslation();

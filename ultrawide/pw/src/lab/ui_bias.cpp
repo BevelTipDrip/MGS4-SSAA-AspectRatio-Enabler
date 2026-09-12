@@ -26,6 +26,7 @@ namespace
     std::vector<TranslationBias> g_Translation;
     std::atomic<uint64_t> g_AppliedVertex { 0 };
     std::atomic<uint64_t> g_AppliedTranslation { 0 };
+    std::atomic<bool> g_GameplaySeen { false };
 
     // Stride of a UI upload without the draw count: whole quads of 24-byte textured vertices
     // (144 B each) or 16-byte untextured ones (96 B each); otherwise by divisibility.
@@ -48,8 +49,20 @@ namespace UiBias
     uint64_t AppliedVertex() { return g_AppliedVertex.load(); }
     uint64_t AppliedTranslation() { return g_AppliedTranslation.load(); }
 
+    bool GameplaySeen() { return g_GameplaySeen.load(); }
+
     void OnConstantUnmap(void* data, size_t size)
     {
+        // Gameplay marker: the mission timer / remaining-enemies group draws with translation
+        // (-11, -8) and the UI ortho; nothing outside a mission uses that row.
+        if (!g_GameplaySeen.load() && size >= 32 * sizeof(float))
+        {
+            const float* f = static_cast<const float*>(data);
+            if (std::fabs(f[0] - 2.0f / 480.0f) <= 1e-5f && std::fabs(f[28] + 11.0f) < 0.5f && std::fabs(f[29] + 8.0f) < 0.5f && !g_GameplaySeen.exchange(true))
+            {
+                spdlog::info("PW census: GAMEPLAY HUD: the mission timer group is being drawn.");
+            }
+        }
         std::lock_guard lock(g_Mutex);
         if (g_Translation.empty() || size < 32 * sizeof(float)) { return; }
         float* f = static_cast<float*>(data);

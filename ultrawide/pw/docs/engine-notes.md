@@ -335,3 +335,24 @@ is the drain before it, not the copy.
 **Standing recommendation for a shipping supersample**: integer render scale; MSAA off above
 the game's own scales (6 ms at 8K); GPU-local frame textures (1.3 ms, pending a check that
 nothing maps them in menus); leave the post chain at scene size.
+
+## Certified gameplay timing at 8K (Measured, 2026-09-13, user in the mission, F11-triggered sixty-frame windows, `GAMEPLAY HUD` marker logged first, 3840x2160 @ 60 Hz window, scale 16, GPU-local frame textures, Afevis off)
+
+| | MSAA off | game's 4x MSAA |
+| --- | --- | --- |
+| mean GPU work per frame | 5.9 ms | 7.7 ms |
+| worst frame | 16.9 ms | 16.9 ms |
+| user's reading | steady 60 fps, GPU ~30% at idle clocks | (RTSS reading pending) |
+
+With MSAA on the resolves cost 1.4 ms (`2752864a`) + 0.4 ms (`baa9f4b4`) and the fills 0.7 ms
+for both; the DoF composite (`7023c633`, ~90 small draws) 1.2 ms; the resolve/copy 0.7 ms.
+So in real play the game's MSAA costs ~2 ms at 8K, not the 6 ms of the earlier uncertified
+window. The big saving is the GPU-local frame textures: the two 5 ms PCIe copies per frame
+seen with the game's CPU-writable textures (runs pw_time16c/d) are gone. The earlier
+"post chain at lower size" and "CPU stall" readings were taken on cutscene and menu frames
+(menus and cutscenes run at 30 fps by the game's own cap) and are withdrawn; the shader
+disassembly and the title-frame costs stand.
+
+Tooling: `Live Commands` polls F11 (census + timing from the press); `bias_run.ps1
+-WaitForGameplay` waits for the HUD marker; `Light Hooks` leaves the game's draws unhooked
+for a Release-like frame rate.
