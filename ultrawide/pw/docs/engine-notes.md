@@ -194,3 +194,58 @@ Strings that looked relevant and are not: `"invalid window size"` is zlib's infl
 `area_width`/`area_height` are PSP game-data keys; `[monitor_number]` is a Mother Base UI
 placeholder. The launcher vocabulary in `.rdata` is exactly `launcherpath, launcherroot,
 region, selfregion, ctrltype, invited, resolution, movie, upscale` (`+DA8AB0..+DA8B20`).
+
+## The native render pipeline (Measured, 2026-09-13, Lab census with Afevis's ASI disabled)
+
+Two launcher configurations censused at the title (`Internal Resolution (PW)` / `Internal
+Upscaling (PW)` through PatriotFix's launcher skip; both restored afterwards):
+
+**Original / Original** (`-resolution 0 -upscale 0`): window client 1720x720 (the game sized
+it), swap chain 1720x720. Every draw, world and UI, lands on a **1440x816** target (the PSP
+canvas at exactly 3x) which is **multisampled**: the frame ends with `ResolveSubresource`
+1440x816 -> 1440x816 (`+5C4ED`), then one `Draw n=4` (vs `4f1bc59e`, ps `4c3c9a5f`) samples
+the resolved texture into the back buffer with the fit viewport `(220,0 1280x720)`: a plain
+textured blit, downscaling 1440x816 to 1280x720, pillarboxed inside the 21:9 window by the
+game's own fit (`+1A2B5`).
+
+**FHD / WQHD** (`-resolution 1 -upscale 2`): window 3440x1440. Everything draws on
+**1920x1088** (canvas at 4x, height rounded up to 1088). Then, per frame: resolve
+1920x1088 MSAA (`+5C4ED`); **compute `Dispatch 160x90`** (cs `cc0b8cd0`, SRV = the resolved
+1920x1088, UAV = a **2560x1440** texture; called from `+1B177 < +1ADFE < +5C603`): the
+upscaler; `CopyResource` 2560 -> 2560 (`+1AED4`); a second **`Dispatch 160x90`** (cs
+`78e5b70a`, SRV = the copy, UAV = the same 2560 texture; `+1AFD9`): a sharpening pass (the
+two-pass shape of FidelityFX Super Resolution 1: EASU then RCAS; 160x90 = 2560x1440 / 16);
+then the final `Draw n=4` samples the 2560x1440 texture into the back buffer at the fit
+viewport `(440,0 2560x1440)`. The compute path runs only when `-resolution != -upscale`
+(`+0x3338`, set at `+15A1E`); with equal indices the resolved internal target is blitted
+straight into the fit rectangle.
+
+**The internal size is an immediate, not a table**: `-resolution 0` -> 1440x816
+(`0x5A0`, `0x330`), `-resolution 1` -> 1920x1088 (`0x780`, `0x440`), at every reader of
+`+0x296c` (`+1620D/+16212` and `+1621A/+16220`, `+5C243` packed as `0x330000005A0`,
+`+1AC49..+1AC5D`, and the rest of the nine sites Afevis mid-hooks). The output size is the
+table `+D8F1C8[+0x2970]` (720p, 1080p, 1440p, 4K; `.rdata`, writable with `VirtualProtect`).
+The canvas-to-pixel scale is internal height / 272 (3.0, 4.0); the HUD draws into the same
+internal target as the world.
+
+**Supersampling without an oversized window, from these facts:**
+
+1. Set the internal size at its immediate sites to `k x` the window client size (k = 2, 3:
+   integer, so the final bilinear blit is an exact box filter; MSAA on the internal target
+   stays as the game has it).
+2. Set the output table entry for the running `-upscale` slot to the window client size, so
+   the game's fit is the identity (no bars, no offset) and the final blit is a k:1 downscale
+   into the whole back buffer.
+3. Keep `-resolution == -upscale` so the compute upscaler stays off (or, later, drive it
+   deliberately: EASU is an upscaler, its kernel is not what a downscale wants).
+4. Leave the windowed preset table alone: window size and mode stay the user's (or our Window
+   Resolution feature's) business, exactly as in MGS4.
+5. The 3D projection and the canvas widening are separate (aspect) concerns; at 16:9 nothing
+   else moves. At 21:9 the canvas widening (Afevis's `ComputeScaling`, or ours) still applies,
+   with `k` multiplying the render scale, never the canvas.
+
+What is not yet measured: the MSAA sample count of the internal target (a `CreateTexture2D`
+census would say), whether the final blit shader is bilinear (its 8-byte hash `4c3c9a5f` is
+one of the eleven `.cso` files; D3DReflect or the bytecode tells), and the cost at k = 2 on
+a 3440x1440 window (6880x2880 internal, the same pixel count Afevis's oversized window
+already renders, so it is known to run).
