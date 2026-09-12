@@ -356,3 +356,11 @@ disassembly and the title-frame costs stand.
 Tooling: `Live Commands` polls F11 (census + timing from the press); `bias_run.ps1
 -WaitForGameplay` waits for the HUD marker; `Light Hooks` leaves the game's draws unhooked
 for a Release-like frame rate.
+
+**Root cause confirmed** (user in the mission, F11 window, 8K, 4x MSAA on, `GPU Local
+Textures` off): 27.4 fps, mean GPU work 24.4 ms per frame, max 37 ms. The three resolve/copies
+into the game's CPU-writable frame textures cost 10.2 ms per frame (3.4 ms each, max 5.1), and
+the two passes that then sample those textures, the fade `493494fd` (5.0 ms) and the DoF
+composite `7023c633` (3.9 ms), read them back across PCIe. The same window with the textures
+GPU-local: 7.7 ms and 60 fps. So the PSP VRAM mirror living in system memory is the whole
+8K performance problem; MSAA is 2 ms of it.
