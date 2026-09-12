@@ -47,6 +47,12 @@ live-editing commands come from the private module. `bias_run.ps1` is one run en
 
 ## To do
 
+- **Write-through Map fallback for GPU-local frame textures** (investigation path, tabled
+  2026-09-13): if a scene ever maps one of the frame textures from the CPU (the log reports
+  "Map on a GPU-local texture"), answer the Map with our own scratch buffer and upload it at
+  Unmap, so the texture stays in video memory and the game keeps its CPU write. Writes only;
+  persistent scratch per texture if the game expects to see previous contents.
+
 - **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through
   Afevis's ini): the flare appears at random and its anchor lands off screen, as if a value
   overflows. Lead: the half-glare site Afevis patches begins with a sign-extended 16-bit move,

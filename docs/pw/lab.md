@@ -17,7 +17,9 @@ start is back on the user's own `MGSPWEnabler.settings`. The log line
 `LAB MODE: research instrumentation enabled for this boot only.` is the proof that the run
 used the lab file; `boot.ps1` warns when it is missing.
 
-Lab keys (all under `[Graphics]` in the lab settings file):
+Lab keys (all under `[Graphics]`; a Lab build reads them from `MGSPWEnabler.settings` too, so the
+tool's Peace Walker window sets them on the "Rendering (Lab)" and "Lab" tabs; the lab file with
+the marker still wins for a research boot):
 
 | Key | What |
 | --- | --- |

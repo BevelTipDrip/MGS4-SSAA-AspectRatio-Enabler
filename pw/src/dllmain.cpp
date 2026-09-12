@@ -45,12 +45,11 @@ namespace
             mgspwe::compat::LogOverlaps();
 
 #if MGS4E_LAB_BUILD
-            if (mgspwe::config::LabMode())
-            {
-                Probe::Run();
-                DrawCensus::Install();
-                InternalSize::Apply();
-            }
+            // A Lab build always runs its research features; their keys (from the user's settings
+            // file, or the lab file when the marker is present) decide what each one does.
+            Probe::Run();
+            DrawCensus::Install();
+            InternalSize::Apply();
 #endif
 
             AspectRatio::ApplyFixes();

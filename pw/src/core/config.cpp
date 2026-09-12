@@ -85,42 +85,43 @@ namespace mgspwe::config
         }
 
 #if MGS4E_LAB_BUILD
-        // Research keys, read only from the lab file. Each names a probe in probe.cpp.
+        // Research keys (shared/pw/settings_keys.hpp). Lab builds only; a Release build ignores them.
         void ReadLabKeys(const mgs4e::Ini& ini)
         {
             using namespace mgspwe::keys;
-            Read(ini, Graphics, "Log Loaded Modules", Probe::bLogLoadedModules);
-            Read(ini, Graphics, "Log Decrypt Timing", Probe::bLogDecryptTiming);
-            Read(ini, Graphics, "Log Command Line", Probe::bLogCommandLine);
-            Report(Graphics, "Log Loaded Modules", Probe::bLogLoadedModules);
-            Report(Graphics, "Log Decrypt Timing", Probe::bLogDecryptTiming);
-            Report(Graphics, "Log Command Line", Probe::bLogCommandLine);
-            Read(ini, Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
-            Read(ini, Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
-            Read(ini, Graphics, "Live Commands", DrawCensus::bLiveCommands);
-            Read(ini, Graphics, "Time Frames", DrawCensus::iTimeFrames);
-            Read(ini, Graphics, "Dump Shaders", DrawCensus::bDumpShaders);
-            Read(ini, Graphics, "Light Hooks", DrawCensus::bLightHooks);
-            Report(Graphics, "Light Hooks", DrawCensus::bLightHooks);
-            Report(Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
-            Report(Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
-            Report(Graphics, "Live Commands", DrawCensus::bLiveCommands);
-            Read(ini, Graphics, "Render Scale", InternalSize::iRenderScale);
-            Read(ini, Graphics, "Internal Size Width", InternalSize::iInternalWidth);
-            Read(ini, Graphics, "Internal Size Height", InternalSize::iInternalHeight);
-            Read(ini, Graphics, "Output Size Width", InternalSize::iOutputWidth);
-            Read(ini, Graphics, "Output Size Height", InternalSize::iOutputHeight);
-            Read(ini, Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
-            Read(ini, Graphics, "GPU Local Textures", InternalSize::bGpuLocalTextures);
-            Report(Graphics, "GPU Local Textures", InternalSize::bGpuLocalTextures);
-            Read(ini, Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
-            Report(Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
-            Report(Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
-            Report(Graphics, "Render Scale", InternalSize::iRenderScale);
-            Report(Graphics, "Internal Size Width", InternalSize::iInternalWidth);
-            Report(Graphics, "Internal Size Height", InternalSize::iInternalHeight);
-            Report(Graphics, "Output Size Width", InternalSize::iOutputWidth);
-            Report(Graphics, "Output Size Height", InternalSize::iOutputHeight);
+            Read(ini, Graphics, LogLoadedModules, Probe::bLogLoadedModules);
+            Read(ini, Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
+            Read(ini, Graphics, LogCommandLine, Probe::bLogCommandLine);
+            Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
+            Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
+            Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
+            Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
+            Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
+            Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);
+            Read(ini, Graphics, TimeFrames, DrawCensus::iTimeFrames);
+            Read(ini, Graphics, TimePasses, DrawCensus::bTimePasses);
+            Read(ini, Graphics, DumpShaders, DrawCensus::bDumpShaders);
+            Read(ini, Graphics, LightHooks, DrawCensus::bLightHooks);
+            Report(Graphics, LightHooks, DrawCensus::bLightHooks);
+            Report(Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
+            Report(Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
+            Report(Graphics, LiveCommands, DrawCensus::bLiveCommands);
+            Read(ini, Graphics, RenderScale, InternalSize::iRenderScale);
+            Read(ini, Graphics, InternalSizeWidth, InternalSize::iInternalWidth);
+            Read(ini, Graphics, InternalSizeHeight, InternalSize::iInternalHeight);
+            Read(ini, Graphics, OutputSizeWidth, InternalSize::iOutputWidth);
+            Read(ini, Graphics, OutputSizeHeight, InternalSize::iOutputHeight);
+            Read(ini, Graphics, DisableMsaa, InternalSize::bDisableMsaa);
+            Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
+            Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
+            Read(ini, Graphics, BackBufferAtInternalSize, InternalSize::bBackBufferAtInternal);
+            Report(Graphics, BackBufferAtInternalSize, InternalSize::bBackBufferAtInternal);
+            Report(Graphics, DisableMsaa, InternalSize::bDisableMsaa);
+            Report(Graphics, RenderScale, InternalSize::iRenderScale);
+            Report(Graphics, InternalSizeWidth, InternalSize::iInternalWidth);
+            Report(Graphics, InternalSizeHeight, InternalSize::iInternalHeight);
+            Report(Graphics, OutputSizeWidth, InternalSize::iOutputWidth);
+            Report(Graphics, OutputSizeHeight, InternalSize::iOutputHeight);
         }
 #endif
     }
@@ -151,10 +152,9 @@ namespace mgspwe::config
         Report(mgspwe::keys::Debugging, mgspwe::keys::DebugLogging, verbose);
 
 #if MGS4E_LAB_BUILD
-        if (g_LabMode)
-        {
-            ReadLabKeys(ini);
-        }
+        // A Lab build reads the research knobs from whichever file it loaded: the user's own
+        // settings (the tool's Peace Walker window edits them) or, with the marker, the lab file.
+        ReadLabKeys(ini);
 #endif
     }
 
