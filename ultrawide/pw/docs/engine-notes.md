@@ -272,3 +272,36 @@ reading); at scale 12 ~7.9 ms (65%). The compositor-scaled flip-model back buffe
 Afevis's oversized window cost about the same as the game's own blit (user readings, one
 frame each). Where to save: the HDR and composite passes could run at output size on a
 downscaled copy; the resolve/copy cost is structural.
+
+## GPU cost at 8K, averaged (Measured, 2026-09-13, 60 timed frames each, first mission while aiming, 3840x2160 @ 60 Hz window, render scale 16 = 7680x4352, Afevis off)
+
+| Configuration | mean GPU ms/frame | max |
+| --- | --- | --- |
+| MSAA off, CPU-writable frame textures as the game makes them | 10.1 | 33 |
+| MSAA off, those textures made GPU-local (`GPU Local Textures`) | 8.8 | 16 |
+| game's 4x MSAA on, GPU-local | 15.0 | 20 |
+
+Per pass with MSAA on: the two `6c27b4cf` full-screen draws 4.2 ms, `baa9f4b4` 3.1, the
+resolve 2.5, `fcb43266` 1.6, the three scene lists 1.5, the HDR pass `2752864a` 1.1, the final
+blit 0.9. With MSAA off the same passes cost 1.1-1.5 ms each. So at 16x the canvas, 4x MSAA
+costs ~6 ms of 15 and buys nothing SSAA does not already do; the post chain (five full-screen
+passes plus the resolve) is ~7 ms; the scene itself (thousands of world draws plus the HUD)
+under 2 ms.
+
+**The CPU-writable textures**: the game creates ~27 full-size default textures with
+`CPUAccessFlags = WRITE` (bind SRV only, formats 28/46/47, the PSP VRAM mirror); a GPU copy
+into one goes to system memory over PCIe (134 MB at 8K). In these runs the game never mapped
+a large one (11 maps in a run, all a 1280x720 video texture), so stripping the CPU access
+is safe here and saves ~1.3 ms. The end-of-frame resolve/copy at 2-2.6 ms mean is mostly the
+pipeline drain of the scene list before it, not bandwidth (the same-size on-GPU copy elsewhere
+in the frame costs 0.15 ms).
+
+**Depth of field** (`493494fd` at 5.1 ms and the full-resolution `7023c633` at 3.6 ms, seen in
+single heavy frames) did not appear in the averaged aiming windows; it is scene dependent and
+the heaviest thing in the chain when it runs.
+
+**Where a real saving is**: run the post chain at output size. The six "internal size"
+immediates size the resolved/post targets separately from the scene scale, so with a
+downscale draw in place of the resolve (scene 7680x4352 -> post 3840x2160) every post pass
+would run at 4K (÷4.3) and the final blit 1:1; the depth read by the depth-of-field passes
+must then be the scene depth sampled by UV, which needs checking in the shader bytecode.
