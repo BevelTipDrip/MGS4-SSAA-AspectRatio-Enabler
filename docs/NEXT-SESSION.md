@@ -37,11 +37,6 @@ Kept here so nothing lives only in a conversation. Add to it; strike through whe
   The band matchers are shared with DirectX 11 and the same fractional scale applies, but only
   DirectX 12 was booted. Native 3440x1440 desktop, 16:10 override 2560x1600 (capped to
   2304x1440), menu and gameplay captures, user's read.
-- **Config tool crash, 2026-09-11 02:29.** Windows Error Reporting: `MGS4Enabler.exe` 0.0.6,
-  exception 0xc0000005, `PCH_2B_FROM_ntdll+0x161914`, no faulting module named (event log,
-  Application, ids 1000 and 1001; a WER dump was written under
-  `C:\ProgramData\Microsoft\Windows\WER\Temp`). The user has not said what they were doing in
-  the tool at the time; ask first, then reproduce with the current build.
 - **Still open from the README's known issues** (all ultrawide / 4:3, none at 16:9): the
   in-game options menu over the Nomad interior; the 3D item, weapon and camo renders; the map
   render; subtitles in gameplay and cutscenes.
