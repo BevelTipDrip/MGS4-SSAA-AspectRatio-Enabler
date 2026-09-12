@@ -249,3 +249,26 @@ census would say), whether the final blit shader is bilinear (its 8-byte hash `4
 one of the eleven `.cso` files; D3DReflect or the bytecode tells), and the cost at k = 2 on
 a 3440x1440 window (6880x2880 internal, the same pixel count Afevis's oversized window
 already renders, so it is known to run).
+
+## GPU cost per pass (Measured, 2026-09-13, timestamp census, first mission, 3840x2160 @ 60 Hz, MSAA off, Afevis off, game's own blit)
+
+One frame, GPU milliseconds between consecutive stamps (`Draw Census` with `Time Passes`):
+
+| | scale 12 (5760x3264, 18.8 Mpx) | scale 8 (3840x2176, 8.4 Mpx) |
+| --- | --- | --- |
+| scene command list (world + HUD draws) | 3.13 | 2.27 |
+| end-of-frame resolve (a copy with MSAA off) | 1.85 | 1.68 |
+| final blit into the window (`4f1bc59e`/`4c3c9a5f`) | 1.10 | 0.58 |
+| HDR pass (`5aa8ee43`/`2752864a`) | 0.76 | 0.31 |
+| composite (`80fc4e25`/`fcb43266`) | 0.72 | 0.51 |
+| two small passes (`baa9f4b4`, `6c27b4cf`) | 0.32 | 0.27 |
+| **total attributable** | **~7.9** | **~5.6** |
+
+The 26 ms "frame start" interval is the vsync wait, not work. Reading: the post passes scale
+with pixels (2.9 vs 1.7 ms), the scene list less than linearly (fill-bound), and the
+resolve/copy costs ~1.7 ms at either size, so it is a pipeline drain at the list boundary
+rather than bandwidth. At scale 8 the frame's GPU work is ~5.6 ms of 16.7 (the user's 35-40%
+reading); at scale 12 ~7.9 ms (65%). The compositor-scaled flip-model back buffer and
+Afevis's oversized window cost about the same as the game's own blit (user readings, one
+frame each). Where to save: the HDR and composite passes could run at output size on a
+downscaled copy; the resolve/copy cost is structural.
