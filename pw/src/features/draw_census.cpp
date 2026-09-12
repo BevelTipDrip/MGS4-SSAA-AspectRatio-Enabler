@@ -7,6 +7,10 @@
 #include "ui_bias.hpp"
 #include "internal_size.hpp"
 
+#include <unordered_set>
+#include <map>
+#include <cctype>
+
 #if MGS4E_LAB_BUILD
 
 // Peace Walker records its frames on deferred contexts (three command lists a frame at the
@@ -114,6 +118,7 @@ namespace
         std::string lastVertexUploadCaller;
         std::string trace;              // call order on this context since its last draw (first draws of a census frame only)
         std::string lastStampedTarget;  // timing: the target of the last stamped draw on this context
+        bool stampNext = false;         // timing: the op after a stamped op gets a closing stamp, so each pass is bounded
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     std::mutex g_Mutex;
@@ -122,6 +127,9 @@ namespace
     std::atomic<uint64_t> g_Frame { 0 };
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
+    std::atomic<uint64_t> g_GpuLocalStripped { 0 };
+    std::atomic<uint64_t> g_TextureMaps { 0 };       // Map calls on large textures (any time)
+    std::atomic<uint64_t> g_TextureMapFails { 0 };
 
     // GPU timing of one census frame: a timestamp query is ended on the recording context just
     // before each pass-like operation (a draw onto a new target, a small full-screen draw, a
@@ -136,6 +144,10 @@ namespace
     std::vector<ID3D11Query*> g_StampPool;       // reused across frames
     size_t g_StampNext = 0;
     std::atomic<int> g_TimingState { 0 };        // 0 idle, 1 armed (start at next Present), 2 recording, 3 ended (wait), 4.. waiting frames
+    int g_TimingFramesLeft = 0;                  // frames still to time in this census
+    struct Acc { double sum = 0; int n = 0; double max = 0; };
+    std::map<std::string, Acc> g_TimingAcc;      // per pass label (draw kind + shaders, sizes stripped), across timed frames
+    std::vector<double> g_FrameTotals;           // work per timed frame (first stamp after 'frame start' to the last)
     uint64_t g_TimingFrame = 0;
     constexpr size_t kStampPoolSize = 1200;
     std::string g_LastTarget;                    // for "new target" detection, immediate order only
@@ -163,34 +175,56 @@ namespace
         g_Stamps.push_back({ q, std::move(what), 0 });
     }
 
+    // Strips object addresses from a stamp label so the same pass accumulates across frames.
+    std::string PassKey(const std::string& what)
+    {
+        std::string k;
+        for (size_t i = 0; i < what.size(); i++)
+        {
+            // an object address is " 0x" followed by hex digits; a size like 7680x4352 is not
+            if (what.compare(i, 3, " 0x") == 0) { i += 3; while (i < what.size() && std::isxdigit(static_cast<unsigned char>(what[i]))) { i++; } i--; continue; }
+            k += what[i];
+        }
+        return k;
+    }
+
     void ReportTiming()
     {
         std::lock_guard lock(g_Mutex);
         D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj {};
-        if (g_ImmediateCtx->GetData(g_Disjoint, &dj, sizeof(dj), 0) != S_OK) { spdlog::warn("PW timing: disjoint query not ready; results dropped."); g_Stamps.clear(); g_StampNext = 0; g_TimingState.store(0); return; }
-        size_t missing = 0;
-        for (Stamp& st : g_Stamps)
+        const bool ready = g_ImmediateCtx->GetData(g_Disjoint, &dj, sizeof(dj), 0) == S_OK && dj.Frequency;
+        if (ready)
         {
-            if (g_ImmediateCtx->GetData(st.query, &st.ticks, sizeof(st.ticks), 0) != S_OK) { st.ticks = 0; missing++; }
+            for (Stamp& st : g_Stamps) { if (g_ImmediateCtx->GetData(st.query, &st.ticks, sizeof(st.ticks), 0) != S_OK) { st.ticks = 0; } }
+            std::vector<Stamp*> order;
+            for (Stamp& st : g_Stamps) { if (st.ticks) { order.push_back(&st); } }
+            std::sort(order.begin(), order.end(), [](const Stamp* a, const Stamp* b) { return a->ticks < b->ticks; });
+            double total = 0;
+            for (size_t i = 0; i + 1 < order.size(); i++)
+            {
+                const double ms = static_cast<double>(order[i + 1]->ticks - order[i]->ticks) * 1000.0 / static_cast<double>(dj.Frequency);
+                if (order[i]->what == "frame start") { continue; }   // the vsync wait before the frame's first work
+                total += ms;
+                Acc& a = g_TimingAcc[PassKey(order[i]->what)];
+                a.sum += ms; a.n++; a.max = std::max(a.max, ms);
+            }
+            g_FrameTotals.push_back(total);
         }
-        std::vector<Stamp*> order;
-        for (Stamp& st : g_Stamps) { if (st.ticks) { order.push_back(&st); } }
-        std::sort(order.begin(), order.end(), [](const Stamp* a, const Stamp* b) { return a->ticks < b->ticks; });
-        struct Interval { double ms; std::string what; };
-        std::vector<Interval> iv;
-        for (size_t i = 0; i + 1 < order.size(); i++)
-        {
-            iv.push_back({ static_cast<double>(order[i + 1]->ticks - order[i]->ticks) * 1000.0 / static_cast<double>(dj.Frequency), order[i]->what });
-        }
-        double total = 0;
-        for (const Interval& x : iv) { total += x.ms; }
-        std::sort(iv.begin(), iv.end(), [](const Interval& a, const Interval& b) { return a.ms > b.ms; });
-        spdlog::info("PW timing: frame {}: {} stamps ({} not ready), disjoint={}, {:.3f} ms between first and last stamp. Largest intervals (the work between a stamp and the next):",
-            g_TimingFrame, g_Stamps.size(), missing, dj.Disjoint ? "YES" : "no", total);
-        for (size_t i = 0; i < iv.size() && i < 30; i++) { spdlog::info("PW timing:   {:7.3f} ms  {}", iv[i].ms, iv[i].what); }
         g_Stamps.clear();
         g_StampNext = 0;
+        if (--g_TimingFramesLeft > 0) { g_TimingState.store(1); return; }
         g_TimingState.store(0);
+        if (g_FrameTotals.empty()) { spdlog::warn("PW timing: no frames measured."); return; }
+        double sum = 0, mx = 0; for (double t : g_FrameTotals) { sum += t; mx = std::max(mx, t); }
+        spdlog::info("PW timing: {} frames timed: mean GPU work {:.2f} ms per frame, max {:.2f} ms. Mean cost per pass (sum over the frame / frames; count = occurrences per frame):", g_FrameTotals.size(), sum / g_FrameTotals.size(), mx);
+        std::vector<std::pair<std::string, Acc>> rows(g_TimingAcc.begin(), g_TimingAcc.end());
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.sum > b.second.sum; });
+        for (size_t i = 0; i < rows.size() && i < 24; i++)
+        {
+            spdlog::info("PW timing:   {:7.3f} ms/frame  x{:<4.1f} max {:6.3f}  {}", rows[i].second.sum / g_FrameTotals.size(), static_cast<double>(rows[i].second.n) / g_FrameTotals.size(), rows[i].second.max, rows[i].first);
+        }
+        g_TimingAcc.clear();
+        g_FrameTotals.clear();
     }
     int g_DrawsThisFrame = 0;   // all contexts, for the frame line
 
@@ -365,12 +399,24 @@ namespace
         {
             // Pass-like draws only: onto a target different from this context's previous draw, or
             // a small full-screen quad/strip (post passes), never the thousands of world draws.
+            // The post-chain shaders measured at the title and in the mission (pixel-shader
+            // bytecode hashes, 8 hex digits): the HDR pass, the depth passes, the blur chain,
+            // the composite and the final blit. HUD quads share none of them.
+            static const std::unordered_set<std::string> kPostShaders = { "2752864a", "baa9f4b4", "fcb43266", "4c3c9a5f", "6c27b4cf", "07f12e1d", "1db0ebfb", "493494fd" };
+            const std::string psHash = g_ShaderHash.count(st.ps) ? std::format("{:016x}", g_ShaderHash[st.ps]).substr(0, 8) : "?";
             const bool newTarget = st.target != st.lastStampedTarget;
-            if (newTarget || count <= 6)
+            const bool postPass = count <= 12 && (kPostShaders.count(psHash) || (psHash == "7023c633" && count <= 12));
+            if (newTarget || postPass)
             {
                 st.lastStampedTarget = st.target;
+                st.stampNext = true;
                 StampBefore(static_cast<ID3D11DeviceContext*>(self), std::format("{} n={} rt={} tex={} vs={} ps={}", kind, count, st.target, st.texture,
                     g_ShaderHash.count(st.vs) ? std::format("{:016x}", g_ShaderHash[st.vs]).substr(0, 8) : "?", g_ShaderHash.count(st.ps) ? std::format("{:016x}", g_ShaderHash[st.ps]).substr(0, 8) : "?"));
+            }
+            else if (st.stampNext)
+            {
+                st.stampNext = false;
+                StampBefore(static_cast<ID3D11DeviceContext*>(self), std::format("(scene draws from {} n={} ps={} ...)", kind, count, psHash));
             }
         }
         if (g_FramesToLog.load() <= 0) { return; }
@@ -508,6 +554,27 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_Map(ID3D11DeviceContext* self, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* mapped)
     {
         const HRESULT r = Original<decltype(&Hooked_Map)>(self, kCtxMap)(self, res, sub, type, flags, mapped);
+        if (res)
+        {
+            ID3D11Texture2D* tex = nullptr;
+            if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+            {
+                D3D11_TEXTURE2D_DESC d {};
+                tex->GetDesc(&d);
+                tex->Release();
+                if (d.Width >= 1024)
+                {
+                    g_TextureMaps.fetch_add(1);
+                    if (FAILED(r)) { g_TextureMapFails.fetch_add(1); }
+                    static std::atomic<int> logged { 0 };
+                    if (g_FramesToLog.load() > 0 || (FAILED(r) && logged.fetch_add(1) < 10))
+                    {
+                        std::lock_guard lock(g_Mutex);
+                        spdlog::info("PW census: f{} {} Map texture {}x{} fmt{} cpu={:#x} type={} -> {:#x} | {}", g_Frame.load(), HooksFor(self).name, d.Width, d.Height, static_cast<int>(d.Format), d.CPUAccessFlags, static_cast<int>(type), static_cast<uint32_t>(r), GameCallers(5));
+                    }
+                }
+            }
+        }
         if (SUCCEEDED(r) && mapped && mapped->pData && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE_NO_OVERWRITE || type == D3D11_MAP_WRITE))
         {
             std::lock_guard lock(g_Mutex);
@@ -580,7 +647,7 @@ namespace
     void STDMETHODCALLTYPE Hooked_Dispatch(ID3D11DeviceContext* self, UINT x, UINT y, UINT z)
     {
         g_DrawsSeen.fetch_add(1);
-        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("Dispatch {}x{}x{} srv0={} uav0={}", x, y, z, g_State[self].csTexture, g_State[self].csTarget)); }
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); g_State[self].stampNext = true; StampBefore(self, std::format("Dispatch {}x{}x{} srv0={} uav0={}", x, y, z, g_State[self].csTexture, g_State[self].csTarget)); }
         if (g_FramesToLog.load() > 0)
         {
             std::lock_guard lock(g_Mutex);
@@ -614,14 +681,14 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_CopyResource(ID3D11DeviceContext* self, ID3D11Resource* dst, ID3D11Resource* src)
     {
-        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("CopyResource dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); g_State[self].stampNext = true; StampBefore(self, std::format("CopyResource dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
         if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} CopyResource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
         Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
     }
 
     void STDMETHODCALLTYPE Hooked_ResolveSubresource(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub, DXGI_FORMAT fmt)
     {
-        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("Resolve/copy dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); g_State[self].stampNext = true; StampBefore(self, std::format("Resolve/copy dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
         if (InternalSize::bDisableMsaa && src && dst)
         {
             // A single-sampled source cannot be resolved; copy it instead (same size and format).
@@ -645,9 +712,11 @@ namespace
     void STDMETHODCALLTYPE Hooked_ExecuteCommandList(ID3D11DeviceContext* self, ID3D11CommandList* list, BOOL restore)
     {
         g_ListsSeen.fetch_add(1);
-        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("ExecuteCommandList {:#x} (immediate)", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
+        const bool timing = g_TimingState.load() == 2;
+        if (timing) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("list {:#x} begins", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
         if (g_FramesToLog.load() > 0) { spdlog::info("PW census: f{} ExecuteCommandList {:#x} | {}", g_Frame.load(), reinterpret_cast<uintptr_t>(list) & 0xffffff, GameCallers(4)); }
         Original<decltype(&Hooked_ExecuteCommandList)>(self, kCtxExecuteCommandList)(self, list, restore);
+        if (timing) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("list {:#x} ended", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
     }
 
     void InstallContextHooks(ContextHooks& h, void** vtable, const char* name)
@@ -722,17 +791,22 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateTexture2D(ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Texture2D** out)
     {
         D3D11_TEXTURE2D_DESC single {};
-        if (InternalSize::bDisableMsaa && desc && desc->SampleDesc.Count > 1)
+        if (desc && ((InternalSize::bDisableMsaa && desc->SampleDesc.Count > 1) || (InternalSize::bGpuLocalTextures && desc->Usage == D3D11_USAGE_DEFAULT && desc->CPUAccessFlags && desc->Width >= 1024)))
         {
             single = *desc;
-            single.SampleDesc.Count = 1;
-            single.SampleDesc.Quality = 0;
+            if (InternalSize::bDisableMsaa && single.SampleDesc.Count > 1) { single.SampleDesc.Count = 1; single.SampleDesc.Quality = 0; }
+            if (InternalSize::bGpuLocalTextures && single.Usage == D3D11_USAGE_DEFAULT && single.CPUAccessFlags && single.Width >= 1024)
+            {
+                single.CPUAccessFlags = 0;
+                g_GpuLocalStripped.fetch_add(1);
+            }
             desc = &single;
         }
         const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
-        if (SUCCEEDED(r) && desc && (desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256)
+        if (SUCCEEDED(r) && desc && (((desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256) || desc->Width >= 1024))
         {
-            spdlog::info("PW census: texture {}x{} fmt{} samples={} bind={:#x} {} | {}", desc->Width, desc->Height, static_cast<int>(desc->Format), desc->SampleDesc.Count, desc->BindFlags,
+            spdlog::info("PW census: texture {}x{} fmt{} samples={} bind={:#x} usage={} cpu={:#x} misc={:#x} mips={} {} | {}", desc->Width, desc->Height, static_cast<int>(desc->Format), desc->SampleDesc.Count, desc->BindFlags,
+                static_cast<int>(desc->Usage), desc->CPUAccessFlags, desc->MiscFlags, desc->MipLevels,
                 out && *out ? std::format("{:#x}", reinterpret_cast<uintptr_t>(*out) & 0xffffff) : std::string("-"), GameCallers(4));
         }
         return r;
@@ -787,7 +861,7 @@ namespace
             }
             if (g_TimingState.load() == 6) { ReportTiming(); }
             const int left = g_FramesToLog.load();
-            if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingState.store(1); } }
+            if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx && g_TimingState.load() == 0) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingFramesLeft = std::max(1, DrawCensus::iTimeFrames); g_TimingState.store(1); } }
             if (left > 0)
             {
                 spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation.", g_Frame.load(), g_DrawsThisFrame, UiBias::AppliedVertex(), UiBias::AppliedTranslation());
@@ -911,7 +985,7 @@ namespace
             {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const uint64_t d = g_DrawsSeen.load(), l = g_ListsSeen.load(), f = g_Frame.load();
-                spdlog::info("PW census: rate: {} draw(s), {} command list(s), {} frame(s) in the last second.", d - lastDraws, l - lastLists, f - lastFrames);
+                spdlog::info("PW census: rate: {} draw(s), {} command list(s), {} frame(s) in the last second; large-texture maps so far {} ({} failed), CPU access stripped on {} textures.", d - lastDraws, l - lastLists, f - lastFrames, g_TextureMaps.load(), g_TextureMapFails.load(), g_GpuLocalStripped.load());
                 lastDraws = d; lastLists = l; lastFrames = f;
             }
         }).detach();

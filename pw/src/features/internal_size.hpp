@@ -18,6 +18,7 @@ namespace InternalSize
     MGS4E_LAB_SWITCH(int, iOutputWidth, 0);      // 0: leave the output table alone
     MGS4E_LAB_SWITCH(int, iOutputHeight, 0);
     MGS4E_LAB_SWITCH(bool, bBackBufferAtInternal, false); // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
+    MGS4E_LAB_SWITCH(bool, bGpuLocalTextures, false); // strip CPU write access from large default textures so GPU copies into them stay in video memory (applied by the census hook)
     MGS4E_LAB_SWITCH(bool, bDisableMsaa, false); // scene targets created single-sampled; the game's resolve becomes a copy (applied by the census hooks)
 
 #if MGS4E_LAB_BUILD

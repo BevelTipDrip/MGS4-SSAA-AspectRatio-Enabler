@@ -98,6 +98,7 @@ namespace mgspwe::config
             Read(ini, Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
             Read(ini, Graphics, "Live Commands", DrawCensus::bLiveCommands);
+            Read(ini, Graphics, "Time Frames", DrawCensus::iTimeFrames);
             Report(Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
             Report(Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
             Report(Graphics, "Live Commands", DrawCensus::bLiveCommands);
@@ -107,6 +108,8 @@ namespace mgspwe::config
             Read(ini, Graphics, "Output Size Width", InternalSize::iOutputWidth);
             Read(ini, Graphics, "Output Size Height", InternalSize::iOutputHeight);
             Read(ini, Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
+            Read(ini, Graphics, "GPU Local Textures", InternalSize::bGpuLocalTextures);
+            Report(Graphics, "GPU Local Textures", InternalSize::bGpuLocalTextures);
             Read(ini, Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
             Report(Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
             Report(Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
