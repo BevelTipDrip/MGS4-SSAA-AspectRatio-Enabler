@@ -83,80 +83,25 @@ the game-code callers.
 - **Native callers do not identify elements.** Every quad's stack is
   `+57CA9 < +5A166 < +5B033 < +22686 < +22686 < +1C96F < +544D2 < +78195 < +7BBB9 < +79AB4`:
   `+22686` recursing is a display-list interpreter replaying what the game logic queued
-  earlier. The MGS4 method (owner attribution by unwinding to the element's builder) has no
-  purchase here; the identity of a quad is its **texture** (object, size, format) plus its
-  **canvas rectangle**, and its order within the frame.
-- **The title's element table** (draw order, texture, canvas rect):
-  1 backdrop 512x512 `fmt71` (BC1) at (-256,-152)-(256,360); 4 horizontal strips and 4
-  vertical strips of a second 512x512 BC1 tiling the canvas (the colour bars); 3 untextured
-  half-width bands (0,-66)-(240,62) stepping one unit (the scan effect); a 256x256 BC1 and a
-  256x128 `fmt77` (BC3) overlay at (-242,-138)-(242,138) (vignette); the 1024x128 BC3 line at
-  (-128,116)-(128,132) (the copyright); the 2048x1152 BC3 art at (-240,-156)-(240,116) (the
-  title); glyph runs from a 512x512 BC3 font atlas at y 58..112 (14, 8, 9, 6, 6 glyphs: "PRESS
-  ? BUTTON" and four more runs to be identified); the 512x512 BC3 button icon at
-  (-9.9,71)-(3.3,84); a 256x128 BC3 quad at (-232,72)-(-70,85) with colour `ff0a0a80`; and
-  1024 tiny quads from a 2048x512 BC3 (the noise overlay). Texture object addresses change per
-  boot; sizes and formats do not.
-- **Live editing will be per quad**: the vertex upload is a `Map` with discard on a deferred
-  context, so a bias keyed on (texture size and format, rectangle) can be applied to the
-  mapped vertices at `Unmap`, before the draw is recorded. That is the Peace Walker equivalent
-  of the MGS4 pool-append hook.
+  earlier. Owner attribution by unwinding, the MGS4 method, has no purchase here. What does
+  identify an element, the element tables and how one is moved are in the private
+  ultrawide module (`external\ultrawide\pw\docs\ui-elements.md`).
 
-## The Mission Selector and live editing (Measured, 2026-09-12, route replay, 6880x2880 window)
+## Gameplay and menus (Measured, 2026-09-12, route replay, 6880x2880 window)
 
 - **Gameplay renders straight into the output-sized target too.** A mission frame is ~8,800
   draws, all on the 6880x2880 back buffer (plus a 192x192 blur chain); 285 of them are UI
-  quads with the ortho constants. There is no separate internal 3D target to resize: with
+  draws with the ortho constants. There is no separate internal 3D target to resize: with
   Afevis's patches the world is drawn at window size, which is why his supersampling has to be
   a bigger window.
-- **Per-element placement lives in the world matrix, not the vertices.** The 2640-byte vertex
-  constant buffer holds the ortho (rows 1-4) and a world matrix (rows 5-8) whose translation
-  row differs per draw: `0 0 0 1` for elements laid out from the top-left in 0..480 x 0..272,
-  `240 136` for canvas-centred art, `0 30` for the mission list highlight moved onto the
-  third row, `147 0` for a column offset, and so on. Each UI draw uploads its own constant
-  buffer. Element identity for a table is therefore (texture size and format, translation
-  row, canvas rectangle).
-- **Call order for one UI quad on a deferred context**: `VSSetShader > PSSetShader >
-  VSSetConstantBuffers(0) > PSSetShaderResources(0) > Unmap cb 2640B > Unmap cb 352B > Unmap
-  vb (96 or 144 B) > Draw`. The texture is bound before both uploads, so a hook at either
-  Unmap knows which element it is touching.
-- **Live editing works at the vertex upload.** The live command `bias <W>x<H> <dx> <dy> [x0 y0
-  x1 y1]` (`bias clear` to reset) adds dx, dy canvas units to the positions of every upload
-  drawn with a WxH texture, optionally only the quad whose rectangle matches. Test on the
-  Mission Selector: `bias 1024x1024 0 20` dropped the "MISSION SELECTOR" glyphs 20 units below
-  their black box (the box, a separate quad, stayed); `bias 256x128 20 0 8 79 305 93` moved
-  the first list row's quad from x 8 to 28 in the census. 276 uploads biased in ~6 s.
-- **The Mission Selector element table** (canvas units, top-left origin unless noted): title
-  text glyph run (10,7)-(90,24) from the 1024x1024 font atlas over a black box (8,7)-(92,24);
-  six tab icons (5..137, 45..77) 32 units apart from a 256x128 sheet, each with a 14-unit
-  glyph inside; a "L1 R1" pair (126..155, 48..58); four list rows (8,79)-(305,93) stepping 15
-  units, the highlight the same quad translated `0 30`; the count column (306..325) and skull
-  column (326..351) per row; headers at y 64..78; row icons (143..157) translated `147 0`;
-  the details panel and its text below y 138. The whole panel is 480 wide within a 650 canvas,
-  centred by Afevis's offset, which is why it sits inside the middle 16:9 of a 21:9 window.
-- **The in-game HUD table** (first mission, from the census taken while the user played;
-  groups by world-matrix translation row, rectangles in canvas units where a vertex upload
-  existed): mission timer and "REMAINING ENEMIES" text at `(-11,-8)`, DrawIndexed n=4 glyphs
-  from 512x512 and 256x256 atlases (about 60 draws, no per-draw vertex upload: the text
-  vertices live in a shared buffer, so only the translation row places them); life bar and
-  vertical name text at `(8,-12)` (bars at x 8..16, y 218..264, plus 30 glyphs); the
-  right-hand item and weapon column at `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`,
-  `(-3,6)` (quads at x 445..472); the top-right gauge at `(112,4)` (460..472, 8..83); the two
-  weapon/item boxes at `(133,58)` and `(133,85)` (435..469, 78..142 and 190..254); the centre
-  reticle's four dots at `(234..246, 130..142)`. Left-anchored groups need -85 at 21:9 (to
-  the 650-canvas edge), right-anchored ones +85; the reticle stays. The live command
-  `tbias <tx> <ty> <dx> <dy>` (or `tbias any`, `tbias clear`) moves a group by rewriting the
-  translation row in the constant upload; it is the handle for these DrawIndexed elements.
-  **Verified in the mission** (2026-09-12, runs pw_hud3/pw_hud4): the groups moved to the
-  21:9 edges with those biases; the user's read found two text runs left behind, the gauge
-  percentage at `(454.8,65.5)` (scaled 0.75) and the item count at `(-5,32)`, and with those
-  added all thirteen moved (4,163 uploads rewritten in ~6 s). The full 21:9 set: left -85 for
-  `(-11,-8)` and `(8,-12)`; right +85 for `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`,
-  `(-3,6)`, `(-5,32)`, `(112,4)`, `(133,58)`, `(133,85)`, `(454.8,65.5)`. The world basis is not always
-  identity: vertical text carries a 90-degree rotation in rows 5-6 and the gauges a 0.75 or
-  0.70 scale; the translation row is canvas units regardless, so the matcher keys only on
-  the ortho in row 1 and the translation. (A first attempt that required an identity basis
-  moved only the plain quads.)
+- **Each UI draw uploads its own 2640-byte vertex constant buffer** (the ortho in rows 1-4
+  and a world matrix in rows 5-8), followed by a 352-byte one and, for quads, the vertex
+  upload, all through `Map` with discard on the deferred context. Text is `DrawIndexed` from
+  a shared vertex buffer. The census's per-draw call trace shows the texture bound before
+  the uploads.
+- **The menus and the mission HUD were tabled** with the census on 2026-09-12 (Mission
+  Selector, in-mission HUD) and moving them live was verified in the mission; the tables,
+  the handle and the biases are in the private module.
 - **Cutscenes and character cards are pillarboxed by the game**: the mission intro (real-time
   Snake and soldiers) and the "HUEY" card render as a 16:9 picture with black bars each side
   at 21:9, while gameplay fills the window. Same class as MGS4's cutscene bands; the aspect

@@ -83,9 +83,10 @@
     <ClCompile Include="..\asi\src\core\mem.cpp" />
     <ClCompile Include="src\features\probe.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\draw_census.cpp" Condition="'$(Configuration)'=='Lab'" />
-    <!-- The Peace Walker ultrawide module is a private submodule: built when checked out, a logging stub otherwise. -->
-    <ClCompile Include="$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp')" />
+    <!-- The Peace Walker part of the private ultrawide module (external\ultrawide\pw): built when checked out, stubs otherwise. -->
+    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp" Condition="'$(Configuration)'=='Lab' And Exists('$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp')" />
     <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -120,6 +121,7 @@
     <ClInclude Include="src\features\aspect_ratio.hpp" />
     <ClInclude Include="src\features\probe.hpp" />
     <ClInclude Include="src\features\draw_census.hpp" />
+    <ClInclude Include="src\features\ui_bias.hpp" />
     <ClInclude Include="..\asi\src\core\game.hpp" />
     <ClInclude Include="..\asi\src\core\log.hpp" />
     <ClInclude Include="..\asi\src\core\mem.hpp" />

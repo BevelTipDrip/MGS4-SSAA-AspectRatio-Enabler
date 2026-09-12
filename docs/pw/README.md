@@ -19,7 +19,8 @@ The tool is one program that serves whichever game's folder it is dropped into: 
 
 ## State
 
-Research. The ASI loads, reads its settings and logs, and patches nothing yet. What is known
+Research. The ASI loads, reads its settings and logs, and patches nothing yet; the Lab build
+carries a draw census and, with the private module, live editing of UI elements. What is known
 about the engine so far is in [engine-research.md](engine-research.md); the plan of work is in
 [NEXT-SESSION.md](NEXT-SESSION.md).
 
@@ -35,5 +36,6 @@ Two rules that are not obvious from the tree:
 - **The namespace of the shared core stays `mgs4e::`**; Peace Walker code is `mgspwe::`.
   Renaming the core would touch every MGS4 file for no gain.
 
-The private aspect-ratio module, when it exists, is `external\ultrawide-pw`, under the same
-credit-required licence as the MGS4 one; the public tree does not describe how it works.
+The private aspect-ratio work lives in the MGS4 ultrawide module, `external\ultrawide`, under
+`pw\`, with the same credit-required licence; the public tree does not describe how it works
+and carries none of its values. The research lab is public: [lab.md](lab.md).

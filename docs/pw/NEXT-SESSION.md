@@ -44,8 +44,7 @@ native stack is the same for every quad (a display-list interpreter), so element
 texture plus canvas rectangle. Next: the user records the route from the title to the menu
 after it (`C:\mgspf_tools\pw\keylog.ps1`), the census runs on that menu (`census 2` in
 `C:\mgspf_tools\pw\live.txt` while `Live Commands` is on), and the element table for it is
-built the same way. Live editing: a bias keyed on (texture, rectangle) applied to the mapped
-vertices at `Unmap`.
+built the same way.
 
 ## Route and harness (2026-09-12)
 
@@ -61,15 +60,15 @@ table (UI draws with texture, world translation and canvas rectangle; non-UI gro
 
 ## Live editing (2026-09-12)
 
-Tracing and live editing both work; see "The Mission Selector and live editing" in
-`engine-research.md`. Route replay: `boot.ps1 -Deploy -LabConfig -KeepOpen -WaitSeconds 1`,
+Tracing and live editing both work; the lab is described in `lab.md`, the method and the
+register in the private module. Route replay: `boot.ps1 -Deploy -LabConfig -KeepOpen -WaitSeconds 1`,
 then `replay.ps1 -Route routes	o_mission.csv -StopMs 58000` lands on the Mission Selector;
 without `-StopMs` it enters the first mission. `census 2` and `bias ...` go into `live.txt`.
 
-`bias_run.ps1 -OutDir <dir> -StopMs 108000 -Commands 'tbias -11 -8 -85 0',...` is one
+`bias_run.ps1 -OutDir <dir> -StopMs 108000 -Commands '<live command>',...` is one
 in-game live-editing run end to end (boot, replay, before capture, commands, census, after
-capture, close, log copy). The HUD's eleven groups and their 21:9 biases are in
-`engine-research.md` ("The in-game HUD table"). The mission has a timer; on expiry the mission
+capture, close, log copy). The HUD groups and their biases are in the private module
+(`external\ultrawide\pw\docs\ui-elements.md`); the lab itself is `lab.md`. The mission has a timer; on expiry the mission
 fails and can be restarted without returning to the menu (user note; not yet in the route).
 
 ## To do
