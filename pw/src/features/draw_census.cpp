@@ -132,6 +132,8 @@ namespace
     std::atomic<bool> g_TitleSeen { false };
     std::atomic<uint64_t> g_TextureMaps { 0 };       // Map calls on large textures (any time)
     std::atomic<uint64_t> g_TextureMapFails { 0 };
+    std::unordered_set<ID3D11Resource*> g_Stripped;     // textures whose CPU access was stripped (under g_Mutex)
+    std::atomic<uint64_t> g_StrippedMaps { 0 };       // Map calls on one of them (any size), each logged
 
     // GPU timing of one census frame: a timestamp query is ended on the recording context just
     // before each pass-like operation (a draw onto a new target, a small full-screen draw, a
@@ -222,7 +224,7 @@ namespace
         double sum = 0, mx = 0; for (double t : g_FrameTotals) { sum += t; mx = std::max(mx, t); }
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_TimingWallStart).count();
         const double fps = wall > 0 ? static_cast<double>(g_Frame.load() - g_TimingFrameStart) / wall : 0;
-        spdlog::info("PW timing: {} frames timed over {:.1f} s at {:.1f} fps: mean GPU work {:.2f} ms per frame, max {:.2f} ms. Mean cost per pass (sum over the frame / frames; count = occurrences per frame):", g_FrameTotals.size(), wall, fps, sum / g_FrameTotals.size(), mx);
+        spdlog::info("PW timing: {} frames timed over {:.1f} s at {:.1f} fps: mean GPU work {:.2f} ms per frame, max {:.2f} ms. GPU-local textures {}, maps on them so far {}. Mean cost per pass (sum over the frame / frames; count = occurrences per frame):", g_FrameTotals.size(), wall, fps, sum / g_FrameTotals.size(), mx, g_GpuLocalStripped.load(), g_StrippedMaps.load());
         std::vector<std::pair<std::string, Acc>> rows(g_TimingAcc.begin(), g_TimingAcc.end());
         std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.sum > b.second.sum; });
         for (size_t i = 0; i < rows.size() && i < 24; i++)
@@ -596,6 +598,14 @@ namespace
         const HRESULT r = Original<decltype(&Hooked_Map)>(self, kCtxMap)(self, res, sub, type, flags, mapped);
         if (res)
         {
+            bool stripped = false;
+            { std::lock_guard lock(g_Mutex); stripped = g_Stripped.count(res) != 0; }
+            if (stripped)
+            {
+                g_StrippedMaps.fetch_add(1);
+                std::lock_guard lock(g_Mutex);
+                spdlog::warn("PW census: f{} {} Map on a GPU-local texture ({}) type={} -> {:#x}: the game wanted CPU access here | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(res), static_cast<int>(type), static_cast<uint32_t>(r), GameCallers(6));
+            }
             ID3D11Texture2D* tex = nullptr;
             if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
             {
@@ -847,6 +857,11 @@ namespace
             desc = &single;
         }
         const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
+        if (SUCCEEDED(r) && out && *out && desc == &single && single.CPUAccessFlags == 0 && InternalSize::bGpuLocalTextures)
+        {
+            std::lock_guard lock(g_Mutex);
+            g_Stripped.insert(*out);
+        }
         if (SUCCEEDED(r) && desc && (((desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256) || desc->Width >= 1024))
         {
             spdlog::info("PW census: texture {}x{} fmt{} samples={} bind={:#x} usage={} cpu={:#x} misc={:#x} mips={} {} | {}", desc->Width, desc->Height, static_cast<int>(desc->Format), desc->SampleDesc.Count, desc->BindFlags,
@@ -908,7 +923,7 @@ namespace
             if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx && g_TimingState.load() == 0) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingFramesLeft = std::max(1, DrawCensus::iTimeFrames); g_TimingWallStart = std::chrono::steady_clock::now(); g_TimingFrameStart = g_Frame.load(); g_TimingState.store(1); } }
             if (left > 0)
             {
-                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation.", g_Frame.load(), g_DrawsThisFrame, UiBias::AppliedVertex(), UiBias::AppliedTranslation());
+                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation; GPU-local textures {} (maps on them {}, large-texture maps {} / {} failed).", g_Frame.load(), g_DrawsThisFrame, UiBias::AppliedVertex(), UiBias::AppliedTranslation(), g_GpuLocalStripped.load(), g_StrippedMaps.load(), g_TextureMaps.load(), g_TextureMapFails.load());
                 g_FramesToLog.store(left - 1);
                 if (left - 1 == 0) { spdlog::info("PW census: done."); }
             }
