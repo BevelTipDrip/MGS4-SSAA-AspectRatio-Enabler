@@ -17,6 +17,7 @@ namespace DrawCensus
     MGS4E_LAB_SWITCH(int, iCensusAtSeconds, 0);     // 0: only on command
     MGS4E_LAB_SWITCH(int, iCensusFrames, 2);
     MGS4E_LAB_SWITCH(bool, bLiveCommands, true);
+    MGS4E_LAB_SWITCH(bool, bTimePasses, true);    // GPU timestamps around the passes of a census frame
 
 #if MGS4E_LAB_BUILD
     // Hooks the D3D11 device entry points; the context and swap chain hooks follow when the

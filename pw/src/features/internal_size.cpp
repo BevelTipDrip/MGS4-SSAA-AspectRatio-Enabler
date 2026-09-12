@@ -30,6 +30,11 @@ namespace
     constexpr Imm64Site kScale[] = { { 0x3F539, 0x400000004ull }, { 0x3F54D, 0x300000003ull } };
     constexpr uintptr_t kOutputTable = 0xD8F1C8;   // four (width, height) int pairs, .rdata
     constexpr int kOutputSlots = 4;
+    // Just after the game's picture fit (+1A2B5..+1A360) has written the picture size and
+    // offsets into the display object (rsi): picture w/h at +0x2940/+0x2944, x/y offset at
+    // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
+    constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
+    SafetyHookMid g_AfterFit {};
 
     template <typename T>
     bool PatchChecked(uintptr_t rva, T expected, T value, const char* what)
@@ -49,6 +54,9 @@ namespace
 
 namespace InternalSize
 {
+    int BackBufferWidth() { return bBackBufferAtInternal ? iInternalWidth : 0; }
+    int BackBufferHeight() { return bBackBufferAtInternal ? iInternalHeight : 0; }
+
     void Apply()
     {
         if (iRenderScale > 0)
@@ -72,6 +80,24 @@ namespace InternalSize
                 ok += PatchChecked<uint64_t>(s.rva, s.expected, packed, "packed internal size immediate");
             }
             spdlog::info("PW internal size: internal target set to {}x{} at {} of {} sites.", iInternalWidth, iInternalHeight, ok, std::size(kImm32) + std::size(kImm64));
+        }
+        if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
+        {
+            const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterFit;
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);
+            if (bytes[0] == 0xB9 && bytes[1] == 0x11)   // mov ecx, 0x11
+            {
+                g_AfterFit = safetyhook::create_mid(site, [](SafetyHookContext& ctx)
+                {
+                    auto* obj = reinterpret_cast<int32_t*>(ctx.rsi);
+                    obj[0x2940 / 4] = iInternalWidth;
+                    obj[0x2944 / 4] = iInternalHeight;
+                    obj[0x2948 / 4] = 0;
+                    obj[0x294C / 4] = 0;
+                });
+                spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", iInternalWidth, iInternalHeight, g_AfterFit ? "hooked" : "hook FAILED");
+            }
+            else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; back buffer override not installed.", kAfterFit); }
         }
         if (iOutputWidth > 0 && iOutputHeight > 0)
         {

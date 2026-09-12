@@ -5,6 +5,7 @@
 #include "log.hpp"
 #include "mem.hpp"
 #include "ui_bias.hpp"
+#include "internal_size.hpp"
 
 #if MGS4E_LAB_BUILD
 
@@ -112,6 +113,7 @@ namespace
         size_t lastVertexUploadSize = 0;
         std::string lastVertexUploadCaller;
         std::string trace;              // call order on this context since its last draw (first draws of a census frame only)
+        std::string lastStampedTarget;  // timing: the target of the last stamped draw on this context
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     std::mutex g_Mutex;
@@ -120,6 +122,76 @@ namespace
     std::atomic<uint64_t> g_Frame { 0 };
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
+
+    // GPU timing of one census frame: a timestamp query is ended on the recording context just
+    // before each pass-like operation (a draw onto a new target, a small full-screen draw, a
+    // dispatch, copy or resolve, and each command-list execution), the disjoint query brackets
+    // the frame on the immediate context, and three frames later the stamps are read back and
+    // the intervals between consecutive stamps (in GPU order) are reported, largest first.
+    struct Stamp { ID3D11Query* query; std::string what; uint64_t ticks; };
+    ID3D11Device* g_Device = nullptr;
+    ID3D11DeviceContext* g_ImmediateCtx = nullptr;
+    ID3D11Query* g_Disjoint = nullptr;
+    std::vector<Stamp> g_Stamps;                 // under g_Mutex
+    std::vector<ID3D11Query*> g_StampPool;       // reused across frames
+    size_t g_StampNext = 0;
+    std::atomic<int> g_TimingState { 0 };        // 0 idle, 1 armed (start at next Present), 2 recording, 3 ended (wait), 4.. waiting frames
+    uint64_t g_TimingFrame = 0;
+    constexpr size_t kStampPoolSize = 1200;
+    std::string g_LastTarget;                    // for "new target" detection, immediate order only
+
+    void EnsureStampPool()
+    {
+        if (!g_Device || !g_StampPool.empty()) { return; }
+        D3D11_QUERY_DESC qd { D3D11_QUERY_TIMESTAMP, 0 };
+        for (size_t i = 0; i < kStampPoolSize; i++)
+        {
+            ID3D11Query* q = nullptr;
+            if (SUCCEEDED(g_Device->CreateQuery(&qd, &q)) && q) { g_StampPool.push_back(q); }
+        }
+        D3D11_QUERY_DESC dd { D3D11_QUERY_TIMESTAMP_DISJOINT, 0 };
+        g_Device->CreateQuery(&dd, &g_Disjoint);
+        spdlog::info("PW timing: {} timestamp queries and a disjoint query created.", g_StampPool.size());
+    }
+
+    // Caller holds g_Mutex. Records a stamp on `ctx` before the operation `what`.
+    void StampBefore(ID3D11DeviceContext* ctx, std::string what)
+    {
+        if (g_TimingState.load() != 2 || g_StampNext >= g_StampPool.size()) { return; }
+        ID3D11Query* q = g_StampPool[g_StampNext++];
+        ctx->End(q);
+        g_Stamps.push_back({ q, std::move(what), 0 });
+    }
+
+    void ReportTiming()
+    {
+        std::lock_guard lock(g_Mutex);
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj {};
+        if (g_ImmediateCtx->GetData(g_Disjoint, &dj, sizeof(dj), 0) != S_OK) { spdlog::warn("PW timing: disjoint query not ready; results dropped."); g_Stamps.clear(); g_StampNext = 0; g_TimingState.store(0); return; }
+        size_t missing = 0;
+        for (Stamp& st : g_Stamps)
+        {
+            if (g_ImmediateCtx->GetData(st.query, &st.ticks, sizeof(st.ticks), 0) != S_OK) { st.ticks = 0; missing++; }
+        }
+        std::vector<Stamp*> order;
+        for (Stamp& st : g_Stamps) { if (st.ticks) { order.push_back(&st); } }
+        std::sort(order.begin(), order.end(), [](const Stamp* a, const Stamp* b) { return a->ticks < b->ticks; });
+        struct Interval { double ms; std::string what; };
+        std::vector<Interval> iv;
+        for (size_t i = 0; i + 1 < order.size(); i++)
+        {
+            iv.push_back({ static_cast<double>(order[i + 1]->ticks - order[i]->ticks) * 1000.0 / static_cast<double>(dj.Frequency), order[i]->what });
+        }
+        double total = 0;
+        for (const Interval& x : iv) { total += x.ms; }
+        std::sort(iv.begin(), iv.end(), [](const Interval& a, const Interval& b) { return a.ms > b.ms; });
+        spdlog::info("PW timing: frame {}: {} stamps ({} not ready), disjoint={}, {:.3f} ms between first and last stamp. Largest intervals (the work between a stamp and the next):",
+            g_TimingFrame, g_Stamps.size(), missing, dj.Disjoint ? "YES" : "no", total);
+        for (size_t i = 0; i < iv.size() && i < 30; i++) { spdlog::info("PW timing:   {:7.3f} ms  {}", iv[i].ms, iv[i].what); }
+        g_Stamps.clear();
+        g_StampNext = 0;
+        g_TimingState.store(0);
+    }
     int g_DrawsThisFrame = 0;   // all contexts, for the frame line
 
     struct Snapshot { float f[64]; size_t count; bool valid; };
@@ -286,9 +358,22 @@ namespace
     void LogDraw(void* self, const char* kind, UINT count, UINT start, UINT baseVertex)
     {
         g_DrawsSeen.fetch_add(1);
-        if (g_FramesToLog.load() <= 0) { return; }
+        if (g_FramesToLog.load() <= 0 && g_TimingState.load() != 2) { return; }
         std::lock_guard lock(g_Mutex);
         ContextState& st = g_State[self];
+        if (g_TimingState.load() == 2)
+        {
+            // Pass-like draws only: onto a target different from this context's previous draw, or
+            // a small full-screen quad/strip (post passes), never the thousands of world draws.
+            const bool newTarget = st.target != st.lastStampedTarget;
+            if (newTarget || count <= 6)
+            {
+                st.lastStampedTarget = st.target;
+                StampBefore(static_cast<ID3D11DeviceContext*>(self), std::format("{} n={} rt={} tex={} vs={} ps={}", kind, count, st.target, st.texture,
+                    g_ShaderHash.count(st.vs) ? std::format("{:016x}", g_ShaderHash[st.vs]).substr(0, 8) : "?", g_ShaderHash.count(st.ps) ? std::format("{:016x}", g_ShaderHash[st.ps]).substr(0, 8) : "?"));
+            }
+        }
+        if (g_FramesToLog.load() <= 0) { return; }
         st.draws++;
         g_DrawsThisFrame++;
         // Every bound vertex constant buffer: slot, byte size, and its latest upload (slot 0 in
@@ -495,6 +580,7 @@ namespace
     void STDMETHODCALLTYPE Hooked_Dispatch(ID3D11DeviceContext* self, UINT x, UINT y, UINT z)
     {
         g_DrawsSeen.fetch_add(1);
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("Dispatch {}x{}x{} srv0={} uav0={}", x, y, z, g_State[self].csTexture, g_State[self].csTarget)); }
         if (g_FramesToLog.load() > 0)
         {
             std::lock_guard lock(g_Mutex);
@@ -516,6 +602,7 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_CopySubresourceRegion(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, UINT x, UINT y, UINT z, ID3D11Resource* src, UINT srcSub, const D3D11_BOX* box)
     {
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("CopySubresourceRegion dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
         if (g_FramesToLog.load() > 0)
         {
             std::lock_guard lock(g_Mutex);
@@ -527,12 +614,30 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_CopyResource(ID3D11DeviceContext* self, ID3D11Resource* dst, ID3D11Resource* src)
     {
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("CopyResource dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
         if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} CopyResource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
         Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
     }
 
     void STDMETHODCALLTYPE Hooked_ResolveSubresource(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub, DXGI_FORMAT fmt)
     {
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("Resolve/copy dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
+        if (InternalSize::bDisableMsaa && src && dst)
+        {
+            // A single-sampled source cannot be resolved; copy it instead (same size and format).
+            ID3D11Texture2D* tex = nullptr;
+            if (SUCCEEDED(src->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+            {
+                D3D11_TEXTURE2D_DESC d {};
+                tex->GetDesc(&d);
+                tex->Release();
+                if (d.SampleDesc.Count == 1)
+                {
+                    Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
+                    return;
+                }
+            }
+        }
         if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} ResolveSubresource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
         Original<decltype(&Hooked_ResolveSubresource)>(self, kCtxResolveSubresource)(self, dst, dstSub, src, srcSub, fmt);
     }
@@ -540,6 +645,7 @@ namespace
     void STDMETHODCALLTYPE Hooked_ExecuteCommandList(ID3D11DeviceContext* self, ID3D11CommandList* list, BOOL restore)
     {
         g_ListsSeen.fetch_add(1);
+        if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("ExecuteCommandList {:#x} (immediate)", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
         if (g_FramesToLog.load() > 0) { spdlog::info("PW census: f{} ExecuteCommandList {:#x} | {}", g_Frame.load(), reinterpret_cast<uintptr_t>(list) & 0xffffff, GameCallers(4)); }
         Original<decltype(&Hooked_ExecuteCommandList)>(self, kCtxExecuteCommandList)(self, list, restore);
     }
@@ -615,6 +721,14 @@ namespace
     // Render targets and depth buffers as they are created: size, format, samples, and who asked.
     HRESULT STDMETHODCALLTYPE Hooked_CreateTexture2D(ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Texture2D** out)
     {
+        D3D11_TEXTURE2D_DESC single {};
+        if (InternalSize::bDisableMsaa && desc && desc->SampleDesc.Count > 1)
+        {
+            single = *desc;
+            single.SampleDesc.Count = 1;
+            single.SampleDesc.Quality = 0;
+            desc = &single;
+        }
         const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
         if (SUCCEEDED(r) && desc && (desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256)
         {
@@ -652,7 +766,28 @@ namespace
     {
         if ((flags & DXGI_PRESENT_TEST) == 0)
         {
+            // Timing: the census's second frame (the one that carries the draws) is timed.
+            {
+                std::lock_guard lock(g_Mutex);
+                const int ts = g_TimingState.load();
+                if (ts == 2)
+                {
+                    StampBefore(g_ImmediateCtx, "Present");
+                    g_ImmediateCtx->End(g_Disjoint);
+                    g_TimingState.store(3);
+                }
+                else if (ts == 1 && g_ImmediateCtx && g_Disjoint)
+                {
+                    g_ImmediateCtx->Begin(g_Disjoint);
+                    g_TimingFrame = g_Frame.load() + 1;
+                    g_TimingState.store(2);
+                    StampBefore(g_ImmediateCtx, "frame start");
+                }
+                else if (ts >= 3 && ts < 6) { g_TimingState.store(ts + 1); }
+            }
+            if (g_TimingState.load() == 6) { ReportTiming(); }
             const int left = g_FramesToLog.load();
+            if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingState.store(1); } }
             if (left > 0)
             {
                 spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation.", g_Frame.load(), g_DrawsThisFrame, UiBias::AppliedVertex(), UiBias::AppliedTranslation());
@@ -679,6 +814,12 @@ namespace
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain)
     {
+        if (desc && InternalSize::BackBufferWidth() > 0)
+        {
+            desc->BufferDesc.Width = InternalSize::BackBufferWidth();
+            desc->BufferDesc.Height = InternalSize::BackBufferHeight();
+            spdlog::info("PW census: swap chain buffers requested at {}x{} (flip model stretches them onto the window).", desc->BufferDesc.Width, desc->BufferDesc.Height);
+        }
         const HRESULT r = Factory_CreateSwapChain_hook.stdcall<HRESULT>(self, device, desc, chain);
         if (SUCCEEDED(r) && chain && *chain)
         {
@@ -756,8 +897,11 @@ namespace
         ID3D11DeviceContext* immediate = context;
         if (!immediate) { device->GetImmediateContext(&immediate); }
         if (!immediate) { spdlog::error("PW census: no immediate context."); return; }
+        g_Device = device;
+        g_ImmediateCtx = immediate;
+        immediate->AddRef();
         InstallContextHooks(g_Immediate, *reinterpret_cast<void***>(immediate), "immediate");
-        if (!context) { immediate->Release(); }
+        if (!context) { /* keep the reference taken above */ }
 
         // Draw rate for the first half minute, logged or not: which path the draws take.
         std::thread([]

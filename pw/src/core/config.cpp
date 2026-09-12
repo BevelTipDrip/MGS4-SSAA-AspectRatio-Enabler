@@ -106,6 +106,10 @@ namespace mgspwe::config
             Read(ini, Graphics, "Internal Size Height", InternalSize::iInternalHeight);
             Read(ini, Graphics, "Output Size Width", InternalSize::iOutputWidth);
             Read(ini, Graphics, "Output Size Height", InternalSize::iOutputHeight);
+            Read(ini, Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
+            Read(ini, Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
+            Report(Graphics, "Back Buffer At Internal Size", InternalSize::bBackBufferAtInternal);
+            Report(Graphics, "Disable MSAA", InternalSize::bDisableMsaa);
             Report(Graphics, "Render Scale", InternalSize::iRenderScale);
             Report(Graphics, "Internal Size Width", InternalSize::iInternalWidth);
             Report(Graphics, "Internal Size Height", InternalSize::iInternalHeight);

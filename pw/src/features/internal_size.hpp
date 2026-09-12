@@ -17,10 +17,17 @@ namespace InternalSize
     MGS4E_LAB_SWITCH(int, iInternalHeight, 0);
     MGS4E_LAB_SWITCH(int, iOutputWidth, 0);      // 0: leave the output table alone
     MGS4E_LAB_SWITCH(int, iOutputHeight, 0);
+    MGS4E_LAB_SWITCH(bool, bBackBufferAtInternal, false); // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
+    MGS4E_LAB_SWITCH(bool, bDisableMsaa, false); // scene targets created single-sampled; the game's resolve becomes a copy (applied by the census hooks)
 
 #if MGS4E_LAB_BUILD
     void Apply();
+    // The size the census gives the swap chain when bBackBufferAtInternal is on (0 = leave).
+    int BackBufferWidth();
+    int BackBufferHeight();
 #else
     inline void Apply() {}
+    inline int BackBufferWidth() { return 0; }
+    inline int BackBufferHeight() { return 0; }
 #endif
 }
