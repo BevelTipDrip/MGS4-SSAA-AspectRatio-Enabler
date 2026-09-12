@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -103,7 +104,8 @@ namespace mgs4e::manifests
     // `skipIni`: a manifest whose Ini is this file name is ignored (our own settings file,
     // should anyone write a manifest for it).
     inline bool Load(const std::filesystem::path& manifest, const std::filesystem::path& dir,
-                     const std::filesystem::path& gameRoot, std::string_view skipIni, Mod& out)
+                     const std::filesystem::path& gameRoot, std::string_view skipIni,
+                     std::string_view suffix, std::span<const Place> places, Mod& out)
     {
         std::error_code ec;
         std::ifstream in(manifest, std::ios::binary);
@@ -116,7 +118,7 @@ namespace mgs4e::manifests
         out = Mod{};
         out.manifest = manifest;
         const std::string fallback = manifest.filename().string();
-        out.name = ini.Raw("Mod", "Name").value_or(fallback.substr(0, fallback.size() - std::string(kSuffix).size()));
+        out.name = ini.Raw("Mod", "Name").value_or(fallback.substr(0, fallback.size() - suffix.size()));
         const std::string iniName = ini.Raw("Mod", "Ini").value_or(std::string());
         if (iniName.empty() || iniName.find('\\') != std::string::npos || iniName.find('/') != std::string::npos)
         {
@@ -135,7 +137,7 @@ namespace mgs4e::manifests
         out.asiNamed = !asiName.empty();
         if (out.asiNamed)
         {
-            for (const Place& place : kPlaces)
+            for (const Place& place : places)
             {
                 const std::filesystem::path asi = gameRoot / place.dir / asiName;
                 if (std::filesystem::exists(asi, ec))
@@ -189,18 +191,19 @@ namespace mgs4e::manifests
     }
 
     // Every manifest under the game root, one entry per ini name (a loadable copy preferred).
-    inline std::vector<Mod> Scan(const std::filesystem::path& gameRoot, std::string_view skipIni)
+    inline std::vector<Mod> Scan(const std::filesystem::path& gameRoot, std::string_view skipIni,
+                                 std::string_view suffix, std::span<const Place> places)
     {
         std::vector<Mod> mods;
         std::error_code ec;
-        for (const Place& place : kPlaces)
+        for (const Place& place : places)
         {
             const std::filesystem::path dir = gameRoot / place.dir;
             if (!std::filesystem::is_directory(dir, ec)) { continue; }
             std::vector<std::filesystem::path> files;
             for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
             {
-                if (entry.is_regular_file(ec) && detail::EndsWithNoCase(entry.path().filename().string(), kSuffix))
+                if (entry.is_regular_file(ec) && detail::EndsWithNoCase(entry.path().filename().string(), suffix))
                 {
                     files.push_back(entry.path());
                 }
@@ -209,7 +212,7 @@ namespace mgs4e::manifests
             for (const std::filesystem::path& file : files)
             {
                 Mod mod;
-                if (!Load(file, dir, gameRoot, skipIni, mod)) { continue; }
+                if (!Load(file, dir, gameRoot, skipIni, suffix, places, mod)) { continue; }
                 const std::string id = detail::Lower(mod.ini.filename().string());
                 auto seen = std::find_if(mods.begin(), mods.end(), [&](const Mod& m) { return detail::Lower(m.ini.filename().string()) == id; });
                 if (seen == mods.end())
@@ -219,5 +222,18 @@ namespace mgs4e::manifests
             }
         }
         return mods;
+    }
+
+    // The MGS4 build's spellings: its own suffix and loader folders. The Peace Walker build
+    // passes its own (shared/pw/manifest_places.hpp); the scan itself is the same code.
+    inline bool Load(const std::filesystem::path& manifest, const std::filesystem::path& dir,
+                     const std::filesystem::path& gameRoot, std::string_view skipIni, Mod& out)
+    {
+        return Load(manifest, dir, gameRoot, skipIni, kSuffix, kPlaces, out);
+    }
+
+    inline std::vector<Mod> Scan(const std::filesystem::path& gameRoot, std::string_view skipIni)
+    {
+        return Scan(gameRoot, skipIni, kSuffix, kPlaces);
     }
 }

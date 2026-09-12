@@ -1,0 +1,34 @@
+#include <windows.h>
+#include "version.hpp"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    MGS4E_FILE_VERSION_RC
+ PRODUCTVERSION MGS4E_FILE_VERSION_RC
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_DLL
+ FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      MGS4E_COMPANY_NAME "\0"
+            VALUE "FileDescription",  MGSPWE_DISPLAY_NAME " for " MGSPWE_GAME_TITLE "\0"
+            VALUE "FileVersion",      MGS4E_VERSION_STRING "\0"
+            VALUE "InternalName",     MGSPWE_NAME ".asi\0"
+            VALUE "OriginalFilename", MGSPWE_NAME ".asi\0"
+            VALUE "ProductName",      MGSPWE_DISPLAY_NAME "\0"
+            VALUE "ProductVersion",   MGS4E_VERSION_STRING "\0"
+            VALUE "LegalCopyright",   MGS4E_COPYRIGHT "\0"
+            VALUE "Comments",         MGSPWE_REPO_URL "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDI_ICON1 ICON "MGSPWEnabler.ico"

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MGSPWEnabler.asi: the Peace Walker build.
+
+  It compiles the generic core straight from ..\asi\src\core (game, log, mem: no copies) and
+  supplies its own identity through one trick worth knowing: $(ProjectDir)src comes before
+  ..\asi\src\core and shared\ on the include path, so when those shared sources include
+  "pch.hpp" and "version.hpp" they get pw\src\pch.hpp and pw\src\version.hpp (the latter
+  re-points the MGS4E_* identity macros at the Peace Walker names). The MGS4 sources are not
+  edited for this build; nothing under ..\asi changes.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Lab|x64">
+      <Configuration>Lab</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{5c1f7a2e-9d3b-4e6a-8f10-2b7c4d9e1a55}</ProjectGuid>
+    <RootNamespace>MGSPWEnabler</RootNamespace>
+    <ProjectName>MGSPWEnabler</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\MGS4Enabler.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>MGSPWEnabler</TargetName>
+    <TargetExt>.asi</TargetExt>
+    <ExternalIncludePath>$(EnablerExternal)spdlog\include;$(EnablerExternal)zydis\include;$(EnablerExternal)zydis\dependencies\zycore\include;$(EnablerExternal)safetyhook\include;$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_USRDLL;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.hpp</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)src\core;$(ProjectDir)src\features;$(EnablerRoot)asi\src\core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)res;$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalLibraryDirectories>$(EnablerExternal)zydis\msvc\bin\ReleaseX64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Zydis.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ImportLibrary />
+      <AdditionalOptions>/NOIMPLIB %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- Lab: Release plus the research probes, lab mode and the lab settings file (shared\lab.hpp). Never shipped. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Lab'">
+    <ClCompile>
+      <PreprocessorDefinitions>MGS4E_LAB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="src\core\pw_game.cpp" />
+    <ClCompile Include="src\core\config.cpp" />
+    <ClCompile Include="src\core\compat.cpp" />
+    <!-- The generic core, compiled from the MGS4 tree unchanged (see the note at the top). -->
+    <ClCompile Include="..\asi\src\core\game.cpp" />
+    <ClCompile Include="..\asi\src\core\log.cpp" />
+    <ClCompile Include="..\asi\src\core\mem.cpp" />
+    <ClCompile Include="src\features\probe.cpp" Condition="'$(Configuration)'=='Lab'" />
+    <!-- The Peace Walker ultrawide module is a private submodule: built when checked out, a logging stub otherwise. -->
+    <ClCompile Include="$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide-pw\src\fixes\aspect_ratio.cpp')" />
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\easy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\inline_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\mid_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\os.linux.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\os.windows.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\utility.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(EnablerExternal)safetyhook\src\vmt_hook.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\pch.hpp" />
+    <ClInclude Include="src\version.hpp" />
+    <ClInclude Include="src\core\pw_game.hpp" />
+    <ClInclude Include="src\core\config.hpp" />
+    <ClInclude Include="src\core\compat.hpp" />
+    <ClInclude Include="src\features\aspect_ratio.hpp" />
+    <ClInclude Include="src\features\probe.hpp" />
+    <ClInclude Include="..\asi\src\core\game.hpp" />
+    <ClInclude Include="..\asi\src\core\log.hpp" />
+    <ClInclude Include="..\asi\src\core\mem.hpp" />
+    <ClInclude Include="..\shared\ini.hpp" />
+    <ClInclude Include="..\shared\lab.hpp" />
+    <ClInclude Include="..\shared\version.hpp" />
+    <ClInclude Include="..\shared\pw\identity.hpp" />
+    <ClInclude Include="..\shared\pw\settings_keys.hpp" />
+    <ClInclude Include="..\shared\pw\features.hpp" />
+    <ClInclude Include="..\shared\pw\compat_table.hpp" />
+    <ClInclude Include="..\shared\pw\manifest_places.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\MGSPWEnabler.rc" />
+    <Image Include="res\MGSPWEnabler.ico" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
