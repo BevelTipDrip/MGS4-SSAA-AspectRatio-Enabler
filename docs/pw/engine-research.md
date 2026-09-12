@@ -51,7 +51,7 @@ Nothing here is a fix; it is what the fixes will stand on.
 
 ## The frame at the title (Measured, 2026-09-12, Lab draw census, 3440x1440 window, Afevis's mod present)
 
-The census (`pw\srceatures\draw_census.cpp`, Lab only) hooks the DirectX 11 device,
+The census (`pw\src\features\draw_census.cpp`, Lab only) hooks the DirectX 11 device,
 swap chain and both context classes and logs every draw of a frame with its target, viewport,
 shaders, first vertex constant buffer, bound texture, the vertex upload that preceded it and
 the game-code callers.
