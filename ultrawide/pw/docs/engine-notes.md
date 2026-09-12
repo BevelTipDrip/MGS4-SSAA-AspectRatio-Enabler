@@ -375,3 +375,22 @@ would still succeed and are not errors.
 **Route note** (user): if the title/menu is not advanced promptly an unskippable cutscene
 starts, which is why marker-based replays that shifted the presses failed; the replay must
 keep the recording's cadence from the first press.
+
+## Why Afevis's patch breaks bloom and lens flare (Measured by elimination, user's eyes, 2026-09-13, 4K desktop)
+
+Three launches, same scene, sun and bloom in view:
+
+1. Our integer path with the two float copies of the scale forced to 7.94 (`Render Scale
+   Hundredths`, the game scaler `+596E5` and the render-scale store `+5B015`, exactly his
+   fractional scale): bloom and flare fine.
+2. Our integer path with the full-canvas scene targets created at 3840x2160 instead of
+   3840x2176 (`Scene Size`, a hook at his CreateRT site `+89F8D`): fine.
+3. His ASI alone at 3840x2160 on the 16:9 desktop (internal canvas 484x272, UI scale 1.0074,
+   the smallest widening his code produces): broken.
+
+So neither the fractional scale nor a non-multiple target size is the cause; it is his
+canvas widening and the per-effect fixups around it (the 240-unit half width the glare
+sites assume, the camera inverse aspect and canvas size rewrite, the CreateRT2 literal
+replacement), which his code applies even at 16:9 because 480x272 is 1.7647, not 1.7778.
+Our path never widens the canvas, so bloom and flare keep the game's own geometry. When our
+aspect module widens the canvas at 21:9, these effects are the ones to re-check first.
