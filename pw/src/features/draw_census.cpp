@@ -602,6 +602,20 @@ namespace
             { std::lock_guard lock(g_Mutex); stripped = g_Stripped.count(res) != 0; }
             if (stripped)
             {
+                // The set holds addresses; a destroyed texture's address can come back as a
+                // buffer or another texture. Only a live 2D texture without CPU access is ours.
+                ID3D11Texture2D* tex = nullptr;
+                D3D11_TEXTURE2D_DESC d {};
+                if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex) { tex->GetDesc(&d); tex->Release(); }
+                if (!tex || d.CPUAccessFlags != 0 || d.Width < 1024)
+                {
+                    std::lock_guard lock(g_Mutex);
+                    g_Stripped.erase(res);
+                    stripped = false;
+                }
+            }
+            if (stripped)
+            {
                 g_StrippedMaps.fetch_add(1);
                 std::lock_guard lock(g_Mutex);
                 spdlog::warn("PW census: f{} {} Map on a GPU-local texture ({}) type={} -> {:#x}: the game wanted CPU access here | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(res), static_cast<int>(type), static_cast<uint32_t>(r), GameCallers(6));
