@@ -66,6 +66,12 @@ Tracing and live editing both work; see "The Mission Selector and live editing" 
 then `replay.ps1 -Route routes	o_mission.csv -StopMs 58000` lands on the Mission Selector;
 without `-StopMs` it enters the first mission. `census 2` and `bias ...` go into `live.txt`.
 
+`bias_run.ps1 -OutDir <dir> -StopMs 108000 -Commands 'tbias -11 -8 -85 0',...` is one
+in-game live-editing run end to end (boot, replay, before capture, commands, census, after
+capture, close, log copy). The HUD's eleven groups and their 21:9 biases are in
+`engine-research.md` ("The in-game HUD table"). The mission has a timer; on expiry the mission
+fails and can be restarted without returning to the menu (user note; not yet in the route).
+
 ## To do
 
 - **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through

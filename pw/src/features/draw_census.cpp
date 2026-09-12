@@ -116,6 +116,32 @@ namespace
     std::vector<Bias> g_Biases;            // under g_Mutex
     std::atomic<uint64_t> g_BiasApplied { 0 };
 
+    // A translation bias moves every draw whose world matrix (rows 5-8 of the 2640-byte
+    // vertex constant buffer, identity plus a translation row) carries the translation
+    // (tx, ty), by dx, dy canvas units. This is the handle for the in-game HUD, whose text
+    // is DrawIndexed from a shared vertex buffer with the element's position in that row.
+    struct TranslationBias { bool any; float tx, ty; float dx, dy; };
+    std::vector<TranslationBias> g_TBiases;   // under g_Mutex
+    std::atomic<uint64_t> g_TBiasApplied { 0 };
+
+    // Caller holds g_Mutex. `data` is the mapped 2640-byte buffer, still writable.
+    void ApplyTranslationBiases(void* data, size_t size)
+    {
+        if (size < 32 * sizeof(float) || g_TBiases.empty()) { return; }
+        float* f = static_cast<float*>(data);
+        // Only the UI ortho (row 1 = 2/480): leave 3D alone. The world basis (rows 5-7) may
+        // be rotated (vertical text) or scaled (gauges); the translation row is canvas units
+        // regardless, so it is always the handle.
+        if (std::fabs(f[0] - 2.0f / 480.0f) > 1e-5f) { return; }
+        for (const TranslationBias& b : g_TBiases)
+        {
+            if (!b.any && (std::fabs(f[28] - b.tx) > 0.5f || std::fabs(f[29] - b.ty) > 0.5f)) { continue; }
+            f[28] += b.dx;
+            f[29] += b.dy;
+            g_TBiasApplied.fetch_add(1);
+        }
+    }
+
     struct Mapping { void* data; size_t size; };
     std::unordered_map<ID3D11Resource*, Mapping> g_Mapped;         // Map(): pData until Unmap()
 
@@ -451,7 +477,7 @@ namespace
             {
                 bool constant = false;
                 const size_t size = BufferSize(res, constant);
-                if (constant) { Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size)); }
+                if (constant) { ApplyTranslationBiases(it->second.data, size); Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size)); }
                 if (!constant && size && !g_Biases.empty()) { ApplyBiases(g_State[self], it->second.data, size); }
                 if (!constant && size && g_FramesToLog.load() > 0)
                 {
@@ -576,7 +602,7 @@ namespace
             const int left = g_FramesToLog.load();
             if (left > 0)
             {
-                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {}.", g_Frame.load(), g_DrawsThisFrame, g_BiasApplied.load());
+                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation.", g_Frame.load(), g_DrawsThisFrame, g_BiasApplied.load(), g_TBiasApplied.load());
                 g_FramesToLog.store(left - 1);
                 if (left - 1 == 0) { spdlog::info("PW census: done."); }
             }
@@ -747,6 +773,25 @@ namespace
             g_Biases.push_back(b);
             spdlog::info("PW live: bias on texture {}x{}{} by ({}, {}); {} bias(es) active.", b.texW, b.texH,
                 b.hasRect ? std::format(" rect ({},{})-({},{})", b.x0, b.y0, b.x1, b.y1) : std::string(""), b.dx, b.dy, g_Biases.size());
+        }
+        else if (cmd == "tbias")
+        {
+            // tbias <tx> <ty> <dx> <dy>   |   tbias any <dx> <dy>   |   tbias clear
+            std::string first;
+            in >> first;
+            std::lock_guard lock(g_Mutex);
+            if (first == "clear") { g_TBiases.clear(); spdlog::info("PW live: translation biases cleared."); return; }
+            TranslationBias b {};
+            bool ok = false;
+            if (first == "any") { b.any = true; ok = static_cast<bool>(in >> b.dx >> b.dy); }
+            else
+            {
+                try { b.tx = std::stof(first); ok = static_cast<bool>(in >> b.ty >> b.dx >> b.dy); } catch (...) { ok = false; }
+            }
+            if (!ok) { spdlog::warn("PW live: bad tbias '{}' (tbias <tx> <ty> <dx> <dy> | tbias any <dx> <dy> | tbias clear).", line); return; }
+            g_TBiases.push_back(b);
+            if (b.any) { spdlog::info("PW live: translation bias on every UI draw by ({}, {}); {} active.", b.dx, b.dy, g_TBiases.size()); }
+            else { spdlog::info("PW live: translation bias on ({}, {}) by ({}, {}); {} active.", b.tx, b.ty, b.dx, b.dy, g_TBiases.size()); }
         }
         else if (!cmd.empty())
         {

@@ -134,6 +134,33 @@ the game-code callers.
   column (326..351) per row; headers at y 64..78; row icons (143..157) translated `147 0`;
   the details panel and its text below y 138. The whole panel is 480 wide within a 650 canvas,
   centred by Afevis's offset, which is why it sits inside the middle 16:9 of a 21:9 window.
+- **The in-game HUD table** (first mission, from the census taken while the user played;
+  groups by world-matrix translation row, rectangles in canvas units where a vertex upload
+  existed): mission timer and "REMAINING ENEMIES" text at `(-11,-8)`, DrawIndexed n=4 glyphs
+  from 512x512 and 256x256 atlases (about 60 draws, no per-draw vertex upload: the text
+  vertices live in a shared buffer, so only the translation row places them); life bar and
+  vertical name text at `(8,-12)` (bars at x 8..16, y 218..264, plus 30 glyphs); the
+  right-hand item and weapon column at `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`,
+  `(-3,6)` (quads at x 445..472); the top-right gauge at `(112,4)` (460..472, 8..83); the two
+  weapon/item boxes at `(133,58)` and `(133,85)` (435..469, 78..142 and 190..254); the centre
+  reticle's four dots at `(234..246, 130..142)`. Left-anchored groups need -85 at 21:9 (to
+  the 650-canvas edge), right-anchored ones +85; the reticle stays. The live command
+  `tbias <tx> <ty> <dx> <dy>` (or `tbias any`, `tbias clear`) moves a group by rewriting the
+  translation row in the constant upload; it is the handle for these DrawIndexed elements.
+  **Verified in the mission** (2026-09-12, run pw_hud3): all eleven groups moved to the 21:9
+  edges with those biases, 3,822 uploads rewritten in ~6 s. The world basis is not always
+  identity: vertical text carries a 90-degree rotation in rows 5-6 and the gauges a 0.75 or
+  0.70 scale; the translation row is canvas units regardless, so the matcher keys only on
+  the ortho in row 1 and the translation. (A first attempt that required an identity basis
+  moved only the plain quads.)
+- **Cutscenes and character cards are pillarboxed by the game**: the mission intro (real-time
+  Snake and soldiers) and the "HUEY" card render as a 16:9 picture with black bars each side
+  at 21:9, while gameplay fills the window. Same class as MGS4's cutscene bands; the aspect
+  work must leave those alone and only widen HUD and overlays.
+- **Route timing**: the title starts its attract video if nothing is pressed for a while, so
+  the replay must skip ahead (`bias_run.ps1 -SkipMs 15000`, since the replay clock starts
+  after ASI init, later than the recording's); a late first Enter lands in the video and the
+  rest of the route goes astray (run pw_hud2).
 - **Our Lab hooks do not move the background**: the Release ASI (no census) and the Lab ASI
   produced the same Mission Selector capture, both at 6880x2880 through Afevis's ini. The
   user reports the map background offset; not attributed yet.
