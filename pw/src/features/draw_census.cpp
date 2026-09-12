@@ -6,6 +6,7 @@
 #include "mem.hpp"
 #include "ui_bias.hpp"
 #include "internal_size.hpp"
+#include "post_scale.hpp"
 
 #include <unordered_set>
 #include <map>
@@ -128,6 +129,7 @@ namespace
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
     std::atomic<uint64_t> g_GpuLocalStripped { 0 };
+    std::atomic<bool> g_TitleSeen { false };
     std::atomic<uint64_t> g_TextureMaps { 0 };       // Map calls on large textures (any time)
     std::atomic<uint64_t> g_TextureMapFails { 0 };
 
@@ -148,6 +150,8 @@ namespace
     struct Acc { double sum = 0; int n = 0; double max = 0; };
     std::map<std::string, Acc> g_TimingAcc;      // per pass label (draw kind + shaders, sizes stripped), across timed frames
     std::vector<double> g_FrameTotals;           // work per timed frame (first stamp after 'frame start' to the last)
+    std::chrono::steady_clock::time_point g_TimingWallStart {};
+    uint64_t g_TimingFrameStart = 0;
     uint64_t g_TimingFrame = 0;
     constexpr size_t kStampPoolSize = 1200;
     std::string g_LastTarget;                    // for "new target" detection, immediate order only
@@ -216,7 +220,9 @@ namespace
         g_TimingState.store(0);
         if (g_FrameTotals.empty()) { spdlog::warn("PW timing: no frames measured."); return; }
         double sum = 0, mx = 0; for (double t : g_FrameTotals) { sum += t; mx = std::max(mx, t); }
-        spdlog::info("PW timing: {} frames timed: mean GPU work {:.2f} ms per frame, max {:.2f} ms. Mean cost per pass (sum over the frame / frames; count = occurrences per frame):", g_FrameTotals.size(), sum / g_FrameTotals.size(), mx);
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_TimingWallStart).count();
+        const double fps = wall > 0 ? static_cast<double>(g_Frame.load() - g_TimingFrameStart) / wall : 0;
+        spdlog::info("PW timing: {} frames timed over {:.1f} s at {:.1f} fps: mean GPU work {:.2f} ms per frame, max {:.2f} ms. Mean cost per pass (sum over the frame / frames; count = occurrences per frame):", g_FrameTotals.size(), wall, fps, sum / g_FrameTotals.size(), mx);
         std::vector<std::pair<std::string, Acc>> rows(g_TimingAcc.begin(), g_TimingAcc.end());
         std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.sum > b.second.sum; });
         for (size_t i = 0; i < rows.size() && i < 24; i++)
@@ -318,6 +324,21 @@ namespace
         const auto* p = static_cast<const uint8_t*>(data);
         for (size_t i = 0; i < n; i++) { out += std::format("{}{:02x}", (i && i % 4 == 0) ? " " : "", p[i]); }
         return out;
+    }
+
+    // Lab key Dump Shaders: every shader's bytecode goes to C:\mgspf_tools\pw\shaders\<hash>.<kind>.cso
+    // so the passes can be read with D3DDisassemble offline.
+    void DumpShader(const void* code, size_t size, uint64_t hash, const char* kind)
+    {
+        if (!DrawCensus::bDumpShaders) { return; }
+        CreateDirectoryA("C:/mgspf_tools/pw/shaders", nullptr);
+                // The 8-hex-digit id used everywhere else is the first 8 digits of the 16-digit hash.
+        const std::string byId = std::format("C:/mgspf_tools/pw/shaders/{}.{}.cso", std::format("{:016x}", hash).substr(0, 8), kind);
+        HANDLE f = CreateFileA(byId.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f == INVALID_HANDLE_VALUE) { return; }
+        DWORD written = 0;
+        WriteFile(f, code, static_cast<DWORD>(size), &written, nullptr);
+        CloseHandle(f);
     }
 
     uint64_t Fnv1a(const void* data, size_t size)
@@ -531,6 +552,25 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_PSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
     {
+        // Title marker: the first bind of the 2048x1152 title art (checked by description until
+        // seen; the texture is created through a path the creation hook does not see).
+        if (!g_TitleSeen.load() && start == 0 && count > 0 && views && views[0])
+        {
+            ID3D11Resource* res = nullptr;
+            views[0]->GetResource(&res);
+            if (res)
+            {
+                ID3D11Texture2D* tex = nullptr;
+                if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+                {
+                    D3D11_TEXTURE2D_DESC d {};
+                    tex->GetDesc(&d);
+                    tex->Release();
+                    if (d.Width == 2048 && d.Height == 1152 && !g_TitleSeen.exchange(true)) { spdlog::info("PW census: TITLE SCREEN: the title art is being drawn (frame {}).", g_Frame.load()); }
+                }
+                res->Release();
+            }
+        }
         if (start == 0 && count > 0 && views && (g_FramesToLog.load() > 0 || UiBias::Active()))
         {
             std::lock_guard lock(g_Mutex);
@@ -689,6 +729,7 @@ namespace
     void STDMETHODCALLTYPE Hooked_ResolveSubresource(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub, DXGI_FORMAT fmt)
     {
         if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); g_State[self].stampNext = true; StampBefore(self, std::format("Resolve/copy dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
+        if (src && dst && PostScale::Downscale(self, dst, src)) { return; }
         if (InternalSize::bDisableMsaa && src && dst)
         {
             // A single-sampled source cannot be resolved; copy it instead (same size and format).
@@ -776,14 +817,14 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateVertexShader(ID3D11Device* self, const void* code, SIZE_T size, ID3D11ClassLinkage* linkage, ID3D11VertexShader** out)
     {
         const HRESULT r = Device_CreateVertexShader_hook.stdcall<HRESULT>(self, code, size, linkage, out);
-        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); }
+        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); DumpShader(code, size, g_ShaderHash[*out], "vs"); }
         return r;
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreatePixelShader(ID3D11Device* self, const void* code, SIZE_T size, ID3D11ClassLinkage* linkage, ID3D11PixelShader** out)
     {
         const HRESULT r = Device_CreatePixelShader_hook.stdcall<HRESULT>(self, code, size, linkage, out);
-        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); }
+        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); DumpShader(code, size, g_ShaderHash[*out], "ps"); }
         return r;
     }
 
@@ -815,7 +856,7 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateComputeShader(ID3D11Device* self, const void* code, SIZE_T size, ID3D11ClassLinkage* linkage, ID3D11ComputeShader** out)
     {
         const HRESULT r = Device_CreateComputeShader_hook.stdcall<HRESULT>(self, code, size, linkage, out);
-        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); }
+        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); DumpShader(code, size, g_ShaderHash[*out], "cs"); }
         return r;
     }
 
@@ -861,7 +902,7 @@ namespace
             }
             if (g_TimingState.load() == 6) { ReportTiming(); }
             const int left = g_FramesToLog.load();
-            if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx && g_TimingState.load() == 0) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingFramesLeft = std::max(1, DrawCensus::iTimeFrames); g_TimingState.store(1); } }
+            if (left == 2 && DrawCensus::bTimePasses && g_ImmediateCtx && g_TimingState.load() == 0) { EnsureStampPool(); if (!g_StampPool.empty()) { g_TimingFramesLeft = std::max(1, DrawCensus::iTimeFrames); g_TimingWallStart = std::chrono::steady_clock::now(); g_TimingFrameStart = g_Frame.load(); g_TimingState.store(1); } }
             if (left > 0)
             {
                 spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {} vertex, {} translation.", g_Frame.load(), g_DrawsThisFrame, UiBias::AppliedVertex(), UiBias::AppliedTranslation());
@@ -972,6 +1013,7 @@ namespace
         if (!immediate) { device->GetImmediateContext(&immediate); }
         if (!immediate) { spdlog::error("PW census: no immediate context."); return; }
         g_Device = device;
+        PostScale::SetDevice(device);
         g_ImmediateCtx = immediate;
         immediate->AddRef();
         InstallContextHooks(g_Immediate, *reinterpret_cast<void***>(immediate), "immediate");

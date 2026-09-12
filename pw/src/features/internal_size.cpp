@@ -13,8 +13,14 @@ namespace
     // immediates (the "1" branch first, then the "0" branch). Offsets are of the immediate
     // itself, measured on the live dump of 2026-09-13 (build 1.3.1.0).
     struct Imm32Site { uintptr_t rva; uint32_t expected; bool isWidth; };
-    constexpr Imm32Site kImm32[] = {
+    // Getter 1 (+16201) is read by the function that creates the post-chain targets (the
+    // resolved colour, the HDR target, the post depth: creation stacks +1642D/+1677C/+16801/
+    // +16A38 under +23200); it takes the post size. The other sites size and place the scene
+    // (HUD scale, resolve, viewport getters) and take the scene size.
+    constexpr Imm32Site kPostImm32[] = {
         { 0x1620E, 0x780, true }, { 0x16214, 0x440, false }, { 0x1621C, 0x5A0, true }, { 0x16222, 0x330, false },   // target getter 1
+    };
+    constexpr Imm32Site kImm32[] = {
         { 0x1AC4B, 0x780, true }, { 0x1AC51, 0x440, false }, { 0x1AC59, 0x5A0, true }, { 0x1AC5F, 0x330, false },   // target getter 3
         { 0x51ECA, 0x780, true }, { 0x51ECF, 0x440, false }, { 0x51ED6, 0x5A0, true }, { 0x51EDB, 0x330, false },   // target getter 2
         { 0x56306, 0x780, true }, { 0x56327, 0x5A0, true },                                                         // HUD scale (width only)
@@ -65,21 +71,31 @@ namespace InternalSize
             int ok = 0;
             for (const Imm64Site& s : kScale) { ok += PatchChecked<uint64_t>(s.rva, s.expected, packed, "render scale immediate"); }
             spdlog::info("PW internal size: render scale set to {} at {} of {} sites.", iRenderScale, ok, std::size(kScale));
-            if (iInternalWidth <= 0 || iInternalHeight <= 0) { iInternalWidth = 480 * iRenderScale; iInternalHeight = 272 * iRenderScale; }
         }
-        if (iInternalWidth > 0 && iInternalHeight > 0)
+        // Scene size: the render scale's canvas multiple when set, else the explicit internal size.
+        const int sceneW = iRenderScale > 0 ? 480 * iRenderScale : iInternalWidth;
+        const int sceneH = iRenderScale > 0 ? 272 * iRenderScale : iInternalHeight;
+        // Post size: the explicit internal size when given together with a render scale, else the scene size.
+        const int postW = (iRenderScale > 0 && iInternalWidth > 0) ? iInternalWidth : sceneW;
+        const int postH = (iRenderScale > 0 && iInternalHeight > 0) ? iInternalHeight : sceneH;
+        if (sceneW > 0 && sceneH > 0)
         {
             int ok = 0;
             for (const Imm32Site& s : kImm32)
             {
-                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? iInternalWidth : iInternalHeight), "internal size immediate");
+                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? sceneW : sceneH), "scene size immediate");
             }
-            const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(iInternalHeight)) << 32) | static_cast<uint32_t>(iInternalWidth);
+            const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(sceneH)) << 32) | static_cast<uint32_t>(sceneW);
             for (const Imm64Site& s : kImm64)
             {
-                ok += PatchChecked<uint64_t>(s.rva, s.expected, packed, "packed internal size immediate");
+                ok += PatchChecked<uint64_t>(s.rva, s.expected, packed, "packed scene size immediate");
             }
-            spdlog::info("PW internal size: internal target set to {}x{} at {} of {} sites.", iInternalWidth, iInternalHeight, ok, std::size(kImm32) + std::size(kImm64));
+            for (const Imm32Site& s : kPostImm32)
+            {
+                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? postW : postH), "post size immediate");
+            }
+            spdlog::info("PW internal size: scene {}x{}, post chain {}x{}, at {} of {} sites.", sceneW, sceneH, postW, postH, ok, std::size(kImm32) + std::size(kImm64) + std::size(kPostImm32));
+            iInternalWidth = postW; iInternalHeight = postH;
         }
         if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
         {

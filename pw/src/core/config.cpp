@@ -99,6 +99,7 @@ namespace mgspwe::config
             Read(ini, Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
             Read(ini, Graphics, "Live Commands", DrawCensus::bLiveCommands);
             Read(ini, Graphics, "Time Frames", DrawCensus::iTimeFrames);
+            Read(ini, Graphics, "Dump Shaders", DrawCensus::bDumpShaders);
             Report(Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
             Report(Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
             Report(Graphics, "Live Commands", DrawCensus::bLiveCommands);

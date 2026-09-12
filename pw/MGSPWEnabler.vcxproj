@@ -84,6 +84,7 @@
     <ClCompile Include="src\features\probe.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\draw_census.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\internal_size.cpp" Condition="'$(Configuration)'=='Lab'" />
+    <ClCompile Include="src\features\post_scale.cpp" Condition="'$(Configuration)'=='Lab'" />
     <!-- The Peace Walker part of the private ultrawide module (external\ultrawide\pw): built when checked out, stubs otherwise. -->
     <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
     <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
@@ -124,6 +125,7 @@
     <ClInclude Include="src\features\draw_census.hpp" />
     <ClInclude Include="src\features\ui_bias.hpp" />
     <ClInclude Include="src\features\internal_size.hpp" />
+    <ClInclude Include="src\features\post_scale.hpp" />
     <ClInclude Include="..\asi\src\core\game.hpp" />
     <ClInclude Include="..\asi\src\core\log.hpp" />
     <ClInclude Include="..\asi\src\core\mem.hpp" />
