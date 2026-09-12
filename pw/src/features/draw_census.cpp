@@ -95,6 +95,7 @@ namespace
         std::vector<uint8_t> lastVertexUpload;   // head of the last non-constant buffer unmapped on this context
         size_t lastVertexUploadSize = 0;
         std::string lastVertexUploadCaller;
+        std::string trace;              // call order on this context since its last draw (first draws of a census frame only)
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     std::mutex g_Mutex;
@@ -235,6 +236,14 @@ namespace
         g_LatestUpload[res] = s;
     }
 
+    // Appends one token to the context's call trace while a census is on and the frame is young.
+    void Trace(void* self, const std::string& token)
+    {
+        if (g_FramesToLog.load() <= 0) { return; }
+        ContextState& st = g_State[self];   // caller holds g_Mutex
+        if (st.draws < 40 && st.trace.size() < 600) { st.trace += (st.trace.empty() ? "" : " > ") + token; }
+    }
+
     void LogDraw(void* self, const char* kind, UINT count, UINT start, UINT baseVertex)
     {
         g_DrawsSeen.fetch_add(1);
@@ -267,6 +276,11 @@ namespace
             vs == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", vs->second).substr(0, 8),
             ps == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", ps->second).substr(0, 8),
             cb, GameCallers(10));
+        if (!st.trace.empty())
+        {
+            spdlog::info("PW census:   calls {} > {}", st.trace, kind);
+            st.trace.clear();
+        }
         if (!st.lastVertexUpload.empty())
         {
             // The stride follows from the draw: the upload holds exactly the vertices drawn.
@@ -329,13 +343,13 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_VSSetShader(ID3D11DeviceContext* self, ID3D11VertexShader* shader, ID3D11ClassInstance* const* instances, UINT n)
     {
-        { std::lock_guard lock(g_Mutex); g_State[self].vs = shader; }
+        { std::lock_guard lock(g_Mutex); g_State[self].vs = shader; Trace(self, "VSSetShader"); }
         Original<decltype(&Hooked_VSSetShader)>(self, kCtxVSSetShader)(self, shader, instances, n);
     }
 
     void STDMETHODCALLTYPE Hooked_PSSetShader(ID3D11DeviceContext* self, ID3D11PixelShader* shader, ID3D11ClassInstance* const* instances, UINT n)
     {
-        { std::lock_guard lock(g_Mutex); g_State[self].ps = shader; }
+        { std::lock_guard lock(g_Mutex); g_State[self].ps = shader; Trace(self, "PSSetShader"); }
         Original<decltype(&Hooked_PSSetShader)>(self, kCtxPSSetShader)(self, shader, instances, n);
     }
 
@@ -347,7 +361,12 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_PSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
     {
-        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); g_State[self].texture = DescribeTexture(views[0]); }
+        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0)
+        {
+            std::lock_guard lock(g_Mutex);
+            g_State[self].texture = DescribeTexture(views[0]);
+            Trace(self, "SRV0=" + g_State[self].texture.substr(0, g_State[self].texture.find(' ')));
+        }
         Original<decltype(&Hooked_PSSetShaderResources)>(self, kCtxPSSetShaderResources)(self, start, count, views);
     }
 
@@ -357,6 +376,7 @@ namespace
         {
             std::lock_guard lock(g_Mutex);
             for (UINT i = 0; i < count && start + i < 4; i++) { g_State[self].vsCb[start + i] = buffers[i]; }
+            Trace(self, std::format("VSSetCB{}x{}", start, count));
         }
         Original<decltype(&Hooked_VSSetConstantBuffers)>(self, kCtxVSSetConstantBuffers)(self, start, count, buffers);
     }
@@ -381,9 +401,10 @@ namespace
             {
                 bool constant = false;
                 const size_t size = BufferSize(res, constant);
-                if (constant) { Snapshot16(res, it->second.data, size); }
+                if (constant) { Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size)); }
                 else if (size && g_FramesToLog.load() > 0)
                 {
+                    Trace(self, std::format("Unmap vb {}B", size));
                     ContextState& st = g_State[self];
                     const size_t keep = std::min<size_t>(size, 64 * 24);
                     st.lastVertexUpload.assign(static_cast<const uint8_t*>(it->second.data), static_cast<const uint8_t*>(it->second.data) + keep);
@@ -406,7 +427,9 @@ namespace
             {
                 std::lock_guard lock(g_Mutex);
                 Snapshot16(res, data, size);
+                Trace(self, std::format("UpdateSub cb {}B", size));
             }
+            else if (size) { std::lock_guard lock(g_Mutex); Trace(self, std::format("UpdateSub vb {}B", size)); }
         }
         Original<decltype(&Hooked_UpdateSubresource)>(self, kCtxUpdateSubresource)(self, res, sub, box, data, rowPitch, depthPitch);
     }

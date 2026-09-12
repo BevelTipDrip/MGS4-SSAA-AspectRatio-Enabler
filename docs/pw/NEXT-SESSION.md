@@ -47,6 +47,17 @@ after it (`C:\mgspf_tools\pw\keylog.ps1`), the census runs on that menu (`census
 built the same way. Live editing: a bias keyed on (texture, rectangle) applied to the mapped
 vertices at `Unmap`.
 
+## Route and harness (2026-09-12)
+
+`C:\mgspf_tools\pwoutes	o_mission.csv` is the user's recorded route from the title into
+the first mission (key downs at 34.6 s Enter through 84.1 s Enter, gameplay from ~105 s), for
+`replay.ps1`. `keylog.ps1` now stamps its absolute start, flushes every second and stops when
+the game exits. `census_ticker.ps1` writes `census 2` into `live.txt` every 15 s while the game
+runs; a one-frame census is useless because the deferred recording straddles Present (the
+first censused frame ends with 0 or 1 draws, the second carries the picture), so every
+census is two frames. `scratchpad\census_table.py <log> <frame>` prints a frame's element
+table (UI draws with texture, world translation and canvas rectangle; non-UI groups).
+
 ## To do
 
 - **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through
