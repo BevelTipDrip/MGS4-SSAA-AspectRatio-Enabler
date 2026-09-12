@@ -74,7 +74,7 @@ identity method would replace them.
 
 ## Open questions (Phase 0 answers these)
 
-- DirectX 11 or 12 at run time, and which device presents.
+- DirectX 11 or 12: answered above (11, one run); which device presents is the next probe.
 - Where the persisted display settings live and how `"invalid window size"` is reached.
 - The internal render size and where the upscale happens (3D at a 480x272 multiple then
   blitted, 3D at output size with the UI in canvas space, or a fixed HD target).
