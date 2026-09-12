@@ -102,6 +102,42 @@ the game-code callers.
   mapped vertices at `Unmap`, before the draw is recorded. That is the Peace Walker equivalent
   of the MGS4 pool-append hook.
 
+## The Mission Selector and live editing (Measured, 2026-09-12, route replay, 6880x2880 window)
+
+- **Gameplay renders straight into the output-sized target too.** A mission frame is ~8,800
+  draws, all on the 6880x2880 back buffer (plus a 192x192 blur chain); 285 of them are UI
+  quads with the ortho constants. There is no separate internal 3D target to resize: with
+  Afevis's patches the world is drawn at window size, which is why his supersampling has to be
+  a bigger window.
+- **Per-element placement lives in the world matrix, not the vertices.** The 2640-byte vertex
+  constant buffer holds the ortho (rows 1-4) and a world matrix (rows 5-8) whose translation
+  row differs per draw: `0 0 0 1` for elements laid out from the top-left in 0..480 x 0..272,
+  `240 136` for canvas-centred art, `0 30` for the mission list highlight moved onto the
+  third row, `147 0` for a column offset, and so on. Each UI draw uploads its own constant
+  buffer. Element identity for a table is therefore (texture size and format, translation
+  row, canvas rectangle).
+- **Call order for one UI quad on a deferred context**: `VSSetShader > PSSetShader >
+  VSSetConstantBuffers(0) > PSSetShaderResources(0) > Unmap cb 2640B > Unmap cb 352B > Unmap
+  vb (96 or 144 B) > Draw`. The texture is bound before both uploads, so a hook at either
+  Unmap knows which element it is touching.
+- **Live editing works at the vertex upload.** The live command `bias <W>x<H> <dx> <dy> [x0 y0
+  x1 y1]` (`bias clear` to reset) adds dx, dy canvas units to the positions of every upload
+  drawn with a WxH texture, optionally only the quad whose rectangle matches. Test on the
+  Mission Selector: `bias 1024x1024 0 20` dropped the "MISSION SELECTOR" glyphs 20 units below
+  their black box (the box, a separate quad, stayed); `bias 256x128 20 0 8 79 305 93` moved
+  the first list row's quad from x 8 to 28 in the census. 276 uploads biased in ~6 s.
+- **The Mission Selector element table** (canvas units, top-left origin unless noted): title
+  text glyph run (10,7)-(90,24) from the 1024x1024 font atlas over a black box (8,7)-(92,24);
+  six tab icons (5..137, 45..77) 32 units apart from a 256x128 sheet, each with a 14-unit
+  glyph inside; a "L1 R1" pair (126..155, 48..58); four list rows (8,79)-(305,93) stepping 15
+  units, the highlight the same quad translated `0 30`; the count column (306..325) and skull
+  column (326..351) per row; headers at y 64..78; row icons (143..157) translated `147 0`;
+  the details panel and its text below y 138. The whole panel is 480 wide within a 650 canvas,
+  centred by Afevis's offset, which is why it sits inside the middle 16:9 of a 21:9 window.
+- **Our Lab hooks do not move the background**: the Release ASI (no census) and the Lab ASI
+  produced the same Mission Selector capture, both at 6880x2880 through Afevis's ini. The
+  user reports the map background offset; not attributed yet.
+
 ## How the launcher drives the game (Reported: MGSPatriotFix source, 2026-09-12)
 
 The launcher starts the exe with `-region <r> -lan <l> -selfregion EU -resolution <0|1>

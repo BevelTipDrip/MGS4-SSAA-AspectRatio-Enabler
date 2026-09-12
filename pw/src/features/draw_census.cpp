@@ -109,6 +109,13 @@ namespace
     struct Snapshot { float f[64]; size_t count; bool valid; };
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
     std::unordered_map<ID3D11Resource*, Snapshot> g_LatestUpload;  // constant buffer -> latest 16 floats
+    // Live editing: a bias moves every quad drawn with a texture of the given size (and,
+    // when a rectangle is given, only the quad whose canvas rectangle matches it) by dx, dy
+    // canvas units. Applied to the mapped vertices at Unmap, before the draw is recorded.
+    struct Bias { UINT texW, texH; bool hasRect; float x0, y0, x1, y1; float dx, dy; };
+    std::vector<Bias> g_Biases;            // under g_Mutex
+    std::atomic<uint64_t> g_BiasApplied { 0 };
+
     struct Mapping { void* data; size_t size; };
     std::unordered_map<ID3D11Resource*, Mapping> g_Mapped;         // Map(): pData until Unmap()
 
@@ -146,6 +153,49 @@ namespace
         uint32_t colour = 0;
         std::memcpy(&colour, p + stride - 16, sizeof(colour));
         return std::format("stride={} rect=({:g},{:g})-({:g},{:g}) z={:g} colour={:08x}", stride, minX, minY, maxX, maxY, z, colour);
+    }
+
+    // Stride of a UI upload without the draw count: whole quads of 24-byte textured vertices
+    // (144 B each) or 16-byte untextured ones (96 B each); otherwise by divisibility.
+    size_t GuessStride(size_t size)
+    {
+        if (size % 144 == 0) { return 24; }
+        if (size % 96 == 0) { return 16; }
+        return (size % 24 == 0) ? 24 : 16;
+    }
+
+    // Caller holds g_Mutex. `st.texture` is "WxH fmtN 0x..." from the last PSSetShaderResources.
+    void ApplyBiases(ContextState& st, void* data, size_t size)
+    {
+        UINT w = 0, h = 0;
+        if (sscanf_s(st.texture.c_str(), "%ux%u", &w, &h) != 2) { return; }
+        const size_t stride = GuessStride(size);
+        if (stride < 12 || size < stride) { return; }
+        const size_t count = size / stride;
+        auto* p = static_cast<uint8_t*>(data);
+        for (const Bias& b : g_Biases)
+        {
+            if (b.texW != w || b.texH != h) { continue; }
+            if (b.hasRect)
+            {
+                float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+                for (size_t i = 0; i < count; i++)
+                {
+                    float xy[2];
+                    std::memcpy(xy, p + i * stride + stride - 12, sizeof(xy));
+                    minX = std::min(minX, xy[0]); maxX = std::max(maxX, xy[0]);
+                    minY = std::min(minY, xy[1]); maxY = std::max(maxY, xy[1]);
+                }
+                if (std::fabs(minX - b.x0) > 0.5f || std::fabs(minY - b.y0) > 0.5f || std::fabs(maxX - b.x1) > 0.5f || std::fabs(maxY - b.y1) > 0.5f) { continue; }
+            }
+            for (size_t i = 0; i < count; i++)
+            {
+                float* xy = reinterpret_cast<float*>(p + i * stride + stride - 12);
+                xy[0] += b.dx;
+                xy[1] += b.dy;
+            }
+            g_BiasApplied.fetch_add(1);
+        }
     }
 
     std::string DescribeTexture(ID3D11ShaderResourceView* view)
@@ -361,7 +411,7 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_PSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
     {
-        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0)
+        if (start == 0 && count > 0 && views && (g_FramesToLog.load() > 0 || !g_Biases.empty()))
         {
             std::lock_guard lock(g_Mutex);
             g_State[self].texture = DescribeTexture(views[0]);
@@ -402,7 +452,8 @@ namespace
                 bool constant = false;
                 const size_t size = BufferSize(res, constant);
                 if (constant) { Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size)); }
-                else if (size && g_FramesToLog.load() > 0)
+                if (!constant && size && !g_Biases.empty()) { ApplyBiases(g_State[self], it->second.data, size); }
+                if (!constant && size && g_FramesToLog.load() > 0)
                 {
                     Trace(self, std::format("Unmap vb {}B", size));
                     ContextState& st = g_State[self];
@@ -525,7 +576,7 @@ namespace
             const int left = g_FramesToLog.load();
             if (left > 0)
             {
-                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts.", g_Frame.load(), g_DrawsThisFrame);
+                spdlog::info("PW census: frame {} ended with {} draw(s) on all contexts; biases applied so far {}.", g_Frame.load(), g_DrawsThisFrame, g_BiasApplied.load());
                 g_FramesToLog.store(left - 1);
                 if (left - 1 == 0) { spdlog::info("PW census: done."); }
             }
@@ -678,6 +729,24 @@ namespace
             in >> frames;
             g_FramesToLog.store(std::max(1, frames));
             spdlog::info("PW census: logging the next {} frame(s) (command).", std::max(1, frames));
+        }
+        else if (cmd == "bias")
+        {
+            // bias <W>x<H> <dx> <dy> [x0 y0 x1 y1]   |   bias clear
+            std::string tex;
+            in >> tex;
+            std::lock_guard lock(g_Mutex);
+            if (tex == "clear") { g_Biases.clear(); spdlog::info("PW live: biases cleared."); return; }
+            Bias b {};
+            if (sscanf_s(tex.c_str(), "%ux%u", &b.texW, &b.texH) != 2 || !(in >> b.dx >> b.dy))
+            {
+                spdlog::warn("PW live: bad bias '{}' (bias <W>x<H> <dx> <dy> [x0 y0 x1 y1] | bias clear).", line);
+                return;
+            }
+            if (in >> b.x0 >> b.y0 >> b.x1 >> b.y1) { b.hasRect = true; }
+            g_Biases.push_back(b);
+            spdlog::info("PW live: bias on texture {}x{}{} by ({}, {}); {} bias(es) active.", b.texW, b.texH,
+                b.hasRect ? std::format(" rect ({},{})-({},{})", b.x0, b.y0, b.x1, b.y1) : std::string(""), b.dx, b.dy, g_Biases.size());
         }
         else if (!cmd.empty())
         {
