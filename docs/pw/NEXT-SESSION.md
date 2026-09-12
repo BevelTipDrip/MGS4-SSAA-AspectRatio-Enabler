@@ -45,6 +45,16 @@ then `replay.ps1 -Route routes/to_mission.csv -SkipMs 15000 -StopMs 58000` lands
 Selector; `-StopMs 108000` lands in the mission. `census 2` goes into `live.txt`; the
 live-editing commands come from the private module. `bias_run.ps1` is one run end to end.
 
+## Release shape (user, 2026-09-13)
+
+The Lab tabs stay while features are built and tested. For the release the Peace Walker window
+gets the MGS4 layout with the Peace Walker options: Enable logging; Render resolution (the
+integer canvas scale); screen / window resolution and window mode; aspect ratio selection;
+MSAA; and every graphics option the game's own settings file offers (the persisted settings
+array the launcher and the display code read: window mode, position, size, monitor, windowed
+preset, and the rest once enumerated). The Release ASI reads those as normal settings; the
+research keys remain Lab-only.
+
 ## To do
 
 - **Write-through Map fallback for GPU-local frame textures** (investigation path, tabled
