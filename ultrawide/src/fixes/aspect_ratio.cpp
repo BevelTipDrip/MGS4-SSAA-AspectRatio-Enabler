@@ -3384,18 +3384,26 @@ namespace AspectRatio
         return b;
     }
 
+    // Tolerance: the engine floors the band's origin and size separately, so a scissor's
+    // far edge can sit up to two pixels off the exact band when the chain-to-window scale
+    // is fractional (a 16:10 2304x1440 window in a 3440x1440 chain: band x 294.7, width
+    // 1714.6, the engine's scissor (294,0)-(2008,1440), right edge 1.3 px short). At one
+    // pixel the viewport was widened and the scissor was not, and the widened picture was
+    // clipped to the band (AR-020, 2026-09-11).
+    constexpr float kBandTolerance = 2.0f;
+
     bool IsWindowBand(float x, float y, float w, float h)
     {
         const WindowBand b = CurrentWindowBand();
-        return b.valid && std::fabs(x - b.x) <= 1.0f && std::fabs(y - b.y) <= 1.0f
-            && std::fabs(w - b.w) <= 1.0f && std::fabs(h - b.h) <= 1.0f;
+        return b.valid && std::fabs(x - b.x) <= kBandTolerance && std::fabs(y - b.y) <= kBandTolerance
+            && std::fabs(w - b.w) <= kBandTolerance && std::fabs(h - b.h) <= kBandTolerance;
     }
 
     bool IsWindowBandScissor(const RECT& r)
     {
         const WindowBand b = CurrentWindowBand();
-        return b.valid && std::fabs(static_cast<float>(r.left) - b.x) <= 1.0f && std::fabs(static_cast<float>(r.top) - b.y) <= 1.0f
-            && std::fabs(static_cast<float>(r.right) - (b.x + b.w)) <= 1.0f && std::fabs(static_cast<float>(r.bottom) - (b.y + b.h)) <= 1.0f;
+        return b.valid && std::fabs(static_cast<float>(r.left) - b.x) <= kBandTolerance && std::fabs(static_cast<float>(r.top) - b.y) <= kBandTolerance
+            && std::fabs(static_cast<float>(r.right) - (b.x + b.w)) <= kBandTolerance && std::fabs(static_cast<float>(r.bottom) - (b.y + b.h)) <= kBandTolerance;
     }
 
     std::atomic<int> g_BandExpandReported { 0 };

@@ -603,3 +603,27 @@ the HUD for the window, and it was not the rule.
 Verified by the user, 2026-09-11, from two Lab captures at the native 3440x1440 desktop,
 DirectX 12 borderless, RTSS overlay on: "Use Game Setting" (16:9 render pillarboxed, 16:9
 HUD, no fit, no widening) and the 21:9 override (unchanged): "Yes, these are correct".
+
+## AR-020: a 16:10 override in a 21:9 chain kept the engine's band as black strips inside the picture (2026-09-11)
+
+User's report: on a 21:9 display with a 16:10 resolution selected, gameplay fills the height
+at 16:10 and menus keep 16:9 (both correct), "however, the 21:9 masks appear to be present,
+and covering up the sides of the screen". Reproduced at the native 3440x1440 desktop with
+the 16:10 override 2560x1600 (capped to 2304x1440), DirectX 12 borderless: in both the menu
+and gameplay captures only a centred 1714-px-wide strip of the 2304-px picture was visible,
+the HUD boxes and the menu text cut off at its edges.
+
+The D3D12 census names it. With the back buffer bound the engine sets viewport
+`(294,0 1714x1440)` and scissor `(294,0)-(2008,1440)`: its 16:9 band worked out from the
+3440x1440 chain, `(440,0 2560x1440)`, scaled into the 2304x1440 window by 0.66977. Our
+band for the same window is x 294.7, width 1714.6, right edge 2009.3. The engine floors
+origin and size separately, so its scissor's right edge is 1.3 px short of ours; at the
+1-px tolerance the viewport matched and was widened to the window, the scissor did not and
+stayed at the band, and the widened picture was clipped to it and then fitted to
+(862..2576) on the chain - exactly the visible strip. Every AR-015 case before this was a
+4:3 chain with an integer scale, so the two edges always agreed.
+
+Fix: `kBandTolerance` of 2 px on every edge in `IsWindowBand` and `IsWindowBandScissor`
+(both backends share them). Verified by the user from the menu and gameplay captures at the
+same configuration: "This looks correct." DirectX 11 has the same matchers and the same
+arithmetic, not run.
