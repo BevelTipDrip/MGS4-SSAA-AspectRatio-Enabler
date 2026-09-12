@@ -116,4 +116,81 @@ identity method would replace them.
 
 - The perspective builder. The UI ortho is measured (480x272 over the whole viewport); whether
   the HUD looks stretched at 21:9 awaits the user's read of the title capture, and whether
-  Afevis's HUD fixups alter the vertices or the ortho awaits a census with 
+  Afevis's HUD fixups alter the vertices or the ortho awaits a census with his ASI removed. 
+
+## Window, display mode and resolution plumbing (Measured, 2026-09-13, live `.text`/`.rdata`/`.data` dump at the title, Afevis's ASI loaded)
+
+Read from the decrypted dump with `pw\tools\sites2.py`, `refs.py` and `winres_scan.py`
+(import thunks resolved from the live hint/name table, since the on-disk import directory is
+inside the encrypted range). Addresses are module RVAs.
+
+**The display object** is one heap struct, pointer at `+15969D8`, and the whole window story
+is its fields:
+
+| Field | Meaning | Source |
+| --- | --- | --- |
+| `+0x2960` | window mode: 0 windowed, 1 fullscreen window on the monitor rect (frame stripped by `SetWindowLongA`), 2 borderless at the monitor's largest display mode **with an exclusive-fullscreen swap chain** | setting 3 |
+| `+0x2964` | previous mode | |
+| `+0x2968` | applied mode | setting 246 (`0xf6`) |
+| `+0x296c` | `-resolution` (0 Original, 1 FHD) | launcher argument |
+| `+0x2970` | `-upscale` slot 0..3 into the output table `+D8F1C8` (720p, 1080p, 1440p, 4K; clamped to at least `+0x296c`) | launcher argument, set at `+1A5E3` |
+| `+0x2974` | windowed preset index into `+10399E0` (0 = custom size) | setting 19 (`0x13`) |
+| `+0x2978` | monitor index (-1 auto) | setting 17 (`0x11`) |
+| `+0x2950/54` | window x, y | settings 4, 5 |
+| `+0x2958/5c` | window client width, height | settings 7, 8 |
+| `+0x2940/44` | picture width, height inside the window | computed at `+1A2B5` |
+| `+0x2948/4c` | picture x, y offset (pillarbox / letterbox) | computed at `+1A2B5` |
+| `+0x2988/90` | monitor list (0x60 bytes each: RECT, work RECT, a vector of display modes at +0x48/+0x50) | `EnumDisplayMonitors` at `+1A5D6`, callback `+1A3E0`, modes from `EnumDisplaySettingsA` at `+1A6DF` |
+| `+0x29a0` | `DXGI_SWAP_CHAIN_DESC`: width and height **0** (client size), 60/1, format 28, 1 sample, usage 0x20, 2 buffers, hwnd `+107BD50`, `Windowed = (mode != 2)`, effect FLIP_DISCARD (4) or DISCARD (0) in mode 2 | filled at `+18A58..+18B62` |
+| `+0x2938` | the swap chain | `CreateSwapChain` at `+19180` (factory slot 10), then `MakeWindowAssociation(flags 3)` at `+191DB` |
+
+**Settings are an int array** at `*(+10C58A0)`, loaded by `+84D60` (0x1128 bytes from a file
+found through `+9548D0`), read by `+84D50(id)` and written by `+85130(id, value)`; ids used by
+the window code: 3 mode, 4/5 position, 7/8 size, 17 monitor, 19 windowed preset, 246 applied
+mode. Window creation (`+773B5..+77561`) registers the class, reads 4, 5, 7, 8, calls
+`CreateWindowExA` with style `0xCF0000` (`WS_OVERLAPPEDWINDOW`) and then `SetWindowPos` with
+the client-area correction; `SetProcessDpiAwarenessContext(-4)` (per-monitor v2) at `+77319`.
+`GetWindowPlacement` at `+76633`/`+76677` only tests for the minimised state. The runtime mode
+switch handler `+17770` compares old and new mode against 2, calls `SetFullscreenState`
+(`+17811`, `+178A0`), releases and recreates the chain (`+178B3` -> `+19120`) or
+`ResizeBuffers` (`+178D3`), then persists mode and index through `+85130`.
+
+**The windowed size** (`+19DAB`): preset index 0 means the custom size from settings 7/8;
+otherwise the entry of `+10399E0` (five entries; the game itself writes the custom size into
+entry 0 at `+19E58`/`+18B93`, and `+1A6F0` validates the presets against the monitor's mode
+list), clamped to the monitor rect. `+1AA40` picks the largest preset that fits the monitor.
+
+**The picture fit** (`+1A2B5..+1A360`), run after every window sizing: takes the output table
+entry `+D8F1C8[+0x2970]` as the picture, compares window/picture width and height ratios, and
+stores the picture size in `+0x2940/44` and the centring offsets in `+0x2948/4c`, i.e. **the
+game letterboxes or pillarboxes the upscale-table aspect inside the window** (this is the
+Peace Walker equivalent of MGS4's 16:9 band). `+5C7A5` and `+548A6` read the same entry for
+the render targets, `+15A10` for the internal target and the "needs upscale pass" flag
+(`+0x3338 = (resolution != upscale)`).
+
+**What Afevis's patch does in these terms.** It overwrites all four output-table entries and
+four of the five windowed entries with one custom size, so the fit becomes the identity
+(picture = window, offsets 0) and the render targets equal the window; it never touches mode,
+monitor, position or the swap chain. Consequences he did not handle:
+
+- **Mode 2 is exclusive fullscreen** (`Windowed = FALSE`, DISCARD): a custom size the display
+  cannot present (6880x2880) is only safe in modes 0 and 1; his bigger-window supersampling
+  works because the chain is windowed and DWM scales it.
+- **The windowed preset chooser** (`+1AA40`, largest preset that fits the monitor) has nothing
+  that fits once the entries are 6880x2880, so it falls back to index 0 (custom), which is why
+  his ini size still applies; the launcher's windowed presets are gone.
+- **The picture fit is bypassed, not fixed**: at any aspect other than the custom size's the
+  game would still letterbox. A proper aspect feature hooks `+1A2B5` (or the readers of
+  `+0x2940..+0x294c`) the way our MGS4 band work fits the picture, and leaves the tables alone.
+- **Window mode, monitor and size overrides have a clean seam**: the settings getter
+  `+84D50` for ids 3, 4, 5, 7, 8, 17, 19 (the MGS4 `+65D880` loader wrap equivalent), or the
+  fields of the display object before `+18A46` runs. No byte pattern on a table is needed for
+  a Window Resolution or Window Mode feature.
+- **Refresh rate is fixed at 60/1** in the desc; the mode-2 path picks the largest mode by size
+  only (`+1A220` loop keeps max width/height, no refresh comparison).
+- The 16-bit `movsx` at the half-glare site is unrelated to window size (that is the HUD).
+
+Strings that looked relevant and are not: `"invalid window size"` is zlib's inflate error;
+`area_width`/`area_height` are PSP game-data keys; `[monitor_number]` is a Mother Base UI
+placeholder. The launcher vocabulary in `.rdata` is exactly `launcherpath, launcherroot,
+region, selfregion, ctrltype, invited, resolution, movie, upscale` (`+DA8AB0..+DA8B20`).
