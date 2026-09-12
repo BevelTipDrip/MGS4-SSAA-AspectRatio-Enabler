@@ -27,6 +27,28 @@ Nothing here is a fix; it is what the fixes will stand on.
   `Text`), `Text\*.txp`, `FONT\*.xpr`, `loading\*.txp`, `ms0\EU\DLC*`.
 - Launcher: Unity, `launcher\launcher.exe`, like MGS4's.
 
+## In-process (Measured, 2026-09-12, first Lab boot of MGSPWEnabler, probes on)
+
+- **DirectX 11.** Modules at init: `d3d11.dll`, `dxgi.dll`, `d3dcompiler_47.dll`, `winmm.dll`,
+  `steam_api64.dll`; the same set 20 seconds later at the title, with no `d3d12.dll` and no
+  `D3D12Core.dll`. The launcher's Agility runtime folder is the launcher's own. One run, on
+  this machine, with PatriotFix's launcher skip passing `-resolution 0 -upscale 0`; to be
+  confirmed once with the launcher's own start, but the disk image's "no d3d12 import" now
+  agrees with the process.
+- **`.text` is readable when the ASI initialises**: entropy 5.81 bits per byte at
+  `InitializeASI`, so the DRM has decrypted the code before the loader runs its plugins and
+  pattern scans can run immediately (the MGS4 build had to poll for its signatures).
+- **The command line the game received**: `-region eu -lan en -selfregion EU -resolution 0
+  -upscale 0 -movie 0 -launcherpath launcher.exe -ctrltype PS5 -launcherroot "<install>\launcher"`.
+  That was PatriotFix's launcher skip (its settings: Internal Resolution (PW) = Original,
+  Skip Launcher = true) starting the game directly; `-ctrltype PS5` is a value the PatriotFix
+  source does not list, so the launcher's own vocabulary is wider than KBD/XBOX/PS4.
+- **Load order is alphabetical**: at init `MGSPatriotFix.asi` was already loaded and
+  `MGSPWResolutionUnlocked.asi` was not (it was 20 s later). Anything of ours that must run
+  after Afevis's patch cannot rely on init order; ours runs before his.
+- Loader chain, root (`<install>`), log path (`logs\MGSPWEnabler_Game.log`), the lab marker
+  protocol and the settings file: all as designed, first try.
+
 ## How the launcher drives the game (Reported: MGSPatriotFix source, 2026-09-12)
 
 The launcher starts the exe with `-region <r> -lan <l> -selfregion EU -resolution <0|1>
