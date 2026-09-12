@@ -9,6 +9,7 @@
 
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
+#include "draw_census.hpp"
 #endif
 
 namespace mgspwe::config
@@ -93,6 +94,12 @@ namespace mgspwe::config
             Report(Graphics, "Log Loaded Modules", Probe::bLogLoadedModules);
             Report(Graphics, "Log Decrypt Timing", Probe::bLogDecryptTiming);
             Report(Graphics, "Log Command Line", Probe::bLogCommandLine);
+            Read(ini, Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
+            Read(ini, Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
+            Read(ini, Graphics, "Live Commands", DrawCensus::bLiveCommands);
+            Report(Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
+            Report(Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
+            Report(Graphics, "Live Commands", DrawCensus::bLiveCommands);
         }
 #endif
     }

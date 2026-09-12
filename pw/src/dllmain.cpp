@@ -8,6 +8,7 @@
 #include "version.hpp"
 
 #include "aspect_ratio.hpp"
+#include "draw_census.hpp"
 #include "probe.hpp"
 
 namespace
@@ -46,6 +47,7 @@ namespace
             if (mgspwe::config::LabMode())
             {
                 Probe::Run();
+                DrawCensus::Install();
             }
 #endif
 
