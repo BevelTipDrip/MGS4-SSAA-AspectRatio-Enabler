@@ -64,7 +64,9 @@ research keys remain Lab-only.
   persistent scratch per texture if the game expects to see previous contents.
 
 - **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through
-  Afevis's ini): the flare appears at random and its anchor lands off screen, as if a value
+  Afevis's ini; Afevis warned that bloom and lens flare break under his patch, 2026-09-13; not
+  yet checked under our integer scale, where the flare's anchors come from the game's own
+  path, so it may be his-patch-only: verify in a scene with the sun in view at scale 16): the flare appears at random and its anchor lands off screen, as if a value
   overflows. Lead: the half-glare site Afevis patches begins with a sign-extended 16-bit move,
   so the anchor is int16 somewhere before it becomes a float; a pixel-space step at render
   scale 10.59 could pass 32767. Plan: census on a hotkey (press when it misbehaves), probes on
