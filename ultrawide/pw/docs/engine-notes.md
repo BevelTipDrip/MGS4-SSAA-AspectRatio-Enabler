@@ -305,3 +305,33 @@ immediates size the resolved/post targets separately from the scene scale, so wi
 downscale draw in place of the resolve (scene 7680x4352 -> post 3840x2160) every post pass
 would run at 4K (÷4.3) and the final blit 1:1; the depth read by the depth-of-field passes
 must then be the scene depth sampled by UV, which needs checking in the shader bytecode.
+
+## The post chain, from its shaders (Measured, 2026-09-13, `Dump Shaders` + `pw\tools\disasm.py`)
+
+| pass (ps hash) | what the bytecode says | at 8K, MSAA off |
+| --- | --- | --- |
+| `6c27b4cf` (x2) | 3 instructions, no texture: a full-target fill of the 128-bit float buffer | 1.0-1.7 ms each |
+| `2752864a` | `Texture2DMS(4)` float, 4 `ldms` + `resinfo`: the game's own colour resolve into the HDR target | 0.9-1.1 |
+| `baa9f4b4` | `Texture2DMS(4)` uint, 4 `ldms`: the stencil/depth resolve into a uint texture | 0.4-0.6 |
+| `fcb43266` | 3 samplers, one channel from each of t0/t1/t2 with swizzles: colour grading | 0.8-1.1 |
+| `493494fd` | one sample + constants: fade / colour multiply | 0.1 (5 ms in one DoF frame) |
+| `7023c633` | samples colour and `textureMapMSAAStencil`, `ld` of the uint stencil by `resinfo`-derived pixel coordinates: the blur / depth-of-field composite | 0.3 (many small draws) |
+| `4c3c9a5f` | one bilinear sample: the final blit | 0.6-1.3 |
+
+So the chain is built around the multisampled scene: two of its passes are the game's own
+resolves reading the scene as a 4-sample texture. With `Disable MSAA` they read a
+single-sample texture through a 4-sample declaration (undefined by the spec; the picture
+has looked right so far, but the stencil-driven effects need a visual check). The resolves
+and the composite index the scene by its own size (`resinfo`), so they are not size-agnostic:
+running the post chain at a smaller size (`Internal Size` below the scene) rendered a correct
+picture but cost more at the title (6.85 vs 4.12 ms: the fills stayed full-size in their
+target and my downscale added a pass) and is not a win without rewriting those passes.
+
+**Gameplay at 8K from the title marker** (`bias_run.ps1 -WaitForTitle`; MSAA off, GPU-local):
+mean 10.4 ms GPU per frame in the aiming window, 30 fps under vsync (the Lab's own per-draw
+hooks add CPU time; the frame misses 16.7 ms and halves). The resolve/copy interval (2.7 ms)
+is the drain before it, not the copy.
+
+**Standing recommendation for a shipping supersample**: integer render scale; MSAA off above
+the game's own scales (6 ms at 8K); GPU-local frame textures (1.3 ms, pending a check that
+nothing maps them in menus); leave the post chain at scene size.
