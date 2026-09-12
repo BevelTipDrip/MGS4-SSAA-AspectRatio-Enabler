@@ -126,10 +126,8 @@ namespace
         return d.ByteWidth;
     }
 
-    // The UI vertex layout seen at the title (2026-09-12): 24 bytes textured (u, v float; rgba8;
-    // x, y, z float) or 16 bytes untextured (rgba8; x, y, z float), on a centred 480x272 canvas.
-    // Decodes the bounding rectangle of the positions, assuming the position is the last 12 bytes
-    // of each vertex, for the first few vertices of the upload.
+    // Decodes the bounding rectangle of the positions of an upload, taking the position as the
+    // last three floats of each vertex, for the first few vertices.
     std::string DecodeVertices(const void* data, size_t size, size_t stride)
     {
         if (stride < 12 || size < stride) { return "?"; }

@@ -74,10 +74,9 @@ call (`Draw`, `DrawIndexed`, ...), primitive count and topology, viewport and sc
 render target (size, format, object), the bound texture (size, format, object), the vertex and
 pixel shader by bytecode hash, the vertex-shader constant buffers (slot, size, the latest
 upload's floats, slot 0 in full), the game-code callers (a stack walk kept to frames in the
-game image) and, when a vertex upload preceded the draw on that context, its size, the decoded
-canvas rectangle and colour, and its own callers. The first draws of a census frame also carry
-the **call order** on their context (`VSSetShader > PSSetShader > VSSetCB > SRV0 > Unmap cb >
-Unmap vb > Draw`), which is what told us where an edit can be applied.
+game image) and, when a vertex upload preceded the draw on that context, its size, decoded
+head and callers. The first draws of a census frame also carry the call order of the
+context methods before them.
 
 Shader identity is a hash of the bytecode at `CreateVertexShader` / `CreatePixelShader`.
 Texture and target objects change address every boot; sizes and formats do not, so tables
@@ -85,9 +84,8 @@ key on those.
 
 ## 4. Reading a census
 
-`scratchpad\census_table.py <log> <frame>` prints one frame as an element table: the UI draws
-(those whose constant buffer starts with the 480x272 ortho) in order with texture, world
-translation and rectangle, then the non-UI draws grouped by target, texture and shaders.
+`census_table.py <log> <frame>` (private module, `pw\tools`) prints one frame as an element
+table; what the columns mean is described there.
 
 Two rules:
 

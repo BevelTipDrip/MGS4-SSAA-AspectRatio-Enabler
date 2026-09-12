@@ -35,41 +35,15 @@ Afevis's tool is the map of the resolution plumbing (28 pattern hooks: preset ta
 render-target creation and getters, render scale, FOV and culling FOV, a dozen HUD element
 fixups); the launcher drives the game with `-resolution 0|1 -upscale 0..3 -movie 0|1`.
 
-## Where the UI work stands (2026-09-12)
+## Where the UI work stands (2026-09-13)
 
-The Lab draw census works on Peace Walker's deferred-context renderer (see "The frame at
-the title" in `engine-research.md`): 30 draws a frame at the title, all quads in a centred
-480x272 canvas drawn straight into the output-sized back buffer through one native site; the
-native stack is the same for every quad (a display-list interpreter), so element identity is
-texture plus canvas rectangle. Next: the user records the route from the title to the menu
-after it (`C:\mgspf_tools\pw\keylog.ps1`), the census runs on that menu (`census 2` in
-`C:\mgspf_tools\pw\live.txt` while `Live Commands` is on), and the element table for it is
-built the same way.
-
-## Route and harness (2026-09-12)
-
-`C:\mgspf_tools\pw
-outes	o_mission.csv` is the user's recorded route from the title into
-the first mission (key downs at 34.6 s Enter through 84.1 s Enter, gameplay from ~105 s), for
-`replay.ps1`. `keylog.ps1` now stamps its absolute start, flushes every second and stops when
-the game exits. `census_ticker.ps1` writes `census 2` into `live.txt` every 15 s while the game
-runs; a one-frame census is useless because the deferred recording straddles Present (the
-first censused frame ends with 0 or 1 draws, the second carries the picture), so every
-census is two frames. `scratchpad\census_table.py <log> <frame>` prints a frame's element
-table (UI draws with texture, world translation and canvas rectangle; non-UI groups).
-
-## Live editing (2026-09-12)
-
-Tracing and live editing both work; the lab is described in `lab.md`, the method and the
-register in the private module. Route replay: `boot.ps1 -Deploy -LabConfig -KeepOpen -WaitSeconds 1`,
-then `replay.ps1 -Route routes	o_mission.csv -StopMs 58000` lands on the Mission Selector;
-without `-StopMs` it enters the first mission. `census 2` and `bias ...` go into `live.txt`.
-
-`bias_run.ps1 -OutDir <dir> -StopMs 108000 -Commands '<live command>',...` is one
-in-game live-editing run end to end (boot, replay, before capture, commands, census, after
-capture, close, log copy). The HUD groups and their biases are in the private module
-(`external\ultrawide\pw\docs\ui-elements.md`); the lab itself is `lab.md`. The mission has a timer; on expiry the mission
-fails and can be restarted without returning to the menu (user note; not yet in the route).
+The Lab draw census works on Peace Walker's deferred-context renderer (`lab.md`). The UI
+method, the element tables and the live-editing biases are in the private module
+(`external/ultrawide/pw/docs/`); the mission HUD groups were moved to the 21:9 edges and the
+user confirmed the result. Route replay: `boot.ps1 -Deploy -LabConfig -KeepOpen -WaitSeconds 1`,
+then `replay.ps1 -Route routes/to_mission.csv -SkipMs 15000 -StopMs 58000` lands on the Mission
+Selector; `-StopMs 108000` lands in the mission. `census 2` goes into `live.txt`; the
+live-editing commands come from the private module. `bias_run.ps1` is one run end to end.
 
 ## To do
 
@@ -82,9 +56,7 @@ fails and can be restarted without returning to the menu (user note; not yet in 
   3440x1440 against 6880x2880.
 - Record the title-to-menu route; census that menu; then the (texture, rectangle) bias
   command for live editing.
-- A title census with Afevis's ASI removed from `mgspw\scripts` (does his HUD fixup change the
-  ortho or the vertices?). His ini currently reads 6880x2880 while the swap chain and targets
-  were 3440x1440; not touched, to be asked about.
+- A title census with Afevis's ASI removed from `mgspw\scripts` (what of the picture is his).
 - Phase 0, in order (the device, swap chain and UI-space items are answered).
 - `build\package.ps1` stages the Peace Walker files into the combined zip (done in code, not
   run: the user says when to package).
