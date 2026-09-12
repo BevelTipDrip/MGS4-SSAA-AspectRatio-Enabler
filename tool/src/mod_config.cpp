@@ -162,7 +162,7 @@ namespace mgs4e::tool::modconfig
     //
     // Only keys with a block are ever written. Mistakes are collected in `problems` and shown
     // on the tab, and the row concerned is left out; the tab itself still appears.
-    std::shared_ptr<Mod> LoadManifest(const std::filesystem::path& manifest)
+    std::shared_ptr<Mod> LoadManifest(const std::filesystem::path& manifest, std::string_view suffix)
     {
         std::ifstream in(manifest, std::ios::binary);
         if (!in)
@@ -195,7 +195,7 @@ namespace mgs4e::tool::modconfig
         const std::string name = text("Mod", "Name");
         const std::string iniName = text("Mod", "Ini");
         const std::string fallback = manifest.filename().string();
-        mod->name = Keep(*mod, name.empty() ? fallback.substr(0, fallback.size() - std::string(kManifestSuffix).size()) : name);
+        mod->name = Keep(*mod, name.empty() ? fallback.substr(0, fallback.size() - suffix.size()) : name);
         if (name.empty())
         {
             mod->problems.push_back("[Mod] has no Name; the tab is titled after the manifest instead.");
@@ -365,15 +365,16 @@ namespace mgs4e::tool::modconfig
 
     std::vector<Found> Detect(const std::filesystem::path& gameRoot)
     {
-        // Where the mod's own loader logic looks, relative to mgs4.exe (MGS4\): the exe's folder
-        // and its plugins, scripts and update subfolders. The same names under the install
-        // folder are checked too, because that is where a zip extracted one level too high
-        // lands; those copies are reported but flagged as not loadable.
-        struct Place { const char* dir; bool loadable; };
-        static const Place places[] = {
-            { "MGS4", true }, { "MGS4\\scripts", true }, { "MGS4\\plugins", true }, { "MGS4\\update", true },
-            { ".", false }, { "scripts", false }, { "plugins", false }, { "update", false },
-        };
+        return Detect(gameRoot, kManifestSuffix, mgs4e::manifests::kPlaces);
+    }
+
+    std::vector<Found> Detect(const std::filesystem::path& gameRoot, std::string_view suffix, std::span<const mgs4e::manifests::Place> places)
+    {
+        // Where the game's loader looks, relative to the install folder: the exe's folder and
+        // its plugins, scripts and update subfolders. The same names under the install folder
+        // are checked too, because that is where a zip extracted one level too high lands;
+        // those copies are reported but flagged as not loadable.
+        using Place = mgs4e::manifests::Place;
 
         std::vector<Found> found;
         std::error_code ec;
@@ -391,7 +392,7 @@ namespace mgs4e::tool::modconfig
             std::vector<std::filesystem::path> manifests;
             for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
             {
-                if (entry.is_regular_file(ec) && EndsWithNoCase(entry.path().filename().string(), kManifestSuffix))
+                if (entry.is_regular_file(ec) && EndsWithNoCase(entry.path().filename().string(), std::string(suffix).c_str()))
                 {
                     manifests.push_back(entry.path());
                 }
@@ -399,7 +400,7 @@ namespace mgs4e::tool::modconfig
             std::sort(manifests.begin(), manifests.end());
             for (const std::filesystem::path& manifest : manifests)
             {
-                std::shared_ptr<Mod> mod = LoadManifest(manifest);
+                std::shared_ptr<Mod> mod = LoadManifest(manifest, suffix);
                 if (!mod)
                 {
                     continue;

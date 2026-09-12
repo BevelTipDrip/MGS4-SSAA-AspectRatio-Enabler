@@ -3,7 +3,6 @@
 
 #include "fields.hpp"
 #include "ini.hpp"
-#include "settings_keys.hpp"
 #include "version.hpp"
 
 namespace mgs4e::tool
@@ -30,9 +29,9 @@ namespace mgs4e::tool
         }
     }
 
-    std::filesystem::path Settings::FileFor(const std::filesystem::path& gameRoot)
+    std::filesystem::path Settings::FileFor(const Game& game, const std::filesystem::path& gameRoot)
     {
-        return gameRoot / (MGS4E_NAME ".settings");
+        return gameRoot / (std::string(game.name) + ".settings");
     }
 
     bool Settings::Load(const std::filesystem::path& file)
@@ -42,21 +41,10 @@ namespace mgs4e::tool
         const bool exists = ini.Load(file);
         m_Values = ini.Sections();
 
-        // The setting's first shape was a plain on/off; carry its meaning into the choice.
-        auto& graphics = m_Values[mgs4e::keys::Graphics];
-        if (!graphics.contains(mgs4e::keys::UltrawideHud))
+        if (m_Game->migrateLoaded)
         {
-            const auto legacy = graphics.find(mgs4e::keys::UltrawideHudFix);
-            if (legacy != graphics.end())
-            {
-                const auto on = mgs4e::Ini::Convert<bool>(legacy->second);
-                graphics[mgs4e::keys::UltrawideHud] = (on && *on) ? mgs4e::keys::UltrawideHud_Expanded : mgs4e::keys::UltrawideHud_Stretched;
-                graphics.erase(legacy);
-            }
+            m_Game->migrateLoaded(m_Values);
         }
-
-        // Withdrawn in 0.0.6 (see settings_keys.hpp); not carried through a save.
-        graphics.erase(mgs4e::keys::ShadowSampleCount_Retired);
 
         ValidateKnown();
         m_Loaded = m_Values;
@@ -65,7 +53,7 @@ namespace mgs4e::tool
 
     void Settings::ValidateKnown()
     {
-        for (const Field* f : AllFields())
+        for (const Field* f : m_Game->allFields())
         {
             auto& section = m_Values[f->section];
             const auto it = section.find(f->key);
@@ -82,7 +70,7 @@ namespace mgs4e::tool
 
     void Settings::ResetToDefaults()
     {
-        for (const Field* f : AllFields())
+        for (const Field* f : m_Game->allFields())
         {
             m_Values[f->section][f->key] = f->DefaultText();
         }
@@ -97,18 +85,7 @@ namespace mgs4e::tool
         }
 
         int imported = 0;
-
-        // The legacy on/off, only when the choice itself is not there.
-        if (!other.Has(mgs4e::keys::Graphics, mgs4e::keys::UltrawideHud))
-        {
-            if (const auto on = other.Get<bool>(mgs4e::keys::Graphics, mgs4e::keys::UltrawideHudFix))
-            {
-                m_Values[mgs4e::keys::Graphics][mgs4e::keys::UltrawideHud] = *on ? mgs4e::keys::UltrawideHud_Expanded : mgs4e::keys::UltrawideHud_Stretched;
-                ++imported;
-            }
-        }
-
-        for (const Field* f : AllFields())
+        for (const Field* f : m_Game->allFields())
         {
             const auto raw = other.Raw(f->section, f->key);
             if (!raw)
@@ -123,15 +100,9 @@ namespace mgs4e::tool
             m_Values[f->section][f->key] = Canonical(*f, text);
             ++imported;
         }
-
-        // The two undocumented graphics keys travel too, so a tuned setup keeps working.
-        for (const char* key : { mgs4e::keys::FixReticleTruncation, mgs4e::keys::MaxInternalBufferWidth })
+        if (m_Game->importExtras)
         {
-            if (const auto raw = other.Raw(mgs4e::keys::Graphics, key))
-            {
-                m_Values[mgs4e::keys::Graphics][key] = std::string(mgs4e::Ini::Trim(*raw));
-                ++imported;
-            }
+            imported += m_Game->importExtras(other, m_Values);
         }
         return imported;
     }
@@ -139,8 +110,8 @@ namespace mgs4e::tool
     std::optional<std::string> Settings::Save(const std::filesystem::path& file) const
     {
         std::string out;
-        out += "; " MGS4E_DISPLAY_NAME " " MGS4E_VERSION_STRING " settings. Edit with \"" MGS4E_DISPLAY_NAME ".exe\" or by hand;\n";
-        out += "; unknown keys are kept. Read by " MGS4E_NAME ".asi when the game starts.\n";
+        out += "; " + std::string(m_Game->displayName) + " " MGS4E_VERSION_STRING " settings. Edit with \"" + m_Game->displayName + ".exe\" or by hand;\n";
+        out += "; unknown keys are kept. Read by " + std::string(m_Game->name) + ".asi when the game starts.\n";
 
         // Known sections first, in table order, each with its known keys in table order and
         // then whatever else the section held.
@@ -171,7 +142,7 @@ namespace mgs4e::tool
 
         std::vector<std::string> order;
         std::map<std::string, std::vector<const Field*>> bySection;
-        for (const Field* f : AllFields())
+        for (const Field* f : m_Game->allFields())
         {
             if (!bySection.contains(f->section))
             {

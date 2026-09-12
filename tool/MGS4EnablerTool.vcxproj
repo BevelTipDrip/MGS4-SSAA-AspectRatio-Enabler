@@ -60,6 +60,8 @@
     <ClCompile Include="src\ui.cpp" />
     <ClCompile Include="src\compat.cpp" />
     <ClCompile Include="src\mod_config.cpp" />
+    <ClCompile Include="src\games.cpp" />
+    <ClCompile Include="src\pw\pw_fields.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\pch.hpp" />
@@ -69,6 +71,12 @@
     <ClInclude Include="src\ui.hpp" />
     <ClInclude Include="src\compat.hpp" />
     <ClInclude Include="src\mod_config.hpp" />
+    <ClInclude Include="src\games.hpp" />
+    <ClInclude Include="..\shared\pw\identity.hpp" />
+    <ClInclude Include="..\shared\pw\settings_keys.hpp" />
+    <ClInclude Include="..\shared\pw\features.hpp" />
+    <ClInclude Include="..\shared\pw\compat_table.hpp" />
+    <ClInclude Include="..\shared\pw\manifest_places.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
     <ClInclude Include="..\shared\compat_table.hpp" />
     <ClInclude Include="..\shared\features.hpp" />

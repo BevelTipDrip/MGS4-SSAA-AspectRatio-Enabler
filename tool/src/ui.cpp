@@ -2,17 +2,13 @@
 #include "ui.hpp"
 
 #include "compat.hpp"
-#include "compat_table.hpp"
 #include "features.hpp"
+#include "games.hpp"
 #include "ini.hpp"
 #include "settings_keys.hpp"
 #include "version.hpp"
 
 #include <shellapi.h>
-
-#define MGS4E_WIDEN_(x) L##x
-#define MGS4E_WIDEN(x) MGS4E_WIDEN_(x)
-#define MGS4E_STEAM_APP_ID_W MGS4E_WIDEN(MGS4E_STEAM_APP_ID)
 
 namespace mgs4e::tool
 {
@@ -78,12 +74,13 @@ namespace mgs4e::tool
         }
     }
 
-    MainFrame::MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab)
-        : wxFrame(nullptr, wxID_ANY, wxString::Format("%s %s", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING),
+    MainFrame::MainFrame(const Game& game, const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab)
+        : wxFrame(nullptr, wxID_ANY, wxString::Format("%s %s", game.displayName, MGS4E_VERSION_STRING),
                   wxDefaultPosition, wxDefaultSize,
                   wxDEFAULT_FRAME_STYLE & ~(wxRESIZE_BORDER | wxMAXIMIZE_BOX))
+        , m_Game(&game)
         , m_GameRoot(gameRoot)
-        , m_File(Settings::FileFor(gameRoot))
+        , m_File(Settings::FileFor(game, gameRoot))
         , m_Settings(std::move(settings))
     {
         SetIcons(wxIconBundle("IDI_ICON1", wxGetInstance()));
@@ -100,10 +97,22 @@ namespace mgs4e::tool
         wxPanel* strip = new wxPanel(root);
         strip->SetBackgroundColour(kBannerGround);
         wxBoxSizer* stripSizer = new wxBoxSizer(wxVERTICAL);
+        // The banner art is MGS4's; the other games get a text header on the same strip until
+        // they have art of their own.
         wxBitmap banner = wxBITMAP_PNG(banner);
-        if (banner.IsOk())
+        if (std::string_view(game.id) == "MGS4" && banner.IsOk())
         {
             stripSizer->Add(new wxStaticBitmap(strip, wxID_ANY, banner), 0);
+        }
+        else
+        {
+            wxStaticText* head = new wxStaticText(strip, wxID_ANY, wxString(game.displayName).Upper());
+            head->SetFont(head->GetFont().Scaled(1.8f).Bold());
+            head->SetForegroundColour(wxColour(232, 226, 210));
+            wxStaticText* sub = new wxStaticText(strip, wxID_ANY, game.aboutSubtitle);
+            sub->SetForegroundColour(wxColour(170, 164, 150));
+            stripSizer->Add(head, 0, wxLEFT | wxTOP, FromDIP(24));
+            stripSizer->Add(sub, 0, wxLEFT | wxBOTTOM, FromDIP(24));
         }
         wxPanel* rule = new wxPanel(strip, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(3)));
         rule->SetBackgroundColour(kBannerRule);
@@ -113,13 +122,13 @@ namespace mgs4e::tool
 
         // Pages.
         wxNotebook* book = new wxNotebook(root, wxID_ANY);
-        for (const Page& page : Pages())
+        for (const Page& page : m_Game->pages())
         {
             if (std::string_view(page.title) == "Troubleshooting")
             {
                 // Other mods' config files get a tab each, ahead of Troubleshooting. Only the
                 // files that exist: no mod, no tab.
-                for (const modconfig::Found& found : modconfig::Detect(m_GameRoot))
+                for (const modconfig::Found& found : modconfig::Detect(m_GameRoot, m_Game->manifestSuffix, m_Game->places))
                 {
                     auto mod = std::make_unique<ModPage>();
                     mod->found = found;
@@ -198,7 +207,7 @@ namespace mgs4e::tool
             wxString names;
             for (const compat::Status* s : installed)
             {
-                names += (names.empty() ? "" : ", ") + wxString(mgs4e::compat::kMods[s->mod].name);
+                names += (names.empty() ? "" : ", ") + wxString(s->name);
             }
             wxStaticText* note = new wxStaticText(panel, wxID_ANY,
                 wxString::Format("Mod compatibility: %s is installed. Where both mods change the same thing, the other "
@@ -246,16 +255,7 @@ namespace mgs4e::tool
         }
 
         wxStaticText* steps = new wxStaticText(panel, wxID_ANY,
-            wxString::Format(
-                "To capture a log for a bug report: tick Debug Logging, save, launch the game from Steam and "
-                "reproduce the problem, then quit and attach logs\\%s_Game.log from the game's install folder. "
-                "The log is rewritten on every launch, so copy it before starting the game again.\n"
-                "\n"
-                "For a HUD element in the wrong place on an ultrawide or 4:3 screen, press F11 in-game while it is on "
-                "screen; a record of every HUD element being drawn at that moment goes into the log. Take a screenshot "
-                "at the same time (Steam's F12) and attach both.\n"
-                "\n"
-                "Report problems at %s.", MGS4E_NAME, MGS4E_REPO_URL));
+            wxString::Format(m_Game->troubleshootingText, m_Game->name, m_Game->repoUrl));
         steps->Wrap(FromDIP(620));
         outer->Add(steps, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
 
@@ -305,12 +305,7 @@ namespace mgs4e::tool
         if (!page.found.loadable)
         {
             const wxString files = *mod.asiFile ? wxString::Format("%s and %s", mod.asiFile, mod.fileName) : wxString(mod.fileName);
-            wxStaticText* warn = new wxStaticText(panel, wxID_ANY,
-                wxString::Format("This copy of %s is not where the game loads mods from, so it is not running. mgs4.exe is in the "
-                                 "MGS4 folder and its loader only picks up .asi files in MGS4 and MGS4\\scripts. Move %s "
-                                 "into MGS4\\scripts; MGS4\\winmm.dll is already the loader, and a wininet.dll in the install "
-                                 "folder does nothing there.",
-                                 mod.name, files));
+            wxStaticText* warn = new wxStaticText(panel, wxID_ANY, wxString::Format(m_Game->loaderNote, mod.name, files));
             warn->Wrap(FromDIP(620));
             warn->SetForegroundColour(wxColour(214, 128, 44));
             outer->Add(warn, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
@@ -393,34 +388,22 @@ namespace mgs4e::tool
             head->Add(new wxStaticBitmap(panel, wxID_ANY, wxBitmap(mark)), 0, wxRIGHT, FromDIP(12));
         }
         wxBoxSizer* titles = new wxBoxSizer(wxVERTICAL);
-        wxStaticText* title = new wxStaticText(panel, wxID_ANY, wxString::Format("%s %s", MGS4E_DISPLAY_NAME, MGS4E_VERSION_STRING));
+        wxStaticText* title = new wxStaticText(panel, wxID_ANY, wxString::Format("%s %s", m_Game->displayName, MGS4E_VERSION_STRING));
         title->SetFont(title->GetFont().Scaled(1.5f).Bold());
         titles->Add(title, 0, wxBOTTOM, FromDIP(2));
-        titles->Add(new wxStaticText(panel, wxID_ANY, "Graphics settings for METAL GEAR SOLID 4 (Master Collection)"), 0);
+        titles->Add(new wxStaticText(panel, wxID_ANY, m_Game->aboutSubtitle), 0);
         head->Add(titles, 0, wxALIGN_CENTER_VERTICAL);
         outer->Add(head, 0, wxALL, FromDIP(12));
 
-        wxStaticText* body = new wxStaticText(panel, wxID_ANY,
-            wxString::Format(
-                "%s.asi patches the game as it starts: internal resolution scaling, sharper shadows, anisotropic "
-                "filtering, FXAA control, and an undistorted HUD on ultrawide and 4:3 displays. This tool writes the "
-                "settings it reads.\n"
-                "\n"
-                "It shares the game with other mods. Where another mod it knows about changes the same thing as one of "
-                "these settings, that mod's setting takes precedence and this tool says so. MGSPatriotFix is recognised "
-                "today; support for more mods will be added.\n"
-                "\n"
-                "Nothing here phones home. There is no updater and no telemetry. The files touched are %s.settings, "
-                "the log, and another mod's config file when you change it on that mod's tab.",
-                MGS4E_NAME, MGS4E_NAME));
+        wxStaticText* body = new wxStaticText(panel, wxID_ANY, wxString::Format(m_Game->aboutBody, m_Game->name, m_Game->name));
         body->Wrap(FromDIP(620));
         outer->Add(body, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
-        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, MGS4E_REPO_URL, MGS4E_REPO_URL), 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+        outer->Add(new wxHyperlinkCtrl(panel, wxID_ANY, m_Game->repoUrl, m_Game->repoUrl), 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
         wxStaticText* credits = new wxStaticText(panel, wxID_ANY,
-            "Built with safetyhook, Zydis, spdlog and wxWidgets. ASI loading by ThirteenAG's Ultimate ASI Loader.\n"
-            MGS4E_COPYRIGHT " " MGS4E_LICENSE_NOTE);
+            wxString("Built with safetyhook, Zydis, spdlog and wxWidgets. ASI loading by ThirteenAG's Ultimate ASI Loader.\n"
+                     MGS4E_COPYRIGHT " ") + m_Game->licenseNote);
         credits->Wrap(FromDIP(620));
         outer->Add(credits, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
 
@@ -496,7 +479,7 @@ namespace mgs4e::tool
             return true;
         }
         const std::string value = ParentValue(field);
-        const Field* parent = FindField(field.section, field.parentKey);
+        const Field* parent = m_Game->findField(field.section, field.parentKey);
         const std::string normalised = (parent && parent->type == Field::Type::Bool) ? (IsTrue(value) ? "true" : "false") : value;
         return std::find_if(field.parentValues.begin(), field.parentValues.end(),
                             [&](const char* v) { return normalised == v; }) != field.parentValues.end();
@@ -537,7 +520,7 @@ namespace mgs4e::tool
         {
             tip = wxString::Format("%s is installed and sets this itself (%s = %s). %s ignores the value here while that is so; "
                                    "change it in %s's own settings.\n\n",
-                                   row.override->modName, row.override->theirKey, row.override->value, MGS4E_DISPLAY_NAME,
+                                   row.override->modName, row.override->theirKey, row.override->value, m_Game->displayName,
                                    row.override->modName) + tip;
         }
         return tip;
@@ -761,11 +744,11 @@ namespace mgs4e::tool
         {
             const Field* f = ActiveField(row);
             if (!f) { continue; }
-            const mgs4e::features::Ours* ours = mgs4e::features::OurClaim(f->section, f->key);
+            const mgs4e::features::Ours* ours = m_Game->OurClaim(f->section, f->key);
             if (!ours) { continue; }
             const std::string value = m_Settings.Get(f->section, f->key);
             if (mgs4e::features::IsOff(value, ours->off)) { continue; }
-            owners.push_back(Owner{ ours->feature, MGS4E_DISPLAY_NAME, f->key, value, false, &row, nullptr, nullptr });
+            owners.push_back(Owner{ ours->feature, m_Game->displayName, f->key, value, false, &row, nullptr, nullptr });
         }
         for (auto& page : m_ModPages)
         {
@@ -792,7 +775,7 @@ namespace mgs4e::tool
         {
             wxString note;
             const Field* f = ActiveField(row);
-            const mgs4e::features::Ours* ours = f ? mgs4e::features::OurClaim(f->section, f->key) : nullptr;
+            const mgs4e::features::Ours* ours = f ? m_Game->OurClaim(f->section, f->key) : nullptr;
             if (ours)
             {
                 for (const Owner& o : owners)
@@ -839,7 +822,7 @@ namespace mgs4e::tool
         if (owner.row)
         {
             const Field* f = ActiveField(*owner.row);
-            const mgs4e::features::Ours* ours = f ? mgs4e::features::OurClaim(f->section, f->key) : nullptr;
+            const mgs4e::features::Ours* ours = f ? m_Game->OurClaim(f->section, f->key) : nullptr;
             if (f && ours)
             {
                 m_Settings.Set(f->section, f->key, ours->off);
@@ -974,15 +957,15 @@ namespace mgs4e::tool
         {
             return;
         }
-        const wchar_t* const url = L"steam://rungameid/" MGS4E_STEAM_APP_ID_W;
-        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL));
+        const std::wstring url = std::wstring(L"steam://rungameid/") + m_Game->steamAppId;
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32)
         {
             wxMessageBox(wxString::Format("Steam did not take the launch request (%s). Is Steam installed and running?", url),
                          "Could not launch", wxOK | wxICON_ERROR, this);
             return;
         }
-        SetStatus("Launching METAL GEAR SOLID 4 through Steam.");
+        SetStatus(wxString::Format("Launching %s through Steam.", m_Game->gameTitle));
     }
 
     void MainFrame::OnExit(wxCommandEvent&)
@@ -995,7 +978,7 @@ namespace mgs4e::tool
         ReadControls();
         if (event.CanVeto() && Dirty())
         {
-            const int answer = wxMessageBox("Save your changes before closing?", MGS4E_DISPLAY_NAME,
+            const int answer = wxMessageBox("Save your changes before closing?", m_Game->displayName,
                                             wxYES_NO | wxCANCEL | wxICON_QUESTION, this);
             if (answer == wxCANCEL)
             {

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "fields.hpp"
+#include "manifest_claims.hpp"
 
 #include <deque>
+#include <span>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -69,7 +71,7 @@ namespace mgs4e::tool::modconfig
     // Reads one manifest. Returns nothing only when the file cannot be read or has no [Mod]
     // block at all; a manifest with mistakes still yields a Mod, with the mistakes listed in
     // `problems` and the bad keys left out, so the author gets told rather than ignored.
-    std::shared_ptr<Mod> LoadManifest(const std::filesystem::path& manifest);
+    std::shared_ptr<Mod> LoadManifest(const std::filesystem::path& manifest, std::string_view suffix = kManifestSuffix);
 
     // A config file that was found. `loadable` says whether the game will actually load the
     // mod from where it sits: mgs4.exe lives in MGS4\ and its ASI loader scans MGS4\ and the
@@ -91,6 +93,8 @@ namespace mgs4e::tool::modconfig
     // MGS4\scripts). `loadable` is judged by the .asi the manifest names - present in any
     // folder the game's loader scans - and is true when it names none, since there is then
     // nothing to judge. Table entries keep the old rule: ini and asi beside each other.
+    std::vector<Found> Detect(const std::filesystem::path& gameRoot, std::string_view suffix, std::span<const mgs4e::manifests::Place> places);
+    // The MGS4 layout: mgs4.exe in MGS4\, manifests named *.MGS4Enabler.ini.
     std::vector<Found> Detect(const std::filesystem::path& gameRoot);
 
     // An editable copy of one file. Values are read with the shared INI parser; Save() puts

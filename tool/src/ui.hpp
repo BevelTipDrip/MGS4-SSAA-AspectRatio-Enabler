@@ -2,6 +2,7 @@
 
 #include "compat.hpp"
 #include "fields.hpp"
+#include "games.hpp"
 #include "mod_config.hpp"
 #include "settings_io.hpp"
 
@@ -15,7 +16,7 @@ namespace mgs4e::tool
     class MainFrame : public wxFrame
     {
     public:
-        MainFrame(const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab);
+        MainFrame(const Game& game, const std::filesystem::path& gameRoot, Settings settings, std::string openingNote, std::string openTab);
 
     private:
         // One line of a group: a label and a control. A "switched" row carries several
@@ -71,7 +72,7 @@ namespace mgs4e::tool
         struct Owner
         {
             std::string feature;
-            std::string modName;    // MGS4E_DISPLAY_NAME for ours
+            std::string modName;    // the game's displayName for ours
             std::string label;      // the row's label
             std::string value;
             bool alwaysOn = false;
@@ -93,6 +94,7 @@ namespace mgs4e::tool
 
         void SetStatus(const wxString& text);
 
+        const Game* m_Game = nullptr;
         std::filesystem::path m_GameRoot;
         std::filesystem::path m_File;
         Settings m_Settings;

@@ -1,23 +1,28 @@
 #pragma once
 
+#include "games.hpp"
+
 #include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
-// MGS4Enabler.settings: the values the tool edits plus anything else found in the file.
+// <name>.settings for one game: the values the tool edits plus anything else found in the file.
 //
-// Keys the tool knows are validated against their field on load and reset to the default
-// when malformed. Keys it does not know (the undocumented ones, lab keys, a user's own
-// notes in unknown sections) are carried through a save untouched, so hand edits survive.
+// Keys the tool knows (the game's field table) are validated against their field on load and
+// reset to the default when malformed. Keys it does not know (the undocumented ones, lab
+// keys, a user's own notes in unknown sections) are carried through a save untouched, so hand
+// edits survive.
 namespace mgs4e::tool
 {
     class Settings
     {
     public:
+        explicit Settings(const Game& game) : m_Game(&game) {}
+
         // Where the settings live for a given game root.
-        static std::filesystem::path FileFor(const std::filesystem::path& gameRoot);
+        static std::filesystem::path FileFor(const Game& game, const std::filesystem::path& gameRoot);
 
         // Loads the file. Returns false when it does not exist (values are then the defaults).
         bool Load(const std::filesystem::path& file);
@@ -40,11 +45,10 @@ namespace mgs4e::tool
         bool Dirty() const { return m_Values != m_Loaded; }
 
     private:
-        using Map = std::map<std::string, std::map<std::string, std::string>>;
-
         void ValidateKnown();
 
-        Map m_Values;
-        Map m_Loaded;
+        const Game* m_Game;
+        SettingsMap m_Values;
+        SettingsMap m_Loaded;
     };
 }

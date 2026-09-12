@@ -1,5 +1,6 @@
 #include "pch.hpp"
 
+#include "games.hpp"
 #include "paths.hpp"
 #include "settings_io.hpp"
 #include "ui.hpp"
@@ -13,27 +14,49 @@ namespace mgs4e::tool
     public:
         bool OnInit() override
         {
-            SetAppName(MGS4E_DISPLAY_NAME);
             SetVendorName(MGS4E_COMPANY_NAME);
             wxImage::AddHandler(new wxPNGHandler);
             MSWEnableDarkMode();
 
-            const auto root = FindGameRoot();
-            if (!root)
+            // "--game MGS4|MGSPW" picks the game when the tool sits where both could be found;
+            // "--tab <title>" opens on that tab, for screenshots and support.
+            std::string preferred;
+            std::string openTab;
+            for (int i = 1; i + 1 < argc; ++i)
             {
+                if (wxString(argv[i]) == "--game")
+                {
+                    preferred = wxString(argv[i + 1]).ToStdString();
+                }
+                else if (wxString(argv[i]) == "--tab")
+                {
+                    openTab = wxString(argv[i + 1]).ToStdString();
+                }
+            }
+
+            const auto install = FindInstalledGame(preferred);
+            if (!install)
+            {
+                wxString hints;
+                for (const Game* g : AllGames())
+                {
+                    hints += wxString::Format("\n  - %s: %s", g->gameTitle, g->notFoundHint);
+                }
                 wxMessageBox(
-                    wxString::Format("Put \"%s.exe\" in the game's install folder - the one that contains the MGS4 folder "
-                                     "with mgs4.exe in it - and run it from there.\n\n"
-                                     "Steam: right-click the game > Manage > Browse local files.", MGS4E_DISPLAY_NAME),
+                    wxString::Format("Put \"%s.exe\" in the game's install folder and run it from there:%s\n\n"
+                                     "Steam: right-click the game > Manage > Browse local files.", MGS4E_DISPLAY_NAME, hints),
                     wxString::Format("%s: game not found", MGS4E_DISPLAY_NAME), wxOK | wxICON_ERROR);
                 return false;
             }
+            const Game& game = *install->game;
+            const std::filesystem::path& root = install->root;
+            SetAppName(game.displayName);
 
-            compat::Detect(*root);
+            compat::Detect(game, root);
 
-            Settings settings;
+            Settings settings(game);
             std::string note;
-            const std::filesystem::path file = Settings::FileFor(*root);
+            const std::filesystem::path file = Settings::FileFor(game, root);
             if (!settings.Load(file))
             {
                 // First run. Earlier builds of these fixes shipped inside another mod and kept
@@ -55,20 +78,10 @@ namespace mgs4e::tool
                 }
                 note = imported > 0
                     ? "Imported " + std::to_string(imported) + " settings from " + from + ". Save to keep them."
-                    : "First run: showing the defaults. Save to create " MGS4E_NAME ".settings.";
+                    : "First run: showing the defaults. Save to create " + std::string(game.name) + ".settings.";
             }
 
-            // "--tab <title>" opens on that tab, for screenshots and support.
-            std::string openTab;
-            for (int i = 1; i + 1 < argc; ++i)
-            {
-                if (wxString(argv[i]) == "--tab")
-                {
-                    openTab = wxString(argv[i + 1]).ToStdString();
-                }
-            }
-
-            MainFrame* frame = new MainFrame(*root, std::move(settings), std::move(note), std::move(openTab));
+            MainFrame* frame = new MainFrame(game, root, std::move(settings), std::move(note), std::move(openTab));
             frame->Show();
             return true;
         }

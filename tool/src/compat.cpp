@@ -4,12 +4,12 @@
 #include "ini.hpp"
 #include "compat_table.hpp"
 #include "features.hpp"
-#include "version.hpp"
 
 namespace mgs4e::tool::compat
 {
     namespace
     {
+        const Game* g_Game = nullptr;
         std::vector<Status> g_Status;
         std::vector<mgs4e::Ini> g_Settings;
         std::vector<mgs4e::manifests::Mod> g_Manifests;
@@ -20,21 +20,20 @@ namespace mgs4e::tool::compat
         return g_Manifests;
     }
 
-    void Detect(const std::filesystem::path& gameRoot)
+    void Detect(const Game& game, const std::filesystem::path& gameRoot)
     {
-        using mgs4e::compat::kModCount;
-        using mgs4e::compat::kMods;
-
+        g_Game = &game;
         std::error_code ec;
-        g_Status.assign(kModCount, Status{});
-        g_Settings.assign(kModCount, mgs4e::Ini{});
+        g_Status.assign(game.mods.size(), Status{});
+        g_Settings.assign(game.mods.size(), mgs4e::Ini{});
 
-        const std::filesystem::path exeDir = gameRoot / "MGS4";
-        for (std::size_t i = 0; i < kModCount; ++i)
+        const std::filesystem::path exeDir = gameRoot / game.exeDir;
+        for (std::size_t i = 0; i < game.mods.size(); ++i)
         {
             Status& s = g_Status[i];
             s.mod = i;
-            for (const std::filesystem::path candidate : { exeDir / "scripts" / kMods[i].asiFile, exeDir / kMods[i].asiFile })
+            s.name = game.mods[i].name;
+            for (const std::filesystem::path candidate : { exeDir / "scripts" / game.mods[i].asiFile, exeDir / game.mods[i].asiFile })
             {
                 if (std::filesystem::exists(candidate, ec))
                 {
@@ -43,10 +42,10 @@ namespace mgs4e::tool::compat
                     break;
                 }
             }
-            s.settingsPath = gameRoot / kMods[i].settingsFile;
+            s.settingsPath = gameRoot / game.mods[i].settingsFile;
             s.settingsFound = g_Settings[i].Load(s.settingsPath);
         }
-        g_Manifests = mgs4e::manifests::Scan(gameRoot, std::string(MGS4E_NAME) + ".settings");
+        g_Manifests = mgs4e::manifests::Scan(gameRoot, std::string(game.name) + ".settings", game.manifestSuffix, game.places);
     }
 
     const std::vector<Status>& All()
@@ -69,17 +68,21 @@ namespace mgs4e::tool::compat
 
     std::optional<Override> Overrides(const std::string& section, const std::string& key)
     {
-        if (const mgs4e::compat::Entry* entry = mgs4e::compat::Find(section.c_str(), key.c_str()); entry && entry->mod < g_Status.size())
+        if (!g_Game)
+        {
+            return std::nullopt;
+        }
+        if (const mgs4e::compat::Entry* entry = g_Game->Find(section.c_str(), key.c_str()); entry && entry->mod < g_Status.size())
         {
             const std::string theirs = g_Settings[entry->mod].Raw(entry->theirSection, entry->theirKey).value_or(std::string());
             if (mgs4e::compat::TheirsWins(*entry, g_Status[entry->mod].asiInstalled, theirs))
             {
-                return Override{ mgs4e::compat::kMods[entry->mod].name, entry->theirKey, theirs.empty() ? "default" : theirs };
+                return Override{ g_Game->mods[entry->mod].name, entry->theirKey, theirs.empty() ? "default" : theirs };
             }
         }
         // Only an always-on claim greys our field out for good: a value-gated one the user
         // can turn off from its own tab, so it is reported as an overlap instead (ui.cpp).
-        if (const mgs4e::features::Ours* ours = mgs4e::features::OurClaim(section, key))
+        if (const mgs4e::features::Ours* ours = g_Game->OurClaim(section, key))
         {
             for (const auto& m : g_Manifests)
             {

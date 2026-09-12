@@ -3,7 +3,7 @@
 
 namespace mgs4e::tool
 {
-    std::optional<std::filesystem::path> FindGameRoot()
+    std::optional<std::filesystem::path> FindGameRoot(const Game& game)
     {
         std::error_code ec;
         const std::filesystem::path exe = wxStandardPaths::Get().GetExecutablePath().ToStdWstring();
@@ -14,9 +14,25 @@ namespace mgs4e::tool
             {
                 continue;
             }
-            if (std::filesystem::exists(candidate / "MGS4" / "mgs4.exe", ec))
+            if (std::filesystem::exists(candidate / game.exeDir / game.exeName, ec))
             {
                 return std::filesystem::canonical(candidate, ec);
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<Install> FindInstalledGame(const std::string& preferredId)
+    {
+        for (const Game* game : AllGames())
+        {
+            if (!preferredId.empty() && preferredId != game->id)
+            {
+                continue;
+            }
+            if (const auto root = FindGameRoot(*game))
+            {
+                return Install { game, *root };
             }
         }
         return std::nullopt;
