@@ -9,6 +9,7 @@
 
 #include "aspect_ratio.hpp"
 #include "draw_census.hpp"
+#include "internal_size.hpp"
 #include "probe.hpp"
 
 namespace
@@ -48,6 +49,7 @@ namespace
             {
                 Probe::Run();
                 DrawCensus::Install();
+                InternalSize::Apply();
             }
 #endif
 

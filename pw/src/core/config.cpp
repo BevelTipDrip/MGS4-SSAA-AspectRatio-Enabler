@@ -10,6 +10,7 @@
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "draw_census.hpp"
+#include "internal_size.hpp"
 #endif
 
 namespace mgspwe::config
@@ -100,6 +101,16 @@ namespace mgspwe::config
             Report(Graphics, "Draw Census At (s)", DrawCensus::iCensusAtSeconds);
             Report(Graphics, "Draw Census Frames", DrawCensus::iCensusFrames);
             Report(Graphics, "Live Commands", DrawCensus::bLiveCommands);
+            Read(ini, Graphics, "Render Scale", InternalSize::iRenderScale);
+            Read(ini, Graphics, "Internal Size Width", InternalSize::iInternalWidth);
+            Read(ini, Graphics, "Internal Size Height", InternalSize::iInternalHeight);
+            Read(ini, Graphics, "Output Size Width", InternalSize::iOutputWidth);
+            Read(ini, Graphics, "Output Size Height", InternalSize::iOutputHeight);
+            Report(Graphics, "Render Scale", InternalSize::iRenderScale);
+            Report(Graphics, "Internal Size Width", InternalSize::iInternalWidth);
+            Report(Graphics, "Internal Size Height", InternalSize::iInternalHeight);
+            Report(Graphics, "Output Size Width", InternalSize::iOutputWidth);
+            Report(Graphics, "Output Size Height", InternalSize::iOutputHeight);
         }
 #endif
     }

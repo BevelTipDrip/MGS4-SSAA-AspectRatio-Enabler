@@ -29,10 +29,14 @@ namespace
     SafetyHookInline Device_CreateVertexShader_hook {};
     SafetyHookInline Device_CreatePixelShader_hook {};
     SafetyHookInline Device_CreateDeferredContext_hook {};
+    SafetyHookInline Device_CreateComputeShader_hook {};
+    SafetyHookInline Device_CreateTexture2D_hook {};
 
     // ID3D11Device vtable slots.
     constexpr size_t kDevCreateVertexShader = 12;
     constexpr size_t kDevCreatePixelShader = 15;
+    constexpr size_t kDevCreateTexture2D = 5;
+    constexpr size_t kDevCreateComputeShader = 18;
     constexpr size_t kDevCreateDeferredContext = 27;
     // ID3D11DeviceContext vtable slots.
     constexpr size_t kCtxVSSetConstantBuffers = 7;
@@ -50,7 +54,15 @@ namespace
     constexpr size_t kCtxRSSetViewports = 44;
     constexpr size_t kCtxRSSetScissorRects = 45;
     constexpr size_t kCtxUpdateSubresource = 48;
+    constexpr size_t kCtxDispatch = 41;
+    constexpr size_t kCtxDispatchIndirect = 42;
+    constexpr size_t kCtxCopySubresourceRegion = 46;
+    constexpr size_t kCtxCopyResource = 47;
+    constexpr size_t kCtxResolveSubresource = 57;
     constexpr size_t kCtxExecuteCommandList = 58;
+    constexpr size_t kCtxCSSetShaderResources = 67;
+    constexpr size_t kCtxCSSetUnorderedAccessViews = 68;
+    constexpr size_t kCtxCSSetShader = 69;
     // IDXGIFactory / IDXGIFactory2 / IDXGISwapChain slots.
     constexpr size_t kFactoryCreateSwapChain = 10;
     constexpr size_t kFactory2CreateSwapChainForHwnd = 15;
@@ -63,7 +75,7 @@ namespace
     // CResource::Map from the game's UI vertex upload, 2026-09-12), which a vtable swap cannot
     // do since the original function runs untouched. A hooked method finds its set by the
     // vtable of the context it was called on and calls the original entry from there.
-    constexpr size_t kSlotCount = 64;
+    constexpr size_t kSlotCount = 80;
     struct ContextHooks
     {
         void** vtable = nullptr;
@@ -93,6 +105,9 @@ namespace
         void* ps = nullptr;
         ID3D11Buffer* vsCb[4] {};   // vertex shader constant buffer slots 0..3
         std::string texture = "-";      // pixel shader resource slot 0
+        std::string csTexture = "-";    // compute shader resource slot 0
+        std::string csTarget = "-";     // compute unordered access view slot 0
+        void* cs = nullptr;
         std::vector<uint8_t> lastVertexUpload;   // head of the last non-constant buffer unmapped on this context
         size_t lastVertexUploadSize = 0;
         std::string lastVertexUploadCaller;
@@ -145,6 +160,31 @@ namespace
         uint32_t colour = 0;
         std::memcpy(&colour, p + stride - 16, sizeof(colour));
         return std::format("stride={} rect=({:g},{:g})-({:g},{:g}) z={:g} colour={:08x}", stride, minX, minY, maxX, maxY, z, colour);
+    }
+
+    std::string DescribeResource(ID3D11Resource* res)
+    {
+        if (!res) { return "none"; }
+        std::string out = "?";
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+        {
+            D3D11_TEXTURE2D_DESC d {};
+            tex->GetDesc(&d);
+            out = std::format("{}x{} fmt{} {:#x}", d.Width, d.Height, static_cast<int>(d.Format), reinterpret_cast<uintptr_t>(res) & 0xffffff);
+            tex->Release();
+        }
+        return out;
+    }
+
+    std::string DescribeUav(ID3D11UnorderedAccessView* view)
+    {
+        if (!view) { return "-"; }
+        ID3D11Resource* res = nullptr;
+        view->GetResource(&res);
+        std::string out = DescribeResource(res);
+        if (res) { res->Release(); }
+        return out;
     }
 
     std::string DescribeTexture(ID3D11ShaderResourceView* view)
@@ -434,6 +474,69 @@ namespace
         Original<decltype(&Hooked_UpdateSubresource)>(self, kCtxUpdateSubresource)(self, res, sub, box, data, rowPitch, depthPitch);
     }
 
+    void STDMETHODCALLTYPE Hooked_CSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
+    {
+        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); g_State[self].csTexture = DescribeTexture(views[0]); }
+        Original<decltype(&Hooked_CSSetShaderResources)>(self, kCtxCSSetShaderResources)(self, start, count, views);
+    }
+
+    void STDMETHODCALLTYPE Hooked_CSSetUnorderedAccessViews(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11UnorderedAccessView* const* views, const UINT* counts)
+    {
+        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); g_State[self].csTarget = DescribeUav(views[0]); }
+        Original<decltype(&Hooked_CSSetUnorderedAccessViews)>(self, kCtxCSSetUnorderedAccessViews)(self, start, count, views, counts);
+    }
+
+    void STDMETHODCALLTYPE Hooked_CSSetShader(ID3D11DeviceContext* self, ID3D11ComputeShader* shader, ID3D11ClassInstance* const* instances, UINT n)
+    {
+        { std::lock_guard lock(g_Mutex); g_State[self].cs = shader; }
+        Original<decltype(&Hooked_CSSetShader)>(self, kCtxCSSetShader)(self, shader, instances, n);
+    }
+
+    void STDMETHODCALLTYPE Hooked_Dispatch(ID3D11DeviceContext* self, UINT x, UINT y, UINT z)
+    {
+        g_DrawsSeen.fetch_add(1);
+        if (g_FramesToLog.load() > 0)
+        {
+            std::lock_guard lock(g_Mutex);
+            ContextState& st = g_State[self];
+            st.draws++;
+            g_DrawsThisFrame++;
+            const auto cs = g_ShaderHash.find(st.cs);
+            spdlog::info("PW census: f{} {}#{} Dispatch {}x{}x{} cs={} srv0={} uav0={} | {}", g_Frame.load(), HooksFor(self).name, st.draws, x, y, z,
+                cs == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", cs->second).substr(0, 8), st.csTexture, st.csTarget, GameCallers(6));
+        }
+        Original<decltype(&Hooked_Dispatch)>(self, kCtxDispatch)(self, x, y, z);
+    }
+
+    void STDMETHODCALLTYPE Hooked_DispatchIndirect(ID3D11DeviceContext* self, ID3D11Buffer* args, UINT offset)
+    {
+        if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} DispatchIndirect | {}", g_Frame.load(), GameCallers(6)); }
+        Original<decltype(&Hooked_DispatchIndirect)>(self, kCtxDispatchIndirect)(self, args, offset);
+    }
+
+    void STDMETHODCALLTYPE Hooked_CopySubresourceRegion(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, UINT x, UINT y, UINT z, ID3D11Resource* src, UINT srcSub, const D3D11_BOX* box)
+    {
+        if (g_FramesToLog.load() > 0)
+        {
+            std::lock_guard lock(g_Mutex);
+            spdlog::info("PW census: f{} {} CopySubresourceRegion dst={} at ({},{}) src={} box={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), x, y, DescribeResource(src),
+                box ? std::format("({},{})-({},{})", box->left, box->top, box->right, box->bottom) : std::string("all"), GameCallers(6));
+        }
+        Original<decltype(&Hooked_CopySubresourceRegion)>(self, kCtxCopySubresourceRegion)(self, dst, dstSub, x, y, z, src, srcSub, box);
+    }
+
+    void STDMETHODCALLTYPE Hooked_CopyResource(ID3D11DeviceContext* self, ID3D11Resource* dst, ID3D11Resource* src)
+    {
+        if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} CopyResource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
+        Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
+    }
+
+    void STDMETHODCALLTYPE Hooked_ResolveSubresource(ID3D11DeviceContext* self, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub, DXGI_FORMAT fmt)
+    {
+        if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} ResolveSubresource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
+        Original<decltype(&Hooked_ResolveSubresource)>(self, kCtxResolveSubresource)(self, dst, dstSub, src, srcSub, fmt);
+    }
+
     void STDMETHODCALLTYPE Hooked_ExecuteCommandList(ID3D11DeviceContext* self, ID3D11CommandList* list, BOOL restore)
     {
         g_ListsSeen.fetch_add(1);
@@ -461,6 +564,14 @@ namespace
             { kCtxUpdateSubresource, reinterpret_cast<void*>(Hooked_UpdateSubresource) },
             { kCtxIASetPrimitiveTopology, reinterpret_cast<void*>(Hooked_IASetPrimitiveTopology) },
             { kCtxExecuteCommandList, reinterpret_cast<void*>(Hooked_ExecuteCommandList) },
+            { kCtxDispatch, reinterpret_cast<void*>(Hooked_Dispatch) },
+            { kCtxDispatchIndirect, reinterpret_cast<void*>(Hooked_DispatchIndirect) },
+            { kCtxCopySubresourceRegion, reinterpret_cast<void*>(Hooked_CopySubresourceRegion) },
+            { kCtxCopyResource, reinterpret_cast<void*>(Hooked_CopyResource) },
+            { kCtxResolveSubresource, reinterpret_cast<void*>(Hooked_ResolveSubresource) },
+            { kCtxCSSetShaderResources, reinterpret_cast<void*>(Hooked_CSSetShaderResources) },
+            { kCtxCSSetUnorderedAccessViews, reinterpret_cast<void*>(Hooked_CSSetUnorderedAccessViews) },
+            { kCtxCSSetShader, reinterpret_cast<void*>(Hooked_CSSetShader) },
         };
         h.vtable = vtable;
         h.name = name;
@@ -497,6 +608,25 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreatePixelShader(ID3D11Device* self, const void* code, SIZE_T size, ID3D11ClassLinkage* linkage, ID3D11PixelShader** out)
     {
         const HRESULT r = Device_CreatePixelShader_hook.stdcall<HRESULT>(self, code, size, linkage, out);
+        if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); }
+        return r;
+    }
+
+    // Render targets and depth buffers as they are created: size, format, samples, and who asked.
+    HRESULT STDMETHODCALLTYPE Hooked_CreateTexture2D(ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Texture2D** out)
+    {
+        const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
+        if (SUCCEEDED(r) && desc && (desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256)
+        {
+            spdlog::info("PW census: texture {}x{} fmt{} samples={} bind={:#x} {} | {}", desc->Width, desc->Height, static_cast<int>(desc->Format), desc->SampleDesc.Count, desc->BindFlags,
+                out && *out ? std::format("{:#x}", reinterpret_cast<uintptr_t>(*out) & 0xffffff) : std::string("-"), GameCallers(4));
+        }
+        return r;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateComputeShader(ID3D11Device* self, const void* code, SIZE_T size, ID3D11ClassLinkage* linkage, ID3D11ComputeShader** out)
+    {
+        const HRESULT r = Device_CreateComputeShader_hook.stdcall<HRESULT>(self, code, size, linkage, out);
         if (SUCCEEDED(r) && out && *out && code) { std::lock_guard lock(g_Mutex); g_ShaderHash[*out] = Fnv1a(code, size); }
         return r;
     }
@@ -620,6 +750,8 @@ namespace
         Device_CreateVertexShader_hook = safetyhook::create_inline(dv[kDevCreateVertexShader], reinterpret_cast<void*>(Hooked_CreateVertexShader));
         Device_CreatePixelShader_hook = safetyhook::create_inline(dv[kDevCreatePixelShader], reinterpret_cast<void*>(Hooked_CreatePixelShader));
         Device_CreateDeferredContext_hook = safetyhook::create_inline(dv[kDevCreateDeferredContext], reinterpret_cast<void*>(Hooked_CreateDeferredContext));
+        Device_CreateComputeShader_hook = safetyhook::create_inline(dv[kDevCreateComputeShader], reinterpret_cast<void*>(Hooked_CreateComputeShader));
+        Device_CreateTexture2D_hook = safetyhook::create_inline(dv[kDevCreateTexture2D], reinterpret_cast<void*>(Hooked_CreateTexture2D));
 
         ID3D11DeviceContext* immediate = context;
         if (!immediate) { device->GetImmediateContext(&immediate); }
