@@ -49,6 +49,59 @@ Nothing here is a fix; it is what the fixes will stand on.
 - Loader chain, root (`<install>`), log path (`logs\MGSPWEnabler_Game.log`), the lab marker
   protocol and the settings file: all as designed, first try.
 
+## The frame at the title (Measured, 2026-09-12, Lab draw census, 3440x1440 window, Afevis's mod present)
+
+The census (`pw\srceatures\draw_census.cpp`, Lab only) hooks the DirectX 11 device,
+swap chain and both context classes and logs every draw of a frame with its target, viewport,
+shaders, first vertex constant buffer, bound texture, the vertex upload that preceded it and
+the game-code callers.
+
+- **The game records on deferred contexts.** Four deferred contexts are created at start-up;
+  the immediate context draws nothing once the game is up. Three command lists a frame are
+  submitted from `+17C59` (`ExecuteCommandList`), 60 frames a second at the title. Hooks that
+  watch only the immediate context see zero draws.
+- **Hook the context classes by vtable entry, not inline.** An inline (trampoline) hook on the
+  deferred context's `Map` corrupted the driver's mapping bookkeeping: crash in
+  `nvwgf2umx.dll` under `CResource::Map`, four seconds after the device, from the UI vertex
+  upload (dump `METAL GEAR SOLID PEACE WALKER.exe.20916.dmp`). Replacing the entries of the two
+  class vtables in `d3d11.dll` (`VirtualProtect` on the table) is stable across three boots.
+- **One title frame is 30 draws, all to the 3440x1440 back buffer with a full viewport and
+  scissor.** No smaller render target and no 480x272 (or multiple) target exists at the title:
+  the UI is drawn straight into the output-sized target. Two full-screen passes bracket it
+  (a 3440x1440 R32G32B32A32 target from `+5D202`, a copy from `+5CC84`, the last from `+56190`).
+- **The UI is quads in a centred 480x272 canvas.** Every UI draw is `Draw` (not indexed),
+  triangle list, from the same native site `+57CA9` after a vertex upload at `+57596` (a `Map`
+  with discard on the deferred context, called from `+212E5`). Vertex layout: 24 bytes textured
+  (`u, v` float; `rgba8`; `x, y, z` float) or 16 bytes untextured (`rgba8`; `x, y, z`). x runs
+  -240..240 and y -136..136 for canvas-filling quads. The vertex shader's first constant
+  buffer holds the ortho: `2/480, 0, 0, 0 | 0, -2/272, 0, 0 | 0, 0, -0.002, 0 | -1, 1, -1, 1`
+  (row-major with the translation in the last row; the centring must be applied by the shader
+  or the vertex builder). So 480 canvas units span the whole window width whatever its shape:
+  at 21:9 the canvas is stretched 1.35x unless something changes the ortho or the vertices.
+  Whether the title picture looks stretched on screen is the user's read of the capture, not
+  inferred here.
+- **Native callers do not identify elements.** Every quad's stack is
+  `+57CA9 < +5A166 < +5B033 < +22686 < +22686 < +1C96F < +544D2 < +78195 < +7BBB9 < +79AB4`:
+  `+22686` recursing is a display-list interpreter replaying what the game logic queued
+  earlier. The MGS4 method (owner attribution by unwinding to the element's builder) has no
+  purchase here; the identity of a quad is its **texture** (object, size, format) plus its
+  **canvas rectangle**, and its order within the frame.
+- **The title's element table** (draw order, texture, canvas rect):
+  1 backdrop 512x512 `fmt71` (BC1) at (-256,-152)-(256,360); 4 horizontal strips and 4
+  vertical strips of a second 512x512 BC1 tiling the canvas (the colour bars); 3 untextured
+  half-width bands (0,-66)-(240,62) stepping one unit (the scan effect); a 256x256 BC1 and a
+  256x128 `fmt77` (BC3) overlay at (-242,-138)-(242,138) (vignette); the 1024x128 BC3 line at
+  (-128,116)-(128,132) (the copyright); the 2048x1152 BC3 art at (-240,-156)-(240,116) (the
+  title); glyph runs from a 512x512 BC3 font atlas at y 58..112 (14, 8, 9, 6, 6 glyphs: "PRESS
+  ? BUTTON" and four more runs to be identified); the 512x512 BC3 button icon at
+  (-9.9,71)-(3.3,84); a 256x128 BC3 quad at (-232,72)-(-70,85) with colour `ff0a0a80`; and
+  1024 tiny quads from a 2048x512 BC3 (the noise overlay). Texture object addresses change per
+  boot; sizes and formats do not.
+- **Live editing will be per quad**: the vertex upload is a `Map` with discard on a deferred
+  context, so a bias keyed on (texture size and format, rectangle) can be applied to the
+  mapped vertices at `Unmap`, before the draw is recorded. That is the Peace Walker equivalent
+  of the MGS4 pool-append hook.
+
 ## How the launcher drives the game (Reported: MGSPatriotFix source, 2026-09-12)
 
 The launcher starts the exe with `-region <r> -lan <l> -selfregion EU -resolution <0|1>
@@ -74,11 +127,12 @@ identity method would replace them.
 
 ## Open questions (Phase 0 answers these)
 
-- DirectX 11 or 12: answered above (11, one run); which device presents is the next probe.
+- DirectX 11 or 12: answered (11, four runs; the DirectX 11 swap chain presents).
 - Where the persisted display settings live and how `"invalid window size"` is reached.
-- The internal render size and where the upscale happens (3D at a 480x272 multiple then
-  blitted, 3D at output size with the UI in canvas space, or a fixed HD target).
+- The internal render size for 3D (the title has no 3D): the UI is drawn at output size in
+  canvas space (measured above); what the world renders into is the gameplay census.
 - The shader set: 11 `.cso` against the runtime `Create*Shader` counts; what the `.vpo`/`.fpo`
   become.
-- The perspective builder and the UI ortho (480/272 constants), and whether the HUD is scaled
-  uniformly or stretched at a wide window.
+- The perspective builder. The UI ortho is measured (480x272 over the whole viewport); whether
+  the HUD looks stretched at 21:9 awaits the user's read of the title capture, and whether
+  Afevis's HUD fixups alter the vertices or the ortho awaits a census with his ASI removed.

@@ -35,6 +35,7 @@ namespace
     constexpr size_t kDevCreateDeferredContext = 27;
     // ID3D11DeviceContext vtable slots.
     constexpr size_t kCtxVSSetConstantBuffers = 7;
+    constexpr size_t kCtxPSSetShaderResources = 8;
     constexpr size_t kCtxPSSetShader = 9;
     constexpr size_t kCtxVSSetShader = 11;
     constexpr size_t kCtxDrawIndexed = 12;
@@ -90,6 +91,10 @@ namespace
         void* vs = nullptr;
         void* ps = nullptr;
         ID3D11Buffer* vsCb0 = nullptr;
+        std::string texture = "-";      // pixel shader resource slot 0
+        std::vector<uint8_t> lastVertexUpload;   // head of the last non-constant buffer unmapped on this context
+        size_t lastVertexUploadSize = 0;
+        std::string lastVertexUploadCaller;
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     std::mutex g_Mutex;
@@ -103,7 +108,71 @@ namespace
     struct Snapshot { float f[16]; bool valid; };
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
     std::unordered_map<ID3D11Resource*, Snapshot> g_LatestUpload;  // constant buffer -> latest 16 floats
-    std::unordered_map<ID3D11Resource*, void*> g_Mapped;           // Map(): pData until Unmap()
+    struct Mapping { void* data; size_t size; };
+    std::unordered_map<ID3D11Resource*, Mapping> g_Mapped;         // Map(): pData until Unmap()
+
+    // Byte width of `res` when it is a buffer, else 0; `constant` says whether it binds as one.
+    size_t BufferSize(ID3D11Resource* res, bool& constant)
+    {
+        constant = false;
+        ID3D11Buffer* buf = nullptr;
+        if (FAILED(res->QueryInterface(__uuidof(ID3D11Buffer), reinterpret_cast<void**>(&buf))) || !buf) { return 0; }
+        D3D11_BUFFER_DESC d {};
+        buf->GetDesc(&d);
+        buf->Release();
+        constant = (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0;
+        return d.ByteWidth;
+    }
+
+    // The UI vertex layout seen at the title (2026-09-12): 24 bytes textured (u, v float; rgba8;
+    // x, y, z float) or 16 bytes untextured (rgba8; x, y, z float), on a centred 480x272 canvas.
+    // Decodes the bounding rectangle of the positions, assuming the position is the last 12 bytes
+    // of each vertex, for the first few vertices of the upload.
+    std::string DecodeVertices(const void* data, size_t size, size_t stride)
+    {
+        if (stride < 12 || size < stride) { return "?"; }
+        const size_t count = std::min<size_t>(size / stride, 64);
+        float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f, z = 0;
+        const auto* p = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < count; i++)
+        {
+            float xyz[3];
+            std::memcpy(xyz, p + i * stride + stride - 12, sizeof(xyz));
+            minX = std::min(minX, xyz[0]); maxX = std::max(maxX, xyz[0]);
+            minY = std::min(minY, xyz[1]); maxY = std::max(maxY, xyz[1]);
+            z = xyz[2];
+        }
+        uint32_t colour = 0;
+        std::memcpy(&colour, p + stride - 16, sizeof(colour));
+        return std::format("stride={} rect=({:g},{:g})-({:g},{:g}) z={:g} colour={:08x}", stride, minX, minY, maxX, maxY, z, colour);
+    }
+
+    std::string DescribeTexture(ID3D11ShaderResourceView* view)
+    {
+        if (!view) { return "-"; }
+        ID3D11Resource* res = nullptr;
+        view->GetResource(&res);
+        if (!res) { return "?"; }
+        std::string out = "?";
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
+        {
+            D3D11_TEXTURE2D_DESC d {};
+            tex->GetDesc(&d);
+            out = std::format("{}x{} fmt{} {:#x}", d.Width, d.Height, static_cast<int>(d.Format), reinterpret_cast<uintptr_t>(res) & 0xffffff);
+            tex->Release();
+        }
+        res->Release();
+        return out;
+    }
+
+    std::string Hex(const void* data, size_t n)
+    {
+        std::string out;
+        const auto* p = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < n; i++) { out += std::format("{}{:02x}", (i && i % 4 == 0) ? " " : "", p[i]); }
+        return out;
+    }
 
     uint64_t Fnv1a(const void* data, size_t size)
     {
@@ -165,17 +234,6 @@ namespace
         g_LatestUpload[res] = s;
     }
 
-    // Byte width of `res` when it is a constant buffer, else 0.
-    size_t ConstantBufferSize(ID3D11Resource* res)
-    {
-        ID3D11Buffer* buf = nullptr;
-        if (FAILED(res->QueryInterface(__uuidof(ID3D11Buffer), reinterpret_cast<void**>(&buf))) || !buf) { return 0; }
-        D3D11_BUFFER_DESC d {};
-        buf->GetDesc(&d);
-        buf->Release();
-        return (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER) ? d.ByteWidth : 0;
-    }
-
     void LogDraw(void* self, const char* kind, UINT count, UINT start, UINT baseVertex)
     {
         g_DrawsSeen.fetch_add(1);
@@ -196,13 +254,22 @@ namespace
         }
         const auto vs = g_ShaderHash.find(st.vs);
         const auto ps = g_ShaderHash.find(st.ps);
-        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} vs={} ps={} {} | {}",
+        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} vs={} ps={} {} | {}",
             g_Frame.load(), HooksFor(self).name, st.draws, kind, count, start, baseVertex, static_cast<int>(st.topology),
             st.viewport.TopLeftX, st.viewport.TopLeftY, st.viewport.Width, st.viewport.Height,
-            st.scissor.left, st.scissor.top, st.scissor.right, st.scissor.bottom, st.target,
+            st.scissor.left, st.scissor.top, st.scissor.right, st.scissor.bottom, st.target, st.texture,
             vs == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", vs->second).substr(0, 8),
             ps == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", ps->second).substr(0, 8),
-            cb, GameCallers(5));
+            cb, GameCallers(10));
+        if (!st.lastVertexUpload.empty())
+        {
+            // The stride follows from the draw: the upload holds exactly the vertices drawn.
+            const size_t stride = count ? st.lastVertexUploadSize / count : 0;
+            spdlog::info("PW census:   vertices {}B {} head {} | {}", st.lastVertexUploadSize,
+                DecodeVertices(st.lastVertexUpload.data(), st.lastVertexUpload.size(), stride),
+                Hex(st.lastVertexUpload.data(), std::min<size_t>(st.lastVertexUpload.size(), 24)), st.lastVertexUploadCaller);
+            st.lastVertexUpload.clear();
+        }
     }
 
     // ---- context hooks (both classes) ------------------------------------------------------------
@@ -272,6 +339,12 @@ namespace
         Original<decltype(&Hooked_IASetPrimitiveTopology)>(self, kCtxIASetPrimitiveTopology)(self, topology);
     }
 
+    void STDMETHODCALLTYPE Hooked_PSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
+    {
+        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); g_State[self].texture = DescribeTexture(views[0]); }
+        Original<decltype(&Hooked_PSSetShaderResources)>(self, kCtxPSSetShaderResources)(self, start, count, views);
+    }
+
     void STDMETHODCALLTYPE Hooked_VSSetConstantBuffers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11Buffer* const* buffers)
     {
         if (start == 0 && count > 0 && buffers) { std::lock_guard lock(g_Mutex); g_State[self].vsCb0 = buffers[0]; }
@@ -284,7 +357,7 @@ namespace
         if (SUCCEEDED(r) && mapped && mapped->pData && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE_NO_OVERWRITE || type == D3D11_MAP_WRITE))
         {
             std::lock_guard lock(g_Mutex);
-            g_Mapped[res] = mapped->pData;
+            g_Mapped[res] = { mapped->pData, mapped->RowPitch };
         }
         return r;
     }
@@ -296,7 +369,17 @@ namespace
             const auto it = g_Mapped.find(res);
             if (it != g_Mapped.end())
             {
-                if (const size_t size = ConstantBufferSize(res)) { Snapshot16(res, it->second, size); }
+                bool constant = false;
+                const size_t size = BufferSize(res, constant);
+                if (constant) { Snapshot16(res, it->second.data, size); }
+                else if (size && g_FramesToLog.load() > 0)
+                {
+                    ContextState& st = g_State[self];
+                    const size_t keep = std::min<size_t>(size, 64 * 24);
+                    st.lastVertexUpload.assign(static_cast<const uint8_t*>(it->second.data), static_cast<const uint8_t*>(it->second.data) + keep);
+                    st.lastVertexUploadSize = size;
+                    st.lastVertexUploadCaller = GameCallers(3);
+                }
                 g_Mapped.erase(it);
             }
         }
@@ -307,7 +390,9 @@ namespace
     {
         if (res && data && sub == 0 && !box)
         {
-            if (const size_t size = ConstantBufferSize(res))
+            bool constant = false;
+            const size_t size = BufferSize(res, constant);
+            if (constant)
             {
                 std::lock_guard lock(g_Mutex);
                 Snapshot16(res, data, size);
@@ -337,6 +422,7 @@ namespace
             { kCtxVSSetShader, reinterpret_cast<void*>(Hooked_VSSetShader) },
             { kCtxPSSetShader, reinterpret_cast<void*>(Hooked_PSSetShader) },
             { kCtxVSSetConstantBuffers, reinterpret_cast<void*>(Hooked_VSSetConstantBuffers) },
+            { kCtxPSSetShaderResources, reinterpret_cast<void*>(Hooked_PSSetShaderResources) },
             { kCtxMap, reinterpret_cast<void*>(Hooked_Map) },
             { kCtxUnmap, reinterpret_cast<void*>(Hooked_Unmap) },
             { kCtxUpdateSubresource, reinterpret_cast<void*>(Hooked_UpdateSubresource) },

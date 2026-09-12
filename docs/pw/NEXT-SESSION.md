@@ -35,9 +35,26 @@ Afevis's tool is the map of the resolution plumbing (28 pattern hooks: preset ta
 render-target creation and getters, render scale, FOV and culling FOV, a dozen HUD element
 fixups); the launcher drives the game with `-resolution 0|1 -upscale 0..3 -movie 0|1`.
 
+## Where the UI work stands (2026-09-12)
+
+The Lab draw census works on Peace Walker's deferred-context renderer (see "The frame at
+the title" in `engine-research.md`): 30 draws a frame at the title, all quads in a centred
+480x272 canvas drawn straight into the output-sized back buffer through one native site; the
+native stack is the same for every quad (a display-list interpreter), so element identity is
+texture plus canvas rectangle. Next: the user records the route from the title to the menu
+after it (`C:\mgspf_tools\pw\keylog.ps1`), the census runs on that menu (`census 2` in
+`C:\mgspf_tools\pw\live.txt` while `Live Commands` is on), and the element table for it is
+built the same way. Live editing: a bias keyed on (texture, rectangle) applied to the mapped
+vertices at `Unmap`.
+
 ## To do
 
-- Phase 0, in order.
+- Record the title-to-menu route; census that menu; then the (texture, rectangle) bias
+  command for live editing.
+- A title census with Afevis's ASI removed from `mgspw\scripts` (does his HUD fixup change the
+  ortho or the vertices?). His ini currently reads 6880x2880 while the swap chain and targets
+  were 3440x1440; not touched, to be asked about.
+- Phase 0, in order (the device, swap chain and UI-space items are answered).
 - `build\package.ps1` stages the Peace Walker files into the combined zip (done in code, not
   run: the user says when to package).
 - MGS4 regression boot after the shared-header change (`boot_to_aim.ps1 -Deploy -StopAtMenu`
