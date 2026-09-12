@@ -10,6 +10,7 @@ namespace UiBias
 {
     inline bool Command(const std::string&) { return false; }
     inline bool Active() { return false; }
+    inline bool GameplaySeen() { return false; }
     inline void OnConstantUnmap(void*, size_t) {}
     inline void OnVertexUnmap(const std::string&, void*, size_t) {}
     inline uint64_t AppliedVertex() { return 0; }

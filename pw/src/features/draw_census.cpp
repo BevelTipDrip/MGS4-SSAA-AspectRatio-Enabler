@@ -801,6 +801,9 @@ namespace
         std::string shared;
         for (const Slot& sl : slots)
         {
+            // Light Hooks: only the resolve (for Disable MSAA and the post-scale draw); no
+            // per-draw hooks at all, so the game's own CPU cost can be measured.
+            if (DrawCensus::bLightHooks && sl.index != kCtxResolveSubresource) { continue; }
             void* current = vtable[sl.index];
             // Already our function: this class shares the entry with the immediate's table
             // (never seen, the tables are separate, but cheap to guard).
@@ -809,7 +812,7 @@ namespace
             vtable[sl.index] = sl.target;
         }
         VirtualProtect(vtable, kSlotCount * sizeof(void*), old, &old);
-        spdlog::info("PW census: {} context vtable at {:#x} patched ({} entries){}.", name, reinterpret_cast<uintptr_t>(vtable), std::size(slots),
+        spdlog::info("PW census: {} context vtable at {:#x} patched ({} entries{}){}.", name, reinterpret_cast<uintptr_t>(vtable), std::size(slots), DrawCensus::bLightHooks ? ", light: resolve only" : "",
             shared.empty() ? "" : "; entries already ours:" + shared);
     }
 
@@ -1080,9 +1083,20 @@ namespace
 
     void PollThread()
     {
+        bool f11Down = false;
         for (;;)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // F11: a two-frame census and the timing run, from now.
+            const bool down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+            if (down && !f11Down)
+            {
+                spdlog::info("PW live: F11 pressed: census and timing start now (frame {}).", g_Frame.load());
+                RunCommand("census 2");
+            }
+            f11Down = down;
+            static int tick = 0;
+            if (++tick % 5) { continue; }   // the command file every 250 ms
             HANDLE file = CreateFileA(kLiveFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
             if (file == INVALID_HANDLE_VALUE) { continue; }
             char buf[512] {};

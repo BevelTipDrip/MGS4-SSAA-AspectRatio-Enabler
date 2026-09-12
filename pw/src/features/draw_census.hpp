@@ -19,7 +19,8 @@ namespace DrawCensus
     MGS4E_LAB_SWITCH(bool, bLiveCommands, true);
     MGS4E_LAB_SWITCH(bool, bTimePasses, true);    // GPU timestamps around the passes of a census frame
     MGS4E_LAB_SWITCH(int, iTimeFrames, 60);       // frames to time (one every four) and average
-    MGS4E_LAB_SWITCH(bool, bDumpShaders, false);  // write every shader's bytecode to C:\mgspf_tools\pw\shaders
+    MGS4E_LAB_SWITCH(bool, bDumpShaders, false);
+    MGS4E_LAB_SWITCH(bool, bLightHooks, false);   // hook only the resolve on the contexts: no per-draw cost, no census, no timing  // write every shader's bytecode to C:\mgspf_tools\pw\shaders
 
 #if MGS4E_LAB_BUILD
     // Hooks the D3D11 device entry points; the context and swap chain hooks follow when the
