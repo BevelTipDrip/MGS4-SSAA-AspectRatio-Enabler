@@ -627,3 +627,11 @@ Fix: `kBandTolerance` of 2 px on every edge in `IsWindowBand` and `IsWindowBandS
 (both backends share them). Verified by the user from the menu and gameplay captures at the
 same configuration: "This looks correct." DirectX 11 has the same matchers and the same
 arithmetic, not run.
+
+Sweep after AR-020 (2026-09-11), user's read "These all look correct": native desktop at each
+shape the capture output offers, the override set to the same size, DirectX 12 borderless,
+masking on, Expanded HUD, one menu and one gameplay capture each. 16:9 2560x1440 (no band,
+no scaling), 16:10 1680x1050 (no band, no scaling), 4:3 1600x1200 (band `(0,150 1600x900)`
+widened). 21:9 3440x1440 was read the night before (AR-018). The desktop is switched with
+`ChangeDisplaySettingsEx` from `scratchpad/shape_run.ps1` (copied to `C:\mgspf_tools`); the
+output under the CRU EDID has no 1920x1200, 32:9 or 5:4 mode, so those shapes were not run.
