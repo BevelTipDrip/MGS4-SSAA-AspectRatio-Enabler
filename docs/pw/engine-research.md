@@ -147,8 +147,12 @@ the game-code callers.
   the 650-canvas edge), right-anchored ones +85; the reticle stays. The live command
   `tbias <tx> <ty> <dx> <dy>` (or `tbias any`, `tbias clear`) moves a group by rewriting the
   translation row in the constant upload; it is the handle for these DrawIndexed elements.
-  **Verified in the mission** (2026-09-12, run pw_hud3): all eleven groups moved to the 21:9
-  edges with those biases, 3,822 uploads rewritten in ~6 s. The world basis is not always
+  **Verified in the mission** (2026-09-12, runs pw_hud3/pw_hud4): the groups moved to the
+  21:9 edges with those biases; the user's read found two text runs left behind, the gauge
+  percentage at `(454.8,65.5)` (scaled 0.75) and the item count at `(-5,32)`, and with those
+  added all thirteen moved (4,163 uploads rewritten in ~6 s). The full 21:9 set: left -85 for
+  `(-11,-8)` and `(8,-12)`; right +85 for `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`,
+  `(-3,6)`, `(-5,32)`, `(112,4)`, `(133,58)`, `(133,85)`, `(454.8,65.5)`. The world basis is not always
   identity: vertical text carries a 90-degree rotation in rows 5-6 and the gauges a 0.75 or
   0.70 scale; the translation row is canvas units regardless, so the matcher keys only on
   the ortho in row 1 and the translation. (A first attempt that required an identity basis
