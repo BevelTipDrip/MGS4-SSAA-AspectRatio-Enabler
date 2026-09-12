@@ -41,6 +41,20 @@ namespace
     // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
     constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
     SafetyHookMid g_AfterFit {};
+    // The two sites that turn the integer scale into a float: the game scaler (+596E5,
+    // `cvtsi2ss xmm1, rcx` after the getter; replaced by our value, the instruction skipped) and
+    // the render-scale store (+5B015, `addss xmm0, 0.5` then truncation; xmm0 replaced first).
+    // Forcing a fraction here reproduces the fractional scale of Afevis's patch on purpose.
+    constexpr uintptr_t kGameScaler = 0x596E5;
+    constexpr uintptr_t kRenderScaleStore = 0x5B015;
+    SafetyHookMid g_GameScaler {}, g_RenderScaleStore {};
+    // Scene target creation (+89F8D): edi = scale x canvas width, ebx = scale x canvas height,
+    // the descriptor in r15 (+0x1c width, +0x18 height in canvas units). Afevis replaces the
+    // full-canvas targets' size here with the output size; the experiment does the same.
+    constexpr uintptr_t kSceneCreate = 0x89F8D;
+    SafetyHookMid g_SceneCreate {};
+    int g_SceneW = 0, g_SceneH = 0;
+    float g_FloatScale = 0;
 
     template <typename T>
     bool PatchChecked(uintptr_t rva, T expected, T value, const char* what)
@@ -96,6 +110,40 @@ namespace InternalSize
             }
             spdlog::info("PW internal size: scene {}x{}, post chain {}x{}, at {} of {} sites.", sceneW, sceneH, postW, postH, ok, std::size(kImm32) + std::size(kImm64) + std::size(kPostImm32));
             iInternalWidth = postW; iInternalHeight = postH;
+        }
+        if (iRenderScaleHundredths > 0)
+        {
+            g_FloatScale = static_cast<float>(iRenderScaleHundredths) / 100.0f;
+            const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+            const uint8_t* a = reinterpret_cast<const uint8_t*>(base + kGameScaler);
+            const uint8_t* b = reinterpret_cast<const uint8_t*>(base + kRenderScaleStore);
+            if (a[0] == 0xF3 && a[1] == 0x48 && a[2] == 0x0F && a[3] == 0x2A && b[0] == 0xF3 && b[1] == 0x0F && b[2] == 0x58)
+            {
+                g_GameScaler = safetyhook::create_mid(base + kGameScaler, [](SafetyHookContext& ctx) { ctx.xmm1.f32[0] = g_FloatScale; ctx.rip += 5; });
+                g_RenderScaleStore = safetyhook::create_mid(base + kRenderScaleStore, [](SafetyHookContext& ctx) { ctx.xmm0.f32[0] = g_FloatScale; });
+                spdlog::info("PW internal size: EXPERIMENT: float render scale forced to {:.2f} at the game scaler and the render-scale store ({}/{}).", g_FloatScale, g_GameScaler ? "ok" : "FAILED", g_RenderScaleStore ? "ok" : "FAILED");
+            }
+            else { spdlog::warn("PW internal size: float scale sites do not look as expected; experiment not installed."); }
+        }
+        if (iSceneWidth > 0 && iSceneHeight > 0)
+        {
+            g_SceneW = iSceneWidth; g_SceneH = iSceneHeight;
+            const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+            const uint8_t* c = reinterpret_cast<const uint8_t*>(base + kSceneCreate);
+            if (c[0] == 0xE8)   // call +17D20
+            {
+                g_SceneCreate = safetyhook::create_mid(base + kSceneCreate, [](SafetyHookContext& ctx)
+                {
+                    const auto* desc = reinterpret_cast<const int32_t*>(ctx.r15);
+                    if (mgs4e::mem::Readable(desc, 32) && desc[0x1c / 4] == 480 && desc[0x18 / 4] == 272)
+                    {
+                        ctx.rdi = static_cast<uint32_t>(g_SceneW);
+                        ctx.rbx = static_cast<uint32_t>(g_SceneH);
+                    }
+                });
+                spdlog::info("PW internal size: EXPERIMENT: full-canvas scene targets created at {}x{} ({}).", g_SceneW, g_SceneH, g_SceneCreate ? "ok" : "hook FAILED");
+            }
+            else { spdlog::warn("PW internal size: scene creation site does not look as expected; experiment not installed."); }
         }
         if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
         {

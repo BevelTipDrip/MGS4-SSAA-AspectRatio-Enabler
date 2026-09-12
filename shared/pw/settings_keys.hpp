@@ -16,6 +16,9 @@ namespace mgspwe::keys
     // build does not know them. The tool shows them on the Peace Walker window so the knobs
     // can be turned without a research boot.
     constexpr const char* RenderScale = "Render Scale";                        // integer multiple of the 480x272 canvas; 0 = the game's own
+    constexpr const char* RenderScaleHundredths = "Render Scale Hundredths";   // experiment: force the two float copies of the scale to this / 100 (Afevis's fractional scale); 0 = off
+    constexpr const char* SceneSizeWidth = "Scene Size Width";                 // experiment: full-canvas scene targets created at this size instead of canvas x scale (Afevis's target replacement); 0 = off
+    constexpr const char* SceneSizeHeight = "Scene Size Height";
     constexpr const char* InternalSizeWidth = "Internal Size Width";           // post-chain target size; 0 = the scene size
     constexpr const char* InternalSizeHeight = "Internal Size Height";
     constexpr const char* OutputSizeWidth = "Output Size Width";               // the picture the game fits into the window; 0 = the game's table
