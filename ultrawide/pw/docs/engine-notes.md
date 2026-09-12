@@ -364,3 +364,14 @@ the two passes that then sample those textures, the fade `493494fd` (5.0 ms) and
 composite `7023c633` (3.9 ms), read them back across PCIe. The same window with the textures
 GPU-local: 7.7 ms and 60 fps. So the PSP VRAM mirror living in system memory is the whole
 8K performance problem; MSAA is 2 ms of it.
+
+**GPU-local textures across a play session** (user, several missions, ~52,000 frames at 8K with
+4x MSAA, 2026-09-13): zero Map calls on a live GPU-local texture. The 4,614 warnings the first
+build logged were address reuse (destroyed frame targets whose addresses came back as the UI's
+vertex buffers; every one described as "not a texture" and every Map succeeded); the tracker
+now verifies a live 2D texture without CPU access before flagging. `UpdateSubresource` writes
+would still succeed and are not errors.
+
+**Route note** (user): if the title/menu is not advanced promptly an unskippable cutscene
+starts, which is why marker-based replays that shifted the presses failed; the replay must
+keep the recording's cadence from the first press.
