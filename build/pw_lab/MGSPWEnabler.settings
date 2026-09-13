@@ -1,0 +1,63 @@
+; MGS Peace Walker SSAA and Aspect Ratio Enabler settings, LAB build. The keys are the normal
+; build's plus the research keys (all under [Graphics]). Edit by hand; unknown keys are kept.
+; This file goes in the game's install folder, next to the "mgspw" folder.
+
+[Graphics]
+; ---- the normal settings (see README of the normal build) ----
+; One of: "Use Display", "16:9", "16:10", "21:9", "32:9", "4:3"
+Aspect Ratio = "Use Display"
+Screen Resolution (16:9) = "3840x2160"
+Screen Resolution (16:10) = "1920x1200"
+Screen Resolution (21:9) = "3440x1440"
+Screen Resolution (32:9) = "5120x1440"
+Screen Resolution (4:3) = "1600x1200"
+Render Resolution (16:9) = "3840x2176 (8x)"
+Render Resolution (16:10) = "3840x2400 (8x)"
+Render Resolution (21:9) = "5200x2176 (8x)"
+Render Resolution (32:9) = "7736x2176 (8x)"
+Render Resolution (4:3) = "3840x2880 (8x)"
+Render Scale = 8
+; "Use Game Setting", "Fullscreen", "Borderless", "Windowed"
+Window Mode = "Use Game Setting"
+; "4x" or "Off"
+MSAA = "4x"
+Anisotropic Filtering = true
+GPU Local Textures = true
+
+; ---- research keys (the Lab build only) ----
+; Draw census: F11 logs the next N frames (every draw: target, shaders, textures, constants,
+; callers, vertex uploads). 2 is enough for a still frame; 12 spans a menu animation. A census
+; frame is several megabytes of log. Draw Census At (s) logs one automatically N seconds after
+; start (0 = only on F11 or command).
+Draw Census Frames = 2
+Draw Census At (s) = 0
+; Live commands: the plugin polls logs\MGSPWEnabler_live.txt four times a second and runs each
+; line ("census 12", "tbias ...", "bias ..."), then empties the file. F11 needs this on.
+Live Commands = true
+; GPU timing: after each census, timestamp queries around every pass for this many frames and
+; a "PW timing:" table in the log (milliseconds per pass, frame rate over the window).
+Time Passes = true
+Time Frames = 60
+; Every shader's bytecode to logs\shaders\<hash>.<kind>.cso, for disassembly.
+Dump Shaders = false
+; Light Hooks: only the resolve is hooked (no per-draw hooks): the frame rate of a Release-like
+; build with the settings still applied. No census or timing while on.
+Light Hooks = false
+; One-off log lines at start-up.
+Log Loaded Modules = false
+Log Decrypt Timing = false
+Log Command Line = false
+; Experiments (0 = off): the post chain's target size when it should differ from the scene;
+; the swap chain's buffers at the internal size; a fractional render scale (breaks effects,
+; kept as the record of why); the full-canvas scene targets forced to a size.
+Internal Size Width = 0
+Internal Size Height = 0
+Back Buffer At Internal Size = false
+Render Scale Hundredths = 0
+Scene Size Width = 0
+Scene Size Height = 0
+
+[Debugging]
+; On for every Lab run: every setting prints what it resolved to, and every hook says whether
+; it was installed.
+Debug Logging = true

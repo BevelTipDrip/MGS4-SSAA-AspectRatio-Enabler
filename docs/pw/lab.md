@@ -28,7 +28,7 @@ the marker still wins for a research boot):
 | `Log Command Line` | the arguments the launcher passed |
 | `Draw Census At (s)` | seconds after init to log a census automatically (0: only on command) |
 | `Draw Census Frames` | frames per census; keep it 2, see section 4 |
-| `Live Commands` | poll `C:\mgspf_tools\pw\live.txt` for commands (section 5) |
+| `Live Commands` | poll `logs\MGSPWEnabler_live.txt` (in the game folder) for commands (section 5) |
 
 ## 2. The harness (`C:\mgspf_tools\pw\`)
 
@@ -102,8 +102,8 @@ What the census established about the engine is in `engine-research.md`.
 
 ## 5. Live commands
 
-With `Live Commands` on, the ASI polls `C:\mgspf_tools\pw\live.txt` four times a second,
-runs each line and truncates the file:
+With `Live Commands` on, the ASI polls `logs\MGSPWEnabler_live.txt` in the game folder four
+times a second, runs each line and truncates the file (the harness's `$LiveFile`):
 
 | Command | What |
 | --- | --- |

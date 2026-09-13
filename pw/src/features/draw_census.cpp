@@ -355,14 +355,16 @@ namespace
         return out;
     }
 
-    // Lab key Dump Shaders: every shader's bytecode goes to C:\mgspf_tools\pw\shaders\<hash>.<kind>.cso
+    // Lab key Dump Shaders: every shader's bytecode goes to <game root>\logs\shaders\<hash>.<kind>.cso
     // so the passes can be read with D3DDisassemble offline.
     void DumpShader(const void* code, size_t size, uint64_t hash, const char* kind)
     {
         if (!DrawCensus::bDumpShaders) { return; }
-        CreateDirectoryA("C:/mgspf_tools/pw/shaders", nullptr);
+        const std::string dir = (mgs4e::game::Root() / "logs" / "shaders").string();
+        CreateDirectoryA((mgs4e::game::Root() / "logs").string().c_str(), nullptr);
+        CreateDirectoryA(dir.c_str(), nullptr);
                 // The 8-hex-digit id used everywhere else is the first 8 digits of the 16-digit hash.
-        const std::string byId = std::format("C:/mgspf_tools/pw/shaders/{}.{}.cso", std::format("{:016x}", hash).substr(0, 8), kind);
+        const std::string byId = std::format("{}/{}.{}.cso", dir, std::format("{:016x}", hash).substr(0, 8), kind);
         HANDLE f = CreateFileA(byId.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f == INVALID_HANDLE_VALUE) { return; }
         DWORD written = 0;
@@ -1288,7 +1290,9 @@ namespace
     }
 
     // ---- triggers ----------------------------------------------------------------------------------
-    constexpr const char* kLiveFile = "C:/mgspf_tools/pw/live.txt";
+    // Live commands: <game root>\logs\MGSPWEnabler_live.txt, polled every 250 ms and truncated
+    // once read. (The harness's live.txt is the same file through a junction or a copy.)
+    std::string LiveFile() { return (mgs4e::game::Root() / "logs" / "MGSPWEnabler_live.txt").string(); }
 
     void RunCommand(const std::string& line)
     {
@@ -1325,7 +1329,7 @@ namespace
             f11Down = down;
             static int tick = 0;
             if (++tick % 5) { continue; }   // the command file every 250 ms
-            HANDLE file = CreateFileA(kLiveFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+            HANDLE file = CreateFileA(LiveFile().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
             if (file == INVALID_HANDLE_VALUE) { continue; }
             char buf[512] {};
             DWORD read = 0;
@@ -1333,7 +1337,7 @@ namespace
             CloseHandle(file);
             if (read == 0) { continue; }
             std::string text(buf, read);
-            HANDLE clear = CreateFileA(kLiveFile, GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, 0, nullptr);
+            HANDLE clear = CreateFileA(LiveFile().c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, 0, nullptr);
             if (clear != INVALID_HANDLE_VALUE) { CloseHandle(clear); }
             std::istringstream lines(text);
             std::string line;
@@ -1384,7 +1388,7 @@ namespace DrawCensus
         }
         if (bLiveCommands)
         {
-            spdlog::info("PW live: polling {}.", kLiveFile);
+            spdlog::info("PW live: polling {}.", LiveFile());
             std::thread(PollThread).detach();
         }
     }
