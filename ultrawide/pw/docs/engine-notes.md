@@ -129,7 +129,7 @@ is its fields:
 
 | Field | Meaning | Source |
 | --- | --- | --- |
-| `+0x2960` | window mode: 0 windowed, 1 fullscreen window on the monitor rect (frame stripped by `SetWindowLongA`), 2 borderless at the monitor's largest display mode **with an exclusive-fullscreen swap chain** | setting 3 |
+| `+0x2960` | window mode, the game's own numbering (verified against its Options menu 2026-09-13): 0 Borderless (a frameless window on the monitor rect, frame stripped by `SetWindowLongA`), 1 Windowed (a normal window at the saved or preset size), 2 Fullscreen (the monitor's largest display mode **with an exclusive-fullscreen swap chain**) | setting 3 |
 | `+0x2964` | previous mode | |
 | `+0x2968` | applied mode | setting 246 (`0xf6`) |
 | `+0x296c` | `-resolution` (0 Original, 1 FHD) | launcher argument |
