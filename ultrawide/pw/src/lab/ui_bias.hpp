@@ -14,12 +14,33 @@ namespace UiBias
     // True while any bias is registered; the census keeps the bound texture current when so.
     bool Active();
 
-    // The unmapped buffer is a constant buffer of `size` bytes, still writable.
-    void OnConstantUnmap(void* data, size_t size);
+    // The unmapped buffer is a constant buffer of `size` bytes, still writable. Returns true
+    // when it is a UI upload (the 480x272 ortho in its first row), for the draw that follows.
+    bool OnConstantUnmap(void* data, size_t size, float* shiftUnits = nullptr);
+
+    // Wide-scene experiment (2026-09-13): the scene target is `wideUnits` canvas units wide at
+    // integer `scale` while the UI keeps its 480-unit canvas. Installs the camera hooks; the
+    // census then calls BeforeDraw/AfterDraw around every draw with `uiUpload` from
+    // OnConstantUnmap, and UI draws get a centred 480-unit viewport.
+    void ConfigureWideScene(int wideUnits, int scale);
+    bool WideSceneActive();
+    // psHash: the bound pixel shader's hash (0 if unknown); the post chain's shaders stay wide.
+    // shiftUnits: the wide-scene move (canvas units) recorded for the bound constants by
+    // OnConstantUnmap; the element viewport slides by it instead of the translation.
+    void BeforeDraw(ID3D11DeviceContext* ctx, bool uiUpload, uint64_t psHash, float shiftUnits);
+    // What BeforeDraw would do with this draw, for the census line: "3d" (no UI ortho),
+    // "post" (post-chain shader), "full" (full-canvas quad), "element" (centred).
+    const char* Classify(ID3D11DeviceContext* ctx, bool uiUpload, uint64_t psHash);
+    void AfterDraw(ID3D11DeviceContext* ctx, bool uiUpload);
+    // The game sets its viewport and scissor from the HUD scale width (480 x scale) at the
+    // origin, so on the wide target everything lands in the left part. These shift such a
+    // rectangle to the centre of the wide target (in place; true when anything changed).
+    bool AdjustViewports(UINT count, D3D11_VIEWPORT* viewports);
+    bool AdjustScissors(UINT count, D3D11_RECT* rects);
 
     // The unmapped buffer is a vertex buffer of `size` bytes, still writable; `texture` is
     // the census's description of the texture bound to pixel-shader slot 0 ("WxH fmtN 0x...").
-    void OnVertexUnmap(const std::string& texture, void* data, size_t size);
+    void OnVertexUnmap(ID3D11DeviceContext* ctx, const std::string& texture, void* data, size_t size);
 
     // True once the mission HUD has been drawn (the timer group's constant upload seen); logged
     // once as "GAMEPLAY HUD" so a run script can wait for it before measuring.
