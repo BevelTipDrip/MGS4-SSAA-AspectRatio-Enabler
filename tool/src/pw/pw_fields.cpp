@@ -159,7 +159,7 @@ namespace mgs4e::tool::pw
                             .ShownWhen(K::AspectRatio, { K::AspectRatio_Display }),
 
                         F::Choice(G, K::Msaa, kHelp_Msaa, K::Msaa_4x, { K::Msaa_4x, K::Msaa_Off }),
-                        F::Int(G, K::AnisotropicFiltering, kHelp_Anisotropy, 0, 0, 16),
+                        F::Bool(G, K::AnisotropicFiltering, kHelp_Anisotropy, true),
                         F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocalRelease, true),
                     }},
                 }},

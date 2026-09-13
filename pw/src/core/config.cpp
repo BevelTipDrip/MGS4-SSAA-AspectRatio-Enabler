@@ -168,8 +168,14 @@ namespace mgspwe::config
             Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
             Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
             Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
-            Read(ini, Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
-            Report(Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
+            if (const auto af = ini.Raw(Graphics, AnisotropicFiltering))
+            {
+                // A checkbox in the tool (true = 16x); a number from a hand-edited file is taken as the level.
+                if (*af == "true") { DrawCensus::iAnisotropy = 16; }
+                else if (*af == "false") { DrawCensus::iAnisotropy = 0; }
+                else { Read(ini, Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy); }
+                Report(Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
+            }
             Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);
