@@ -486,7 +486,7 @@ namespace
             const size_t stride = count ? st.lastVertexUploadSize / count : 0;
             spdlog::info("PW census:   vertices {}B {} head {} | {}", st.lastVertexUploadSize,
                 DecodeVertices(st.lastVertexUpload.data(), st.lastVertexUpload.size(), stride),
-                Hex(st.lastVertexUpload.data(), std::min<size_t>(st.lastVertexUpload.size(), 24)), st.lastVertexUploadCaller);
+                Hex(st.lastVertexUpload.data(), std::min<size_t>(st.lastVertexUpload.size(), st.lastVertexUpload.size() <= 256 ? 256 : 24)), st.lastVertexUploadCaller);
             st.lastVertexUpload.clear();
         }
     }

@@ -42,6 +42,7 @@ namespace
     // offsets into the display object (rsi): picture w/h at +0x2940/+0x2944, x/y offset at
     // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
     constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
+    constexpr uintptr_t kGameWindow = 0x107BD50;   // the game window (HWND), .data; the swap chain desc takes it from here
     SafetyHookMid g_AfterFit {};
     // The two sites that turn the integer scale into a float: the game scaler (+596E5,
     // `cvtsi2ss xmm1, rcx` after the getter; replaced by our value, the instruction skipped) and
@@ -126,10 +127,9 @@ namespace InternalSize
         const int canvasUnits = (iWideCanvasUnits > 480) ? iWideCanvasUnits : 480;
         const int sceneW = iRenderScale > 0 ? canvasUnits * iRenderScale : iInternalWidth;
         const int sceneH = iRenderScale > 0 ? 272 * iRenderScale : iInternalHeight;
-        // The two UI-scale width sites stay at 480 units: they set the UI scale (uniform, from the
-        // width) and the gameplay viewport (scale x 480x272); the viewport is widened per call and
-        // the UI narrowed per draw by the private module.
-        const int hudW = iRenderScale > 0 ? 480 * iRenderScale : iInternalWidth;
+        // The two width sites of the UI-scale function follow the scene: with a wide canvas the
+        // private module pins the UI scale itself (the engine's own canvas fields do the rest).
+        const int hudW = sceneW;
         if (iWideCanvasUnits > 480 && iRenderScale > 0 && iSceneWidth == 0 && iSceneHeight == 0)
         {
             iSceneWidth = sceneW; iSceneHeight = sceneH;   // the full-canvas targets must follow
@@ -223,14 +223,23 @@ namespace InternalSize
                         obj[0x2940 / 4] = iInternalWidth; obj[0x2944 / 4] = iInternalHeight;
                         obj[0x2948 / 4] = 0; obj[0x294C / 4] = 0;
                     }
-                    else if (iWideCanvasUnits > 480 && clientW > 0 && clientH > 0)
+                    else if (iWideCanvasUnits > 480)
                     {
-                        const double aspect = static_cast<double>(iWideCanvasUnits) / 272.0;
-                        int w = clientW, h = static_cast<int>(clientW / aspect + 0.5);
-                        if (h > clientH) { h = clientH; w = static_cast<int>(clientH * aspect + 0.5); }
-                        obj[0x2940 / 4] = w; obj[0x2944 / 4] = h;
-                        obj[0x2948 / 4] = (clientW - w) / 2; obj[0x294C / 4] = (clientH - h) / 2;
-                        spdlog::info("PW window: fit overridden for the {}-unit canvas: picture {}x{} at {},{}.", iWideCanvasUnits, w, h, obj[0x2948 / 4], obj[0x294C / 4]);
+                        // The game fits a 480x272-shaped picture; the wide canvas needs its own
+                        // aspect fitted into the window.
+                        // The window is still at its start-up size when this runs (the chain is
+                        // then created at the picture size), so the box is the output size, which
+                        // is the window size the user chose.
+                        int cw = iOutputWidth, ch = iOutputHeight;
+                        if (cw > 0 && ch > 0)
+                        {
+                            const double aspect = static_cast<double>(iWideCanvasUnits) / 272.0;
+                            int w = cw, h = static_cast<int>(cw / aspect + 0.5);
+                            if (h > ch) { h = ch; w = static_cast<int>(ch * aspect + 0.5); }
+                            obj[0x2940 / 4] = w; obj[0x2944 / 4] = h;
+                            obj[0x2948 / 4] = (cw - w) / 2; obj[0x294C / 4] = (ch - h) / 2;
+                            spdlog::info("PW window: fit overridden for the {}-unit canvas: box {}x{}, picture {}x{} at {},{}.", iWideCanvasUnits, cw, ch, w, h, obj[0x2948 / 4], obj[0x294C / 4]);
+                        }
                     }
                 });
                 if (bBackBufferAtInternal) { spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", iInternalWidth, iInternalHeight, g_AfterFit ? "hooked" : "hook FAILED"); }

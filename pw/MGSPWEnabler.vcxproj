@@ -89,6 +89,7 @@
     <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
     <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
     <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp" Condition="'$(Configuration)'=='Lab' And Exists('$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp')" />
+    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\lab\wide_canvas.cpp" Condition="'$(Configuration)'=='Lab' And Exists('$(EnablerExternal)ultrawide\pw\src\lab\wide_canvas.cpp')" />
     <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

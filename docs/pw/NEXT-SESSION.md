@@ -80,3 +80,17 @@ research keys remain Lab-only.
   run: the user says when to package).
 - MGS4 regression boot after the shared-header change (`boot_to_aim.ps1 -Deploy -StopAtMenu`
   against the baseline log in the session scratchpad); waits for the user to be off the game.
+
+## 2026-09-12 late: the 21:9 canvas works (Lab)
+
+Render Scale 10, Wide Canvas Units 650, Output 3440x1440, Window Mode 0 on a 3440x1440
+desktop: world at 21:9, HUD and menus at the 16:9 scale and centred, HUD groups at the edges
+(the register's biases), full-screen effects across the frame, no flicker. The method and the
+sites are in the private module (external/ultrawide/pw: wide_canvas.cpp, engine-notes.md).
+
+Next:
+- The user saw the picture "slightly darker" than 16:9: compare against a clean 16:9 run
+  (Wide Canvas Units 0) in the same spot before assuming anything.
+- Bake the thirteen HUD moves into the shipped fix (private aspect_ratio.cpp) instead of the
+  live `tbias` commands; table the pause menu, Codec and overlays.
+- The Window Mode knob and the saved-display-mode log belong in the Release feature set.
