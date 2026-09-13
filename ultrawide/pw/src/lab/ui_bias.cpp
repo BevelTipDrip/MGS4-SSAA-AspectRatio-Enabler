@@ -1,6 +1,7 @@
 #include "pch.hpp"
 #include <atomic>
 #include "ui_bias.hpp"
+#include "wide_canvas.hpp"
 
 #include "game.hpp"
 #include "lab.hpp"
@@ -41,7 +42,7 @@ namespace
     constexpr uintptr_t kCameraFov = 0x8EBB1;
     SafetyHookMid g_CameraAspect {}, g_CameraFov {};
     int g_WideUnits = 0, g_WideScale = 0;
-    std::atomic<uint32_t> g_DrawCalls { 0 }, g_ElementDraws { 0 }, g_Narrowed { 0 }, g_WideOrthoShifted { 0 };
+    std::atomic<uint32_t> g_DrawCalls { 0 }, g_ElementDraws { 0 }, g_Narrowed { 0 }, g_WideOrthoShifted { 0 }, g_PostQuadsWidened { 0 };
     struct LastRect { bool valid = false; size_t count = 0; float x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
     std::unordered_map<ID3D11DeviceContext*, LastRect> g_LastRect;
     float g_WideInvAspect = 0, g_WideRatio = 1;
@@ -73,27 +74,9 @@ namespace UiBias
 
     void ConfigureWideScene(int wideUnits, int scale)
     {
-        if (wideUnits <= 480 || scale <= 0) { return; }
-        g_WideUnits = wideUnits; g_WideScale = scale;
-        g_WideInvAspect = 272.0f / static_cast<float>(wideUnits);
-        g_WideRatio = static_cast<float>(wideUnits) / 480.0f;
-        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-        const uint8_t* a = reinterpret_cast<const uint8_t*>(base + kCameraAspect);
-        const uint8_t* f = reinterpret_cast<const uint8_t*>(base + kCameraFov);
-        if (a[0] == 0x0F && a[1] == 0x28 && a[2] == 0xDA && f[0] == 0x0F && f[1] == 0x28 && f[2] == 0xF2)
-        {
-            g_CameraAspect = safetyhook::create_mid(base + kCameraAspect, [](SafetyHookContext& ctx)
-            {
-                *reinterpret_cast<float*>(ctx.rbx + 0x250) = g_WideInvAspect;
-            });
-            g_CameraFov = safetyhook::create_mid(base + kCameraFov, [](SafetyHookContext& ctx)
-            {
-                ctx.xmm2.f32[0] /= g_WideRatio;
-            });
-            spdlog::info("PW wide scene: {} canvas units at scale {}: inverse aspect {:.4f}, FOV / {:.4f}; UI draws in a centred 480-unit viewport ({}/{}).",
-                wideUnits, scale, g_WideInvAspect, g_WideRatio, g_CameraAspect ? "ok" : "FAILED", g_CameraFov ? "ok" : "FAILED");
-        }
-        else { spdlog::warn("PW wide scene: camera sites do not look as expected; not installed."); g_WideUnits = 0; }
+        // The engine's own wide canvas (wide_canvas.cpp). The D3D-level centring below
+        // (viewport slides, classification) is left off: g_WideUnits stays 0.
+        WideCanvas::Install(wideUnits, scale);
     }
 
     bool WideSceneActive() { return g_WideUnits > 0; }
@@ -260,6 +243,25 @@ namespace UiBias
     void OnVertexUnmap(ID3D11DeviceContext* ctx, const std::string& texture, void* data, size_t size)
     {
         std::lock_guard lock(g_Mutex);
+        // The post chain's full-canvas quads: six 20-byte vertices (u, v, x, y, z). The
+        // downscale into the 640x640 blur target samples the scene over u 0..480 (canvas units
+        // of the source), the composite draws over x 0..480; both hard-sized 480, so on a wider
+        // canvas the blur covers 74% of a 21:9 frame. Both become the canvas width.
+        // (the upload is 120 bytes of vertices plus up to 8 of padding: 128 B for six)
+        if (WideCanvas::Active() && size >= 120 && size <= 256 && (size % 20 == 0 || size % 20 == 8))
+        {
+            auto* f = static_cast<float*>(data);
+            const float units = static_cast<float>(WideCanvas::Units());
+            bool any = false;
+            for (size_t i = 0; i < size / 20; i++)
+            {
+                // x (the composite's position) and u (the downscale's source rectangle, in
+                // canvas units of the scene texture): both hard-sized 480, both the canvas width.
+                if (std::fabs(f[i * 5 + 2] - 480.0f) < 0.01f) { f[i * 5 + 2] = units; any = true; }
+                if (std::fabs(f[i * 5 + 0] - 480.0f) < 0.01f) { f[i * 5 + 0] = units; any = true; }
+            }
+            if (any && g_PostQuadsWidened.fetch_add(1) == 0) { spdlog::info("PW wide canvas: first post-chain quad widened from 480 to {} units.", units); }
+        }
         const size_t stride = GuessStride(size);
         if (stride < 12 || size < stride) { return; }
         const size_t count = size / stride;

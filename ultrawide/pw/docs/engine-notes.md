@@ -394,3 +394,48 @@ sites assume, the camera inverse aspect and canvas size rewrite, the CreateRT2 l
 replacement), which his code applies even at 16:9 because 480x272 is 1.7647, not 1.7778.
 Our path never widens the canvas, so bloom and flare keep the game's own geometry. When our
 aspect module widens the canvas at 21:9, these effects are the ones to re-check first.
+
+## The wide canvas that works (Measured, 2026-09-12 late evening, user-confirmed)
+
+Result on the 3440x1440 desktop with Render Scale 10, Wide Canvas Units 650, Output 3440x1440,
+Window Mode 0: the world fills 21:9 at correct proportions, the HUD and menus are at the 16:9
+scale and centred, the thirteen HUD groups sit at the 21:9 edges with the register's +-85
+translation biases, and the full-screen effects (bloom, glare, colour filter) cover the whole
+frame with no flicker. Open: the picture looked "slightly darker" to the user than 16:9; to be
+compared against a clean 16:9 run.
+
+**How (private `src/lab/wide_canvas.cpp`, `pw/tools/afevis_sites.py`):** the engine's own
+canvas fields, exactly Afevis's hook set on our integer scale (every one of his 24 patterns hits
+once in the clean dump): Camera Config `+8EA17` (int16 UI offset at +580/+582 = (85, 0) when
+the magic at +576 is 67175190), Aspect Ratio `+8EE22` (float inverse aspect at +592, uint16
+canvas 650x272 at +584/+586), HUD Scaler `+563E3` (xmm6 = xmm2 = the integer scale), HUD Offset
+`+8EDE3` (xmm0 and rax zeroed), FOV `+8EBC8` (xmm6 /= 650/480, *after* the raw value is stored
+at +0x254; dividing xmm2 before the store at +8EBB1, as my first attempt did, changes other
+consumers), Culling FOV `+8EE94` (xmm0 /=), Scissoring `+5A31F` (rax = rax * 2 * ratio),
+Loading Screens `+78609` (rdx/r8 = offset + 2048), Movies `+440FAB` (rcx/rdx = offset), Color
+Filter `+2EF2C8`, Glare `+19469B`, Half Glare `+194A5A`, Item Pickup Markers `+FEECA`, Damage
+Overlay `+491F0B`, Grenade Arc `+6C3E28`, Hit Markers `+6C1890` (all as his). His GetRT4/GetRT5
+(`+D7D42`, `+8F539`) create output-sized targets and are not needed on our path; his Game
+Scaler / GetRenderScale are not needed (our scale getter already returns the integer).
+
+**Size sites:** scene, post and packed sites = 6500x2720 (units x scale); the two width
+immediates of the UI-scale function (`+56306`/`+56327`) also 6500 (the scale is pinned by the
+HUD Scaler hook; left at 4800 they size the gameplay viewport 4800 wide). The picture fit
+(`+1A366`) is overridden to the output size at 0,0: the game fits a 16:9 picture at the output
+width, and the window is still at its start-up size when the fit runs (the chain is then
+created at the picture size), so the client rect is not usable there.
+
+**The two 480s the engine keeps (private `ui_bias.cpp`, `OnVertexUnmap`):** the post chain's
+quads are six 20-byte vertices (u, v, x, y, z) with the post vertex shaders (`80fc4e25`,
+`f335c4d1`) hard-coding the 2/480 ortho and then applying cb0[132]/cb0[133] (scale/offset the
+engine sets for the 650 canvas). The downscale into the 640x640 blur target samples the scene
+over u 0..480 (canvas units of the source texture), the composite draws over x 0..480; both
+are rewritten to 650 at upload (128-byte uploads: 120 of vertices plus padding). The fade quad
+already carries 650 (it reads the canvas fields). Before the u fix the bloom stopped at 74% of
+the width; before the x fix it was displaced. The 384- and 6144-vertex tile draws are the
+blur kernel on the 640 target and the UI atlas, not the blur source.
+
+**What did not work (do not repeat):** D3D-level centring (narrowed/slid viewports per draw,
+classification by vertex rectangle and shader), rewriting the UI ortho in cb0 (breaks the final
+blit and the depth-of-field tiles), widening the game's 4800 viewport at RSSetViewports. The
+engine's canvas fields make all of it unnecessary.
