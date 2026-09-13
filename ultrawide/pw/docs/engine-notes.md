@@ -369,6 +369,17 @@ composite `7023c633` (3.9 ms), read them back across PCIe. The same window with 
 GPU-local: 7.7 ms and 60 fps. So the PSP VRAM mirror living in system memory is the whole
 8K performance problem; MSAA is 2 ms of it.
 
+**Why the flags are there (user's reading, 2026-09-13, consistent with everything measured):**
+the PSP had 2 MB of embedded VRAM and a fast path to its 32 MB of main memory, so the original
+engine used main memory as the backing store for its frame: draw, copy the frame out, pull it
+back in as a texture when an effect needed it (the 64-unit tile pass into a 512-wide texture,
+the PSP framebuffer stride, is the same heritage). The port kept the engine's copies and gave
+the "main memory" textures CPU access because that is what main memory meant in the original
+code; nothing on the PC side reads them from the CPU. Clearing the flag leaves the copy dance
+intact and lets the buffers live where the GPU is, which is why the cost scales with the frame
+size and vanishes at low render scales. Smaller textures with CPU flags were never measured and
+are left alone; some may genuinely be streamed through Map.
+
 **GPU-local textures across a play session** (user, several missions, ~52,000 frames at 8K with
 4x MSAA, 2026-09-13): zero Map calls on a live GPU-local texture. The 4,614 warnings the first
 build logged were address reuse (destroyed frame targets whose addresses came back as the UI's
