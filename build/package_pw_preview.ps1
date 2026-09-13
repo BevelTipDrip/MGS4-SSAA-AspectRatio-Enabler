@@ -47,6 +47,7 @@ if (Test-Path $loaderDir) { Remove-Item $loaderDir -Recurse -Force }
 & $sevenZip x -y "-o$loaderDir" $LoaderZip | Out-Null
 $loaderDll = Get-ChildItem $loaderDir -Filter '*.dll' | Select-Object -First 1
 if (-not $loaderDll) { throw "No DLL inside $LoaderZip." }
+$loaderVersion = (Get-Item $loaderDll.FullName).VersionInfo.ProductVersion
 Copy-Item $loaderDll.FullName (Join-Path $stage 'mgspw\winmm.dll')
 
 Copy-Item $asiPw (Join-Path $stage 'mgspw\scripts\MGSPWEnabler.asi')
@@ -63,4 +64,4 @@ Remove-Item $stage -Recurse -Force
 Remove-Item $loaderDir -Recurse -Force
 
 Write-Host "Packaged $zip"
-Write-Host "  MGSPWEnabler.asi $((Get-Item $asiPw).Length) bytes, loader $($loaderDll.Name) $((Get-Item $loaderDll.FullName).VersionInfo.ProductVersion)"
+Write-Host "  MGSPWEnabler.asi $((Get-Item $asiPw).Length) bytes, loader $($loaderDll.Name) $loaderVersion"
