@@ -168,6 +168,8 @@ namespace mgspwe::config
             Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
             Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
             Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
+            Read(ini, Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
+            Report(Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
             Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);

@@ -106,3 +106,13 @@ the requested rate with the display's current one for exclusive chains (3840x216
 the user's desktop): 60 frames per second, no stutter, user-confirmed. The hitch log (a warning
 per frame over twice the running average, with what happened inside it) and the chain's actual
 mode line stay in the Lab build. For Release this belongs in the Window Mode feature.
+
+## 2026-09-13: anisotropic filtering (Lab option, verified)
+
+The game creates no anisotropic sampler: in a mission every sampler is MIN_MAG_MIP_LINEAR,
+MIN_MAG_LINEAR_MIP_POINT or POINT with MaxAnisotropy 0 or 1 (census sampler log, option off).
+The Anisotropic Filtering option (2..16) makes every linear, non-comparison sampler anisotropic
+at that level at creation; point samplers stay as they are. 16x confirmed by the user with no
+visible side effects. Note: the game reads created samplers' descriptions back into its
+template, so with the option on later creations already carry the filter; judge the game's own
+use only with the option off.

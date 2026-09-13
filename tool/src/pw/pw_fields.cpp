@@ -89,6 +89,10 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_RenderScaleDisplay =
             "With Use Display the canvas is not known until start-up, so the render size is given as the integer\n"
             "multiple of the canvas: 4 = the game's Full HD setting, 8, 10, 12, 16.";
+        constexpr const char* kHelp_Anisotropy =
+            "Anisotropic filtering on every texture the game samples with linear filtering (its own samplers use\n"
+            "none). 16 is free on any modern card and keeps ground and wall textures sharp at grazing angles.\n"
+            "Samplers the game sets to point filtering are left alone. 0 = the game's own.";
         constexpr const char* kHelp_Msaa =
             "The game renders the scene with 4x MSAA. Off creates the scene targets single-sampled and turns the\n"
             "game's resolve into a copy: about 2 ms saved at 8K. The game's resolve shaders are written for 4\n"
@@ -155,6 +159,7 @@ namespace mgs4e::tool::pw
                             .ShownWhen(K::AspectRatio, { K::AspectRatio_Display }),
 
                         F::Choice(G, K::Msaa, kHelp_Msaa, K::Msaa_4x, { K::Msaa_4x, K::Msaa_Off }),
+                        F::Int(G, K::AnisotropicFiltering, kHelp_Anisotropy, 0, 0, 16),
                         F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocalRelease, true),
                     }},
                 }},

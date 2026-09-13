@@ -1,4 +1,5 @@
 #include "pch.hpp"
+#include <set>
 #include "draw_census.hpp"
 
 #include "game.hpp"
@@ -42,12 +43,14 @@ namespace
     constexpr size_t kDevCreateVertexShader = 12;
     constexpr size_t kDevCreatePixelShader = 15;
     constexpr size_t kDevCreateTexture2D = 5;
+    constexpr size_t kDevCreateSamplerState = 23;
     constexpr size_t kDevCreateComputeShader = 18;
     constexpr size_t kDevCreateDeferredContext = 27;
     // ID3D11DeviceContext vtable slots.
     constexpr size_t kCtxVSSetConstantBuffers = 7;
     constexpr size_t kCtxPSSetShaderResources = 8;
     constexpr size_t kCtxPSSetShader = 9;
+    constexpr size_t kCtxPSSetSamplers = 10;
     constexpr size_t kCtxVSSetShader = 11;
     constexpr size_t kCtxDrawIndexed = 12;
     constexpr size_t kCtxDraw = 13;
@@ -111,6 +114,7 @@ namespace
         void* ps = nullptr;
         ID3D11Buffer* vsCb[4] {};   // vertex shader constant buffer slots 0..3
         std::string texture = "-";      // pixel shader resource slot 0
+        std::string sampler = "-";      // pixel shader sampler slot 0 (filter/anisotropy, as the game created it)
         std::string csTexture = "-";    // compute shader resource slot 0
         std::string csTarget = "-";     // compute unordered access view slot 0
         void* cs = nullptr;
@@ -125,6 +129,7 @@ namespace
     };
     std::mutex g_Mutex;
     std::unordered_map<void*, ContextState> g_State;
+    void STDMETHODCALLTYPE Hooked_PSSetSamplers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11SamplerState* const* samplers);
     std::atomic<int> g_FramesToLog { 0 };
     std::atomic<uint64_t> g_Frame { 0 };
 
@@ -486,10 +491,10 @@ namespace
         bool uiBound = st.uiUpload;
         if (const auto ub = g_UiBuffer.find(static_cast<ID3D11Resource*>(st.vsCb[0])); ub != g_UiBuffer.end()) { uiBound = ub->second; }
         const char* wide = UiBias::WideSceneActive() ? UiBias::Classify(static_cast<ID3D11DeviceContext*>(self), uiBound, ps == g_ShaderHash.end() ? 0 : ps->second) : "";
-        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} vs={} ps={} {} {} | {}",
+        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} smp={} vs={} ps={} {} {} | {}",
             g_Frame.load(), HooksFor(self).name, st.draws, kind, count, start, baseVertex, static_cast<int>(st.topology),
             st.viewport.TopLeftX, st.viewport.TopLeftY, st.viewport.Width, st.viewport.Height,
-            st.scissor.left, st.scissor.top, st.scissor.right, st.scissor.bottom, st.target, st.texture,
+            st.scissor.left, st.scissor.top, st.scissor.right, st.scissor.bottom, st.target, st.texture, st.sampler,
             vs == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", vs->second).substr(0, 8),
             ps == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", ps->second).substr(0, 8),
             wide, cb, GameCallers(10));
@@ -880,6 +885,7 @@ namespace
             { kCtxPSSetShader, reinterpret_cast<void*>(Hooked_PSSetShader) },
             { kCtxVSSetConstantBuffers, reinterpret_cast<void*>(Hooked_VSSetConstantBuffers) },
             { kCtxPSSetShaderResources, reinterpret_cast<void*>(Hooked_PSSetShaderResources) },
+            { kCtxPSSetSamplers, reinterpret_cast<void*>(Hooked_PSSetSamplers) },
             { kCtxMap, reinterpret_cast<void*>(Hooked_Map) },
             { kCtxUnmap, reinterpret_cast<void*>(Hooked_Unmap) },
             { kCtxUpdateSubresource, reinterpret_cast<void*>(Hooked_UpdateSubresource) },
@@ -937,6 +943,58 @@ namespace
     }
 
     // Render targets and depth buffers as they are created: size, format, samples, and who asked.
+    SafetyHookInline Device_CreateSamplerState_hook {};
+    std::set<std::string> g_SamplersSeen;   // under g_Mutex
+    std::unordered_map<void*, std::string> g_SamplerName;   // sampler object -> "filter/aniso/address" as the game asked (under g_Mutex)
+    std::atomic<uint32_t> g_SamplersAniso { 0 };
+
+    // Every distinct sampler the game creates is logged once (filter, anisotropy, address
+    // modes, LOD bias); with iAnisotropy set, linear non-comparison samplers become
+    // anisotropic at that level (point samplers are left alone: the PSP-era art is meant to
+    // be nearest-filtered where the game says so).
+    HRESULT STDMETHODCALLTYPE Hooked_CreateSamplerState(ID3D11Device* self, const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** out)
+    {
+        D3D11_SAMPLER_DESC changed {};
+        if (desc)
+        {
+            const std::string key = std::format("filter={:#x} aniso={} address={}/{}/{} bias={:.2f} lod={:.0f}..{:.0f} cmp={}",
+                static_cast<int>(desc->Filter), desc->MaxAnisotropy, static_cast<int>(desc->AddressU), static_cast<int>(desc->AddressV), static_cast<int>(desc->AddressW),
+                desc->MipLODBias, desc->MinLOD, desc->MaxLOD, static_cast<int>(desc->ComparisonFunc));
+            bool fresh = false;
+            { std::lock_guard lock(g_Mutex); fresh = g_SamplersSeen.insert(key).second; }
+            if (fresh) { spdlog::info("PW census: sampler {} | {}", key, GameCallers(4)); }
+            const bool comparison = desc->Filter >= D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
+            const bool linear = desc->Filter == D3D11_FILTER_MIN_MAG_MIP_LINEAR || desc->Filter == D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT || desc->Filter == D3D11_FILTER_ANISOTROPIC;
+            if (DrawCensus::iAnisotropy >= 2 && !comparison && linear)
+            {
+                changed = *desc;
+                changed.Filter = D3D11_FILTER_ANISOTROPIC;
+                changed.MaxAnisotropy = static_cast<UINT>(std::min(16, DrawCensus::iAnisotropy));
+                desc = &changed;
+                if (g_SamplersAniso.fetch_add(1) == 0) { spdlog::info("PW census: linear samplers created anisotropic {}x from here on.", changed.MaxAnisotropy); }
+            }
+        }
+        const HRESULT r = Device_CreateSamplerState_hook.stdcall<HRESULT>(self, desc, out);
+        if (SUCCEEDED(r) && out && *out && desc)
+        {
+            const D3D11_SAMPLER_DESC& game = (desc == &changed) ? *reinterpret_cast<const D3D11_SAMPLER_DESC*>(&changed) : *desc;
+            std::lock_guard lock(g_Mutex);
+            g_SamplerName[*out] = std::format("{:#x}/a{}/{}{}{}", static_cast<int>(game.Filter), game.MaxAnisotropy, static_cast<int>(game.AddressU), static_cast<int>(game.AddressV), static_cast<int>(game.AddressW));
+        }
+        return r;
+    }
+
+    void STDMETHODCALLTYPE Hooked_PSSetSamplers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11SamplerState* const* samplers)
+    {
+        if (start == 0 && count > 0 && samplers)
+        {
+            std::lock_guard lock(g_Mutex);
+            const auto it = g_SamplerName.find(samplers[0]);
+            g_State[self].sampler = samplers[0] ? (it != g_SamplerName.end() ? it->second : std::string("?")) : std::string("-");
+        }
+        Original<decltype(&Hooked_PSSetSamplers)>(self, kCtxPSSetSamplers)(self, start, count, samplers);
+    }
+
     HRESULT STDMETHODCALLTYPE Hooked_CreateTexture2D(ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Texture2D** out)
     {
         D3D11_TEXTURE2D_DESC single {};
@@ -1193,6 +1251,7 @@ namespace
         Device_CreateDeferredContext_hook = safetyhook::create_inline(dv[kDevCreateDeferredContext], reinterpret_cast<void*>(Hooked_CreateDeferredContext));
         Device_CreateComputeShader_hook = safetyhook::create_inline(dv[kDevCreateComputeShader], reinterpret_cast<void*>(Hooked_CreateComputeShader));
         Device_CreateTexture2D_hook = safetyhook::create_inline(dv[kDevCreateTexture2D], reinterpret_cast<void*>(Hooked_CreateTexture2D));
+        Device_CreateSamplerState_hook = safetyhook::create_inline(dv[kDevCreateSamplerState], reinterpret_cast<void*>(Hooked_CreateSamplerState));
 
         ID3D11DeviceContext* immediate = context;
         if (!immediate) { device->GetImmediateContext(&immediate); }
