@@ -127,21 +127,28 @@ map background is drawn separately (the user reports it offset; not attributed y
 
 ### 5.3 In-mission HUD (≈285 UI draws in an 8,800-draw frame)
 
-| Group (translation row) | What | Elements | 21:9 bias |
-| --- | --- | --- | --- |
-| `(-11,-8)` | mission timer, "REMAINING ENEMIES" and count | ~60 DrawIndexed glyphs, 512x512 and 256x256 atlases, rotated | -85, 0 |
-| `(8,-12)` | life bar and vertical name text | bars at (8..16, 218..264), 30 glyphs | -85, 0 |
-| `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`, `(-3,6)` | item and weapon column | quads at x 445..472, glyphs | +85, 0 |
-| `(-5,32)` | item count | one glyph run | +85, 0 |
-| `(112,4)` | top-right gauge | (460..472, 8..83), scale 0.75 | +85, 0 |
-| `(454.8,65.5)` | gauge percentage | 4 glyphs, scale 0.75 | +85, 0 |
-| `(133,58)`, `(133,85)` | weapon and item boxes | (435..469, 78..142 / 190..254), scale 0.70 | +85, 0 |
-| `(234..246, 130..142)` | centre reticle dots | four quads | 0 |
+| Group (translation row) | What | Elements | Side (wider) | Side (taller) |
+| --- | --- | --- | --- | --- |
+| `(-11,-8)` | mission timer, "REMAINING ENEMIES" and count | ~60 DrawIndexed glyphs, 512x512 and 256x256 atlases, rotated | left | top |
+| `(8,-12)` | life bar and vertical name text | bars at (8..16, 218..264), 30 glyphs | left | bottom |
+| `(-6,38)`, `(-6,32)`, `(-6,6)`, `(-6,7)`, `(-6,12)`, `(-3,6)` | item and weapon column | quads at x 445..472, glyphs | right | bottom |
+| `(-5,32)` | item count | one glyph run | right | bottom |
+| `(112,4)` | top-right gauge | (460..472, 8..83), scale 0.75 | right | top |
+| `(454.8,65.5)` | gauge percentage | 4 glyphs, scale 0.75 | right | top |
+| `(133,58)`, `(133,85)` | weapon and item boxes | (435..469, 78..142 / 190..254), scale 0.70 | right | bottom |
+| `(234..246, 130..142)` | centre reticle dots | four quads | centre | centre |
 
-Verified in the mission on 2026-09-12: with those thirteen biases every group moved to the
-window edges (4,163 uploads rewritten in about six seconds; captures `pw_hud4`); the user's
-read confirmed the layout, after first catching the percentage and the item count as the two
-that had been left out.
+The move is half the canvas growth, signed by the side: on a wider canvas of W units, left
+groups get dx = -(W - 480) / 2 and right groups +(W - 480) / 2 (85 at 21:9); on a taller
+canvas of H units, top groups get dy = -(H - 272) / 2 and bottom groups +(H - 272) / 2 (44 at
+4:3, 14 at 16:10). The distance from the screen edge is then the 16:9 one in every case. The
+HUD cannot be split along one axis only: the top-right gauge goes right on a wide canvas and
+up on a tall one, the life bar goes left and down.
+
+Verified in the mission on 2026-09-12 (21:9, +-85, under Afevis's canvas and again under ours)
+and on 2026-09-13 (4:3, +-44, the taller canvas): every group at the edge with the 16:9 margin;
+the user's read confirmed both layouts (the 21:9 one after first catching the percentage and
+the item count as the two that had been left out).
 
 Not yet tabled: the pause menu, the Codec, alerts and pickups, the Mother Base menus, the
 in-mission overlays (damage, colour filter, glare), loading screens.
