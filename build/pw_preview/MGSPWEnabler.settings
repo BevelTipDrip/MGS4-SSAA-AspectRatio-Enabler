@@ -1,0 +1,52 @@
+; MGS Peace Walker SSAA and Aspect Ratio Enabler settings. Edit by hand or with the settings tool
+; from the full release; unknown keys are kept. Read by MGSPWEnabler.asi when the game starts.
+; This file goes in the game's install folder, next to the "mgspw" folder.
+
+[Graphics]
+; The shape of the picture. "16:9" is the game's own layout. Any other shape widens or heightens
+; the PSP canvas to it: the world fills the display at correct proportions, the HUD and menus keep
+; the 16:9 scale and stay centred, and the in-mission HUD groups sit at the display edges.
+; "Use Display" takes the primary display's shape at start-up.
+; One of: "Use Display", "16:9", "16:10", "21:9", "32:9", "4:3"
+Aspect Ratio = "Use Display"
+
+; The picture on screen (the window's client area, or the display mode in Fullscreen), one list
+; per shape; only the list of the selected shape is used. With "Use Display" the display's size.
+Screen Resolution (16:9) = "3840x2160"
+Screen Resolution (16:10) = "1920x1200"
+Screen Resolution (21:9) = "3440x1440"
+Screen Resolution (32:9) = "5120x1440"
+Screen Resolution (4:3) = "1600x1200"
+
+; The scene is rendered at an integer multiple of the PSP canvas and the game's own final blit
+; downscales it into the picture (the game's launcher offers 3x and 4x). 8x is 4K-class, 16x is
+; 8K-class; 16x wants GPU Local Textures on. One list per shape, as above.
+Render Resolution (16:9) = "3840x2176 (8x)"
+Render Resolution (16:10) = "3840x2400 (8x)"
+Render Resolution (21:9) = "5200x2176 (8x)"
+Render Resolution (32:9) = "7736x2176 (8x)"
+Render Resolution (4:3) = "3840x2880 (8x)"
+; With "Use Display" the canvas is only known at start-up, so the render size is this multiple.
+Render Scale = 8
+
+; "Use Game Setting" keeps the mode saved by the in-game Options. "Fullscreen" is the game's
+; exclusive mode (run at the display's current refresh rate), "Borderless" a frameless window the
+; size of the display, "Windowed" a normal window with the screen resolution as its client area.
+; The choice is written into the game's saved setting each launch; Options shows it.
+Window Mode = "Use Game Setting"
+
+; "4x" is the game's own; "Off" saves about 2 ms a frame at 8K.
+MSAA = "4x"
+
+; 16x anisotropic filtering on every texture the game samples linearly (the game uses none).
+Anisotropic Filtering = true
+
+; The game's full-size frame textures carry CPU write access and end up in system memory, so its
+; per-frame copies into them cross the PCIe bus (about 5 ms each at 8K). On, they stay in video
+; memory: 60 fps at 8K instead of 27. The game was never seen to write them from the CPU.
+GPU Local Textures = true
+
+[Debugging]
+; Writes more detail to logs\MGSPWEnabler_Game.log: which hooks were installed and what each
+; setting resolved to. Turn it on before reproducing a problem.
+Debug Logging = false
