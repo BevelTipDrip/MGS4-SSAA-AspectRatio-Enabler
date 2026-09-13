@@ -18,11 +18,9 @@ namespace UiBias
     // when it is a UI upload (the 480x272 ortho in its first row), for the draw that follows.
     bool OnConstantUnmap(void* data, size_t size, float* shiftUnits = nullptr);
 
-    // Wide-scene experiment (2026-09-13): the scene target is `wideUnits` canvas units wide at
-    // integer `scale` while the UI keeps its 480-unit canvas. Installs the camera hooks; the
-    // census then calls BeforeDraw/AfterDraw around every draw with `uiUpload` from
-    // OnConstantUnmap, and UI draws get a centred 480-unit viewport.
-    void ConfigureWideScene(int canvasW, int canvasH, int scale);
+    // Wide-scene experiment (2026-09-12, superseded by the canvas module in ../fixes): D3D-level
+    // centring of UI draws in a narrowed viewport. Left off (WideSceneActive() is false unless a
+    // future experiment sets it); kept as the record of what did not work.
     bool WideSceneActive();
     // psHash: the bound pixel shader's hash (0 if unknown); the post chain's shaders stay wide.
     // shiftUnits: the wide-scene move (canvas units) recorded for the bound constants by

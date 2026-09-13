@@ -1,7 +1,7 @@
 #include "pch.hpp"
 #include <atomic>
 #include "ui_bias.hpp"
-#include "wide_canvas.hpp"
+#include "../fixes/canvas.hpp"
 
 #include "game.hpp"
 #include "lab.hpp"
@@ -42,7 +42,7 @@ namespace
     constexpr uintptr_t kCameraFov = 0x8EBB1;
     SafetyHookMid g_CameraAspect {}, g_CameraFov {};
     int g_WideUnits = 0, g_WideScale = 0;
-    std::atomic<uint32_t> g_DrawCalls { 0 }, g_ElementDraws { 0 }, g_Narrowed { 0 }, g_WideOrthoShifted { 0 }, g_PostQuadsWidened { 0 };
+    std::atomic<uint32_t> g_DrawCalls { 0 }, g_ElementDraws { 0 }, g_Narrowed { 0 }, g_WideOrthoShifted { 0 };
     struct LastRect { bool valid = false; size_t count = 0; float x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
     std::unordered_map<ID3D11DeviceContext*, LastRect> g_LastRect;
     float g_WideInvAspect = 0, g_WideRatio = 1;
@@ -71,47 +71,6 @@ namespace UiBias
     uint64_t AppliedTranslation() { return g_AppliedTranslation.load(); }
 
     bool GameplaySeen() { return g_GameplaySeen.load(); }
-
-    // The in-mission HUD register (docs/ui-elements.md 5.3): each group's translation row and
-    // the side it belongs to on a wider canvas (-1 left, +1 right) and on a taller one (-1 top,
-    // +1 bottom). The move is half the canvas growth toward that side, so the group keeps the
-    // 16:9 distance from the display edge.
-    struct HudGroup { float tx, ty; int sideWide, sideTall; };
-    constexpr HudGroup kHudRegister[] = {
-        { -11.0f,  -8.0f, -1, -1 },   // mission timer, remaining enemies
-        {   8.0f, -12.0f, -1, +1 },   // life bar and name
-        {  -6.0f,  38.0f, +1, +1 },   // item and weapon column
-        {  -6.0f,  32.0f, +1, +1 },
-        {  -6.0f,   6.0f, +1, +1 },
-        {  -6.0f,   7.0f, +1, +1 },
-        {  -6.0f,  12.0f, +1, +1 },
-        {  -3.0f,   6.0f, +1, +1 },
-        {  -5.0f,  32.0f, +1, +1 },   // item count
-        { 112.0f,   4.0f, +1, -1 },   // top-right gauge
-        { 454.8f,  65.5f, +1, -1 },   // gauge percentage
-        { 133.0f,  58.0f, +1, +1 },   // weapon box
-        { 133.0f,  85.0f, +1, +1 },   // item box
-    };
-
-    void ConfigureWideScene(int canvasW, int canvasH, int scale)
-    {
-        // The engine's own wide (or tall) canvas (wide_canvas.cpp). The D3D-level centring
-        // below (viewport slides, classification) is left off: g_WideUnits stays 0.
-        WideCanvas::Install(canvasW, canvasH, scale);
-        if (!WideCanvas::Active()) { return; }
-        const float dx = static_cast<float>((canvasW - 480) / 2);
-        const float dy = static_cast<float>((canvasH - 272) / 2);
-        std::lock_guard lock(g_Mutex);
-        for (const HudGroup& g : kHudRegister)
-        {
-            TranslationBias b {};
-            b.any = false; b.tx = g.tx; b.ty = g.ty;
-            b.dx = dx * static_cast<float>(g.sideWide);
-            b.dy = dy * static_cast<float>(g.sideTall);
-            g_Translation.push_back(b);
-        }
-        spdlog::info("PW wide canvas: HUD register applied: {} groups, moves of {} sideways and {} vertically (canvas units).", std::size(kHudRegister), dx, dy);
-    }
 
     bool WideSceneActive() { return g_WideUnits > 0; }
 
@@ -241,6 +200,8 @@ namespace UiBias
             }
         }
         const bool ui = size >= 32 * sizeof(float) && std::fabs(static_cast<const float*>(data)[0] - 2.0f / 480.0f) <= 1e-5f;
+        // The shipped register first (the canvas module), then the live biases on top.
+        Canvas::OnConstantUnmap(data, size);
         // Every draw's constants start with the UI ortho (the post chain's full-canvas quads
         // included); BeforeDraw tells elements from full-canvas quads by the vertex rectangle.
         std::lock_guard lock(g_Mutex);
@@ -277,28 +238,7 @@ namespace UiBias
     void OnVertexUnmap(ID3D11DeviceContext* ctx, const std::string& texture, void* data, size_t size)
     {
         std::lock_guard lock(g_Mutex);
-        // The post chain's full-canvas quads: six 20-byte vertices (u, v, x, y, z). The
-        // downscale into the 640x640 blur target samples the scene over u 0..480 (canvas units
-        // of the source), the composite draws over x 0..480; both hard-sized 480, so on a wider
-        // canvas the blur covers 74% of a 21:9 frame. Both become the canvas width.
-        // (the upload is 120 bytes of vertices plus up to 8 of padding: 128 B for six)
-        if (WideCanvas::Active() && size >= 120 && size <= 256 && (size % 20 == 0 || size % 20 == 8))
-        {
-            auto* f = static_cast<float*>(data);
-            const float unitsW = static_cast<float>(WideCanvas::Units());
-            const float unitsH = static_cast<float>(WideCanvas::HeightUnits());
-            bool any = false;
-            for (size_t i = 0; i < size / 20; i++)
-            {
-                // x, y (the composite's position) and u, v (the downscale's source rectangle,
-                // in canvas units of the scene texture): hard-sized 480x272, so the canvas size.
-                if (std::fabs(f[i * 5 + 2] - 480.0f) < 0.01f) { f[i * 5 + 2] = unitsW; any = true; }
-                if (std::fabs(f[i * 5 + 0] - 480.0f) < 0.01f) { f[i * 5 + 0] = unitsW; any = true; }
-                if (std::fabs(f[i * 5 + 3] - 272.0f) < 0.01f) { f[i * 5 + 3] = unitsH; any = true; }
-                if (std::fabs(f[i * 5 + 1] - 272.0f) < 0.01f) { f[i * 5 + 1] = unitsH; any = true; }
-            }
-            if (any && g_PostQuadsWidened.fetch_add(1) == 0) { spdlog::info("PW wide canvas: first post-chain quad resized from 480x272 to {}x{} units.", unitsW, unitsH); }
-        }
+        Canvas::OnVertexUnmap(data, size);   // the post chain's quads (the shipped fix)
         const size_t stride = GuessStride(size);
         if (stride < 12 || size < stride) { return; }
         const size_t count = size / stride;

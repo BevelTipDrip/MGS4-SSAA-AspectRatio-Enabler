@@ -1,11 +1,12 @@
 #include "pch.hpp"
-#include "wide_canvas.hpp"
+#include "canvas.hpp"
 
 #include "game.hpp"
 #include "lab.hpp"
 #include "log.hpp"
 #include "mem.hpp"
 
+#include <atomic>
 #include <cmath>
 
 namespace
@@ -27,25 +28,25 @@ namespace
     };
 
     // Every site is Afevis's pattern hit plus his offset (pw/tools/afevis_sites.py, clean dump 2026-09-12).
-    constexpr Site kCameraConfig  { "Camera Config",       0x8EA17,  "4D 8B 13" };            // mov r10, [r11]
-    constexpr Site kAspectRatio   { "Aspect Ratio",        0x8EE22,  "0F 28 DA F3 0F 5E 9B" }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]
-    constexpr Site kHudScaler     { "HUD Scaler",          0x563E3,  "F3 0F 59 96" };          // mulss xmm2, [rsi+..]
-    constexpr Site kHudOffset     { "HUD Offset",          0x8EDE3,  "F3 0F 5E C2" };          // divss xmm0, xmm2
+    constexpr Site kCameraConfig  { "camera config",       0x8EA17,  "4D 8B 13" };            // mov r10, [r11]
+    constexpr Site kAspectRatio   { "aspect ratio",        0x8EE22,  "0F 28 DA F3 0F 5E 9B" }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]
+    constexpr Site kHudScaler     { "HUD scaler",          0x563E3,  "F3 0F 59 96" };          // mulss xmm2, [rsi+..]
+    constexpr Site kHudOffset     { "HUD offset",          0x8EDE3,  "F3 0F 5E C2" };          // divss xmm0, xmm2
     constexpr Site kFov           { "FOV",                 0x8EBC8,  "F3 0F 11 B9" };          // movss [rcx+0x268], xmm7
-    constexpr Site kCullingFov    { "Culling FOV",         0x8EE94,  "48 8D BB" };             // lea rdi, [rbx+0x1e0]
-    constexpr Site kScissoring    { "Scissoring",          0x5A31F,  "89 9F" };                // mov [rdi+0x380], ebx
-    constexpr Site kLoading       { "Loading Screens",     0x78609,  "E8" };                   // call (rdx, r8 = viewport centre)
-    constexpr Site kMovies        { "Movies",              0x440FAB, "C7 44 24" };             // mov [rsp+..], imm
-    constexpr Site kColorFilter   { "Color Filter",        0x2EF2C8, "66 89 85" };             // mov [rbp+..], ax
-    constexpr Site kGlare         { "Glare",               0x19469B, "0F 28 CB" };             // movaps xmm1, xmm3
-    constexpr Site kHalfGlare     { "Half Glare",          0x194A5A, "0F 28 CE" };             // movaps xmm1, xmm6
-    constexpr Site kPickupMarkers { "Item Pickup Markers", 0xFEECA,  "" };                     // pattern + 105 (no fixed prefix)
-    constexpr Site kDamageOverlay { "Damage Overlay",      0x491F0B, "0F 10 41" };             // movups xmm0, [rcx+..]
-    constexpr Site kGrenadeArc    { "Grenade Arc",         0x6C3E28, "F3 0F 59 15" };          // mulss xmm2, [rip+..]
-    constexpr Site kHitMarkers    { "Hit Markers",         0x6C1890, "F3 0F 11 46" };          // movss [rsi+..], xmm0
+    constexpr Site kCullingFov    { "culling FOV",         0x8EE94,  "48 8D BB" };             // lea rdi, [rbx+0x1e0]
+    constexpr Site kScissoring    { "scissoring",          0x5A31F,  "89 9F" };                // mov [rdi+0x380], ebx
+    constexpr Site kLoading       { "loading screens",     0x78609,  "E8" };                   // call (rdx, r8 = viewport centre)
+    constexpr Site kMovies        { "movies",              0x440FAB, "C7 44 24" };             // mov [rsp+..], imm
+    constexpr Site kColorFilter   { "colour filter",       0x2EF2C8, "66 89 85" };             // mov [rbp+..], ax
+    constexpr Site kGlare         { "glare",               0x19469B, "0F 28 CB" };             // movaps xmm1, xmm3
+    constexpr Site kHalfGlare     { "half glare",          0x194A5A, "0F 28 CE" };             // movaps xmm1, xmm6
+    constexpr Site kPickupMarkers { "item pickup markers", 0xFEECA,  "" };                     // pattern + 105 (no fixed prefix)
+    constexpr Site kDamageOverlay { "damage overlay",      0x491F0B, "0F 10 41" };             // movups xmm0, [rcx+..]
+    constexpr Site kGrenadeArc    { "grenade arc",         0x6C3E28, "F3 0F 59 15" };          // mulss xmm2, [rip+..]
+    constexpr Site kHitMarkers    { "hit markers",         0x6C1890, "F3 0F 11 46" };          // movss [rsi+..], xmm0
 
     SafetyHookMid g_Hooks[16] {};
-    int g_HookCount = 0;
+    int g_HookCount = 0, g_HookFailures = 0;
 
     bool BytesMatch(uintptr_t address, const char* hex)
     {
@@ -67,22 +68,49 @@ namespace
         const auto address = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva;
         if (!BytesMatch(address, site.bytes))
         {
-            spdlog::warn("PW wide canvas: {} at +{:X} does not look as expected; not hooked.", site.name, site.rva);
+            g_HookFailures++;
+            spdlog::warn("PW canvas: the {} site does not look as expected; that fixup is off.", site.name);
             return;
         }
         auto& slot = g_Hooks[g_HookCount++];
         slot = safetyhook::create_mid(address, std::forward<F>(fn));
-        spdlog::info("PW wide canvas: {} hooked at +{:X}{}.", site.name, site.rva, slot ? "" : " (FAILED)");
+        if (!slot) { g_HookFailures++; spdlog::warn("PW canvas: the {} hook could not be installed.", site.name); }
+#if MGS4E_LAB_BUILD
+        else { spdlog::info("PW canvas: {} hooked at +{:X}.", site.name, site.rva); }
+#endif
     }
+
+    // The in-mission HUD register (docs/ui-elements.md 5.3): each group's translation row and
+    // the side it belongs to on a wider canvas (-1 left, +1 right) and on a taller one (-1 top,
+    // +1 bottom). The move is half the canvas growth toward that side, so the group keeps the
+    // 16:9 distance from the display edge.
+    struct HudGroup { float tx, ty; int sideWide, sideTall; };
+    constexpr HudGroup kHudRegister[] = {
+        { -11.0f,  -8.0f, -1, -1 },   // mission timer, remaining enemies
+        {   8.0f, -12.0f, -1, +1 },   // life bar and name
+        {  -6.0f,  38.0f, +1, +1 },   // item and weapon column
+        {  -6.0f,  32.0f, +1, +1 },
+        {  -6.0f,   6.0f, +1, +1 },
+        {  -6.0f,   7.0f, +1, +1 },
+        {  -6.0f,  12.0f, +1, +1 },
+        {  -3.0f,   6.0f, +1, +1 },
+        {  -5.0f,  32.0f, +1, +1 },   // item count
+        { 112.0f,   4.0f, +1, -1 },   // top-right gauge
+        { 454.8f,  65.5f, +1, -1 },   // gauge percentage
+        { 133.0f,  58.0f, +1, +1 },   // weapon box
+        { 133.0f,  85.0f, +1, +1 },   // item box
+    };
+    float g_MoveX = 0, g_MoveY = 0;   // half the canvas growth, in units
+    std::atomic<uint32_t> g_PostQuads { 0 };
 }
 
-namespace WideCanvas
+namespace Canvas
 {
     bool Active() { return g_UnitsW != 480 || g_UnitsH != 272; }
     int Units() { return g_UnitsW; }
     int HeightUnits() { return g_UnitsH; }
 
-    void Install(int unitsW, int unitsH, int scale)
+    void Configure(int unitsW, int unitsH, int scale)
     {
         if (unitsW <= 0 || unitsH <= 0 || scale <= 0 || (unitsW == 480 && unitsH == 272)) { return; }
         g_UnitsW = unitsW; g_UnitsH = unitsH; g_Scale = scale;
@@ -91,8 +119,8 @@ namespace WideCanvas
         g_InvAspect = static_cast<float>(unitsH) / static_cast<float>(unitsW);
         g_OffsetX = (unitsW - 480) / 2;
         g_OffsetY = (unitsH - 272) / 2;
-        spdlog::info("PW wide canvas: {}x{} units at scale {} ({}): UI offset ({}, {}), inverse aspect {:.5f}, ratio {:.5f}.",
-            unitsW, unitsH, scale, g_Wider ? "wider than 16:9" : "taller than 16:9", g_OffsetX, g_OffsetY, g_InvAspect, g_Ratio);
+        g_MoveX = static_cast<float>(g_OffsetX);
+        g_MoveY = static_cast<float>(g_OffsetY);
 
         // The camera/UI structure (r10) once its magic is in place: the UI offset in units.
         Hook(kCameraConfig, [](SafetyHookContext& ctx)
@@ -111,7 +139,7 @@ namespace WideCanvas
             *reinterpret_cast<uint16_t*>(p + 584) = static_cast<uint16_t>(g_UnitsW);
             *reinterpret_cast<uint16_t*>(p + 586) = static_cast<uint16_t>(g_UnitsH);
         });
-        // The UI scale: our integer scale, whatever the width immediate divides to.
+        // The UI scale: the integer scale, whatever the width immediate divides to.
         Hook(kHudScaler, [](SafetyHookContext& ctx)
         {
             ctx.xmm6.f32[0] = static_cast<float>(g_Scale);
@@ -197,6 +225,47 @@ namespace WideCanvas
         {
             if (g_Wider) { ctx.xmm0.f32[0] *= g_Ratio; } else { ctx.xmm2.f32[0] /= g_Ratio; }
         });
-        spdlog::info("PW wide canvas: {} hooks installed.", g_HookCount);
+        spdlog::info("PW canvas: {}x{} units at scale {} ({} than 16:9): UI offset ({}, {}), {} fixups{}; HUD groups move {} sideways, {} vertically.",
+            unitsW, unitsH, scale, g_Wider ? "wider" : "taller", g_OffsetX, g_OffsetY, g_HookCount,
+            g_HookFailures ? std::format(" ({} off)", g_HookFailures) : std::string(), g_MoveX, g_MoveY);
+    }
+
+    bool OnConstantUnmap(void* data, size_t size)
+    {
+        if (size < 32 * sizeof(float)) { return false; }
+        float* f = static_cast<float*>(data);
+        // Only the UI ortho (row 1 = 2/480): leave 3D alone. The world basis (rows 5-7) may be
+        // rotated (vertical text) or scaled (gauges); the translation row is canvas units
+        // regardless, so it is always the handle.
+        if (std::fabs(f[0] - 2.0f / 480.0f) > 1e-5f) { return false; }
+        if (!Active()) { return true; }
+        for (const HudGroup& g : kHudRegister)
+        {
+            if (std::fabs(f[28] - g.tx) > 0.5f || std::fabs(f[29] - g.ty) > 0.5f) { continue; }
+            f[28] += g_MoveX * static_cast<float>(g.sideWide);
+            f[29] += g_MoveY * static_cast<float>(g.sideTall);
+        }
+        return true;
+    }
+
+    void OnVertexUnmap(void* data, size_t size)
+    {
+        // The post chain's full-canvas quads: six 20-byte vertices (u, v, x, y, z), 120 bytes
+        // plus up to 8 of padding. The downscale into the 640x640 blur target samples the scene
+        // over u 0..480 / v 0..272 (canvas units of the source), the composite draws over x
+        // 0..480 / y 0..272; all hard-sized, so on a wider canvas the blur covered 74% of a 21:9
+        // frame. Each 480 becomes the canvas width, each 272 the canvas height.
+        if (!Active() || size < 120 || size > 256 || (size % 20 != 0 && size % 20 != 8)) { return; }
+        auto* f = static_cast<float*>(data);
+        const float unitsW = static_cast<float>(g_UnitsW), unitsH = static_cast<float>(g_UnitsH);
+        bool any = false;
+        for (size_t i = 0; i < size / 20; i++)
+        {
+            if (std::fabs(f[i * 5 + 2] - 480.0f) < 0.01f) { f[i * 5 + 2] = unitsW; any = true; }
+            if (std::fabs(f[i * 5 + 0] - 480.0f) < 0.01f) { f[i * 5 + 0] = unitsW; any = true; }
+            if (std::fabs(f[i * 5 + 3] - 272.0f) < 0.01f) { f[i * 5 + 3] = unitsH; any = true; }
+            if (std::fabs(f[i * 5 + 1] - 272.0f) < 0.01f) { f[i * 5 + 1] = unitsH; any = true; }
+        }
+        if (any && g_PostQuads.fetch_add(1) == 0 && mgs4e::log::Verbose()) { spdlog::info("PW canvas: post-chain quads resized to {}x{} units.", unitsW, unitsH); }
     }
 }
