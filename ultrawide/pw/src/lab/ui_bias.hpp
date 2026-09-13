@@ -22,7 +22,7 @@ namespace UiBias
     // integer `scale` while the UI keeps its 480-unit canvas. Installs the camera hooks; the
     // census then calls BeforeDraw/AfterDraw around every draw with `uiUpload` from
     // OnConstantUnmap, and UI draws get a centred 480-unit viewport.
-    void ConfigureWideScene(int wideUnits, int scale);
+    void ConfigureWideScene(int canvasW, int canvasH, int scale);
     bool WideSceneActive();
     // psHash: the bound pixel shader's hash (0 if unknown); the post chain's shaders stay wide.
     // shiftUnits: the wide-scene move (canvas units) recorded for the bound constants by

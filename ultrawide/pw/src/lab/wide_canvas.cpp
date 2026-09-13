@@ -10,10 +10,14 @@
 
 namespace
 {
-    int g_Units = 480, g_Scale = 1;
-    float g_Ratio = 1.0f;         // units / 480: the UI scale of Afevis's patch
+    int g_UnitsW = 480, g_UnitsH = 272, g_Scale = 1;
+    // Afevis's "UI scale": the canvas aspect over the native one. Above 1 the canvas is wider
+    // (650x272 at 21:9: 1.354), below 1 it is taller (480x360 at 4:3: 0.756); his fixups
+    // multiply by it on the wide side and divide by it on the tall side.
+    float g_Ratio = 1.0f;
     float g_InvAspect = 272.0f / 480.0f;
     int g_OffsetX = 0, g_OffsetY = 0;
+    bool g_Wider = true;
 
     struct Site
     {
@@ -22,7 +26,7 @@ namespace
         const char* bytes;   // expected bytes at the hook address (hex, spaces), a short prefix
     };
 
-    // Every site is Afevis's pattern hit plus his offset (afevis_sites.py, clean dump 2026-09-12).
+    // Every site is Afevis's pattern hit plus his offset (pw/tools/afevis_sites.py, clean dump 2026-09-12).
     constexpr Site kCameraConfig  { "Camera Config",       0x8EA17,  "4D 8B 13" };            // mov r10, [r11]
     constexpr Site kAspectRatio   { "Aspect Ratio",        0x8EE22,  "0F 28 DA F3 0F 5E 9B" }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]
     constexpr Site kHudScaler     { "HUD Scaler",          0x563E3,  "F3 0F 59 96" };          // mulss xmm2, [rsi+..]
@@ -74,18 +78,21 @@ namespace
 
 namespace WideCanvas
 {
-    bool Active() { return g_Units > 480; }
-    int Units() { return g_Units; }
+    bool Active() { return g_UnitsW != 480 || g_UnitsH != 272; }
+    int Units() { return g_UnitsW; }
+    int HeightUnits() { return g_UnitsH; }
 
-    void Install(int units, int scale)
+    void Install(int unitsW, int unitsH, int scale)
     {
-        if (units <= 480 || scale <= 0) { return; }
-        g_Units = units; g_Scale = scale;
-        g_Ratio = static_cast<float>(units) / 480.0f;
-        g_InvAspect = 272.0f / static_cast<float>(units);
-        g_OffsetX = (units - 480) / 2;
-        g_OffsetY = 0;
-        spdlog::info("PW wide canvas: {}x272 units at scale {}: UI offset ({}, {}), inverse aspect {:.5f}, ratio {:.5f}.", units, scale, g_OffsetX, g_OffsetY, g_InvAspect, g_Ratio);
+        if (unitsW <= 0 || unitsH <= 0 || scale <= 0 || (unitsW == 480 && unitsH == 272)) { return; }
+        g_UnitsW = unitsW; g_UnitsH = unitsH; g_Scale = scale;
+        g_Ratio = (static_cast<float>(unitsW) / static_cast<float>(unitsH)) / (480.0f / 272.0f);
+        g_Wider = g_Ratio > 1.0f;
+        g_InvAspect = static_cast<float>(unitsH) / static_cast<float>(unitsW);
+        g_OffsetX = (unitsW - 480) / 2;
+        g_OffsetY = (unitsH - 272) / 2;
+        spdlog::info("PW wide canvas: {}x{} units at scale {} ({}): UI offset ({}, {}), inverse aspect {:.5f}, ratio {:.5f}.",
+            unitsW, unitsH, scale, g_Wider ? "wider than 16:9" : "taller than 16:9", g_OffsetX, g_OffsetY, g_InvAspect, g_Ratio);
 
         // The camera/UI structure (r10) once its magic is in place: the UI offset in units.
         Hook(kCameraConfig, [](SafetyHookContext& ctx)
@@ -101,8 +108,8 @@ namespace WideCanvas
         {
             auto* p = reinterpret_cast<uint8_t*>(ctx.rbx);
             *reinterpret_cast<float*>(p + 592) = g_InvAspect;
-            *reinterpret_cast<uint16_t*>(p + 584) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 586) = 272;
+            *reinterpret_cast<uint16_t*>(p + 584) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 586) = static_cast<uint16_t>(g_UnitsH);
         });
         // The UI scale: our integer scale, whatever the width immediate divides to.
         Hook(kHudScaler, [](SafetyHookContext& ctx)
@@ -116,14 +123,16 @@ namespace WideCanvas
             ctx.xmm0.u32[0] = 0;
             ctx.rax = 0;
         });
-        // FOV: after the raw value is stored, the copy used for the projection is divided by
-        // the ratio (the world fills the wider canvas at the same vertical extent).
-        Hook(kFov, [](SafetyHookContext& ctx) { ctx.xmm6.f32[0] /= g_Ratio; });
-        Hook(kCullingFov, [](SafetyHookContext& ctx) { ctx.xmm0.f32[0] /= g_Ratio; });
-        // The output-shaped scissor: width scaled by 2 x ratio (Afevis's term, kept as is).
+        // FOV (wider only): after the raw value is stored, the copy used for the projection is
+        // divided by the ratio, so the world fills the wider canvas at the same vertical extent.
+        // A taller canvas keeps the FOV: the world shows more above and below.
+        Hook(kFov, [](SafetyHookContext& ctx) { if (g_Wider) { ctx.xmm6.f32[0] /= g_Ratio; } });
+        Hook(kCullingFov, [](SafetyHookContext& ctx) { if (g_Wider) { ctx.xmm0.f32[0] /= g_Ratio; } });
+        // The output-shaped scissor: the width (wider) or the height (taller) term.
         Hook(kScissoring, [](SafetyHookContext& ctx)
         {
-            ctx.rax = static_cast<uint64_t>(std::llround(static_cast<double>(static_cast<int64_t>(ctx.rax)) * 2.0 * g_Ratio));
+            if (g_Wider) { ctx.rax = static_cast<uint64_t>(std::llround(static_cast<double>(static_cast<int64_t>(ctx.rax)) * 2.0 * g_Ratio)); }
+            else { ctx.rbx = static_cast<uint64_t>(std::llround(static_cast<double>(static_cast<int64_t>(ctx.rbx)) * 2.0 / g_Ratio)); }
         });
         // Loading screens: PSP viewport centre 2048 plus the offset. Movies: the offset in registers.
         Hook(kLoading, [](SafetyHookContext& ctx)
@@ -140,14 +149,22 @@ namespace WideCanvas
         Hook(kColorFilter, [](SafetyHookContext& ctx)
         {
             auto* p = reinterpret_cast<uint8_t*>(ctx.rbp);
-            *reinterpret_cast<uint16_t*>(p + 250) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 254) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 256) = 272;
-            ctx.rax = 272;
+            *reinterpret_cast<uint16_t*>(p + 250) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 254) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 256) = static_cast<uint16_t>(g_UnitsH);
+            ctx.rax = static_cast<uint64_t>(static_cast<uint32_t>(g_UnitsH));
         });
-        // Glare and the mirrored half glare: the edge term in the wider canvas.
-        Hook(kGlare, [](SafetyHookContext& ctx) { ctx.xmm13.f32[0] *= g_Ratio; });
-        Hook(kHalfGlare, [](SafetyHookContext& ctx) { ctx.xmm10.f32[0] = g_Ratio * 240.0f - ctx.xmm13.f32[0]; });
+        // Glare and the mirrored half glare: the edge term in the wider or taller canvas.
+        Hook(kGlare, [](SafetyHookContext& ctx)
+        {
+            if (g_Wider) { ctx.xmm13.f32[0] *= g_Ratio; }
+            else if (mgs4e::mem::Readable(reinterpret_cast<const void*>(ctx.rsp + 40), sizeof(float))) { *reinterpret_cast<float*>(ctx.rsp + 40) /= g_Ratio; }
+        });
+        Hook(kHalfGlare, [](SafetyHookContext& ctx)
+        {
+            if (g_Wider) { ctx.xmm10.f32[0] = g_Ratio * 240.0f - ctx.xmm13.f32[0]; }
+            else { ctx.xmm11.f32[0] /= g_Ratio; }
+        });
         // Item pickup markers: the world-to-screen result shifted back by half the widening.
         Hook(kPickupMarkers, [](SafetyHookContext& ctx)
         {
@@ -162,18 +179,24 @@ namespace WideCanvas
         {
             if (!mgs4e::mem::Readable(reinterpret_cast<const void*>(ctx.rcx), 472)) { return; }
             auto* p = reinterpret_cast<uint8_t*>(ctx.rcx);
-            *reinterpret_cast<uint16_t*>(p + 210) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 212) = 272;
-            *reinterpret_cast<uint32_t*>(p + 324) = static_cast<uint32_t>(g_Units);
-            *reinterpret_cast<uint32_t*>(p + 452) = static_cast<uint32_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 340) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 342) = 272;
-            *reinterpret_cast<uint16_t*>(p + 468) = static_cast<uint16_t>(g_Units);
-            *reinterpret_cast<uint16_t*>(p + 470) = 272;
+            *reinterpret_cast<uint16_t*>(p + 210) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 212) = static_cast<uint16_t>(g_UnitsH);
+            *reinterpret_cast<uint32_t*>(p + 324) = static_cast<uint32_t>(g_UnitsW);
+            *reinterpret_cast<uint32_t*>(p + 452) = static_cast<uint32_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 340) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 342) = static_cast<uint16_t>(g_UnitsH);
+            *reinterpret_cast<uint16_t*>(p + 468) = static_cast<uint16_t>(g_UnitsW);
+            *reinterpret_cast<uint16_t*>(p + 470) = static_cast<uint16_t>(g_UnitsH);
         });
-        // Grenade arc and hit markers: one register scaled by the ratio.
-        Hook(kGrenadeArc, [](SafetyHookContext& ctx) { ctx.xmm2.f32[0] *= g_Ratio; });
-        Hook(kHitMarkers, [](SafetyHookContext& ctx) { ctx.xmm0.f32[0] *= g_Ratio; });
+        // Grenade arc and hit markers: one register scaled by the ratio (the other divided when taller).
+        Hook(kGrenadeArc, [](SafetyHookContext& ctx)
+        {
+            if (g_Wider) { ctx.xmm2.f32[0] *= g_Ratio; } else { ctx.xmm0.f32[0] /= g_Ratio; }
+        });
+        Hook(kHitMarkers, [](SafetyHookContext& ctx)
+        {
+            if (g_Wider) { ctx.xmm0.f32[0] *= g_Ratio; } else { ctx.xmm2.f32[0] /= g_Ratio; }
+        });
         spdlog::info("PW wide canvas: {} hooks installed.", g_HookCount);
     }
 }

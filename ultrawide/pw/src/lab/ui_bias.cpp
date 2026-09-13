@@ -72,11 +72,11 @@ namespace UiBias
 
     bool GameplaySeen() { return g_GameplaySeen.load(); }
 
-    void ConfigureWideScene(int wideUnits, int scale)
+    void ConfigureWideScene(int canvasW, int canvasH, int scale)
     {
-        // The engine's own wide canvas (wide_canvas.cpp). The D3D-level centring below
-        // (viewport slides, classification) is left off: g_WideUnits stays 0.
-        WideCanvas::Install(wideUnits, scale);
+        // The engine's own wide (or tall) canvas (wide_canvas.cpp). The D3D-level centring
+        // below (viewport slides, classification) is left off: g_WideUnits stays 0.
+        WideCanvas::Install(canvasW, canvasH, scale);
     }
 
     bool WideSceneActive() { return g_WideUnits > 0; }
@@ -251,16 +251,19 @@ namespace UiBias
         if (WideCanvas::Active() && size >= 120 && size <= 256 && (size % 20 == 0 || size % 20 == 8))
         {
             auto* f = static_cast<float*>(data);
-            const float units = static_cast<float>(WideCanvas::Units());
+            const float unitsW = static_cast<float>(WideCanvas::Units());
+            const float unitsH = static_cast<float>(WideCanvas::HeightUnits());
             bool any = false;
             for (size_t i = 0; i < size / 20; i++)
             {
-                // x (the composite's position) and u (the downscale's source rectangle, in
-                // canvas units of the scene texture): both hard-sized 480, both the canvas width.
-                if (std::fabs(f[i * 5 + 2] - 480.0f) < 0.01f) { f[i * 5 + 2] = units; any = true; }
-                if (std::fabs(f[i * 5 + 0] - 480.0f) < 0.01f) { f[i * 5 + 0] = units; any = true; }
+                // x, y (the composite's position) and u, v (the downscale's source rectangle,
+                // in canvas units of the scene texture): hard-sized 480x272, so the canvas size.
+                if (std::fabs(f[i * 5 + 2] - 480.0f) < 0.01f) { f[i * 5 + 2] = unitsW; any = true; }
+                if (std::fabs(f[i * 5 + 0] - 480.0f) < 0.01f) { f[i * 5 + 0] = unitsW; any = true; }
+                if (std::fabs(f[i * 5 + 3] - 272.0f) < 0.01f) { f[i * 5 + 3] = unitsH; any = true; }
+                if (std::fabs(f[i * 5 + 1] - 272.0f) < 0.01f) { f[i * 5 + 1] = unitsH; any = true; }
             }
-            if (any && g_PostQuadsWidened.fetch_add(1) == 0) { spdlog::info("PW wide canvas: first post-chain quad widened from 480 to {} units.", units); }
+            if (any && g_PostQuadsWidened.fetch_add(1) == 0) { spdlog::info("PW wide canvas: first post-chain quad resized from 480x272 to {}x{} units.", unitsW, unitsH); }
         }
         const size_t stride = GuessStride(size);
         if (stride < 12 || size < stride) { return; }
