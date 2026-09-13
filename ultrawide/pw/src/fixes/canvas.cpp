@@ -80,28 +80,61 @@ namespace
 #endif
     }
 
-    // The in-mission HUD register (docs/ui-elements.md 5.3): each group's translation row and
-    // the side it belongs to on a wider canvas (-1 left, +1 right) and on a taller one (-1 top,
-    // +1 bottom). The move is half the canvas growth toward that side, so the group keeps the
-    // 16:9 distance from the display edge.
-    struct HudGroup { float tx, ty; int sideWide, sideTall; };
+    // The in-mission HUD register (docs/ui-elements.md 5.3): each group's translation row (a
+    // vertical value and a horizontal range, because the right-column groups slide sideways
+    // over a few frames when a menu opens: the boxes from 133 to 117 or 113, the column text
+    // from -6 to -17) and the side it belongs to on a wider canvas (-1 left, +1 right) and on a
+    // taller one (-1 top, +1 bottom). The move is half the canvas growth toward that side, so
+    // the group keeps the 16:9 distance from the display edge.
+    struct HudGroup { float txMin, txMax, ty; int sideWide, sideTall; };
     constexpr HudGroup kHudRegister[] = {
-        { -11.0f,  -8.0f, -1, -1 },   // mission timer, remaining enemies
-        {   8.0f, -12.0f, -1, +1 },   // life bar and name
-        {  -6.0f,  38.0f, +1, +1 },   // item and weapon column
-        {  -6.0f,  32.0f, +1, +1 },
-        {  -6.0f,   6.0f, +1, +1 },
-        {  -6.0f,   7.0f, +1, +1 },
-        {  -6.0f,  12.0f, +1, +1 },
-        {  -3.0f,   6.0f, +1, +1 },
-        {  -5.0f,  32.0f, +1, +1 },   // item count
-        { 112.0f,   4.0f, +1, -1 },   // top-right gauge
-        { 454.8f,  65.5f, +1, -1 },   // gauge percentage
-        { 133.0f,  58.0f, +1, +1 },   // weapon box
-        { 133.0f,  85.0f, +1, +1 },   // item box
+        { -11.5f,  -10.5f,  -8.0f, -1, -1 },   // mission timer, remaining enemies
+        {   7.5f,    8.5f, -12.0f, -1, +1 },   // life bar and name
+        {   7.5f,    8.5f,   4.0f, -1, -1 },   // enemy alert bar
+        {  13.4f,   14.4f,   9.9f, -1, -1 },   // enemy alert value
+        // The ranges are exactly the observed slides: wider ones catch rows the Options and
+        // Mission Prep menus draw at small offsets (measured 2026-09-13).
+        { -17.5f,   -5.5f,  38.0f, +1, +1 },   // item and weapon column (-6 at rest, -17 in a menu)
+        { -17.5f,   -4.5f,  32.0f, +1, +1 },   //   ... and the item count (-5, 32)
+        { -17.5f,   -2.5f,   6.0f, +1, +1 },   //   ... (-6, 6), (-3, 6), (-17, 6)
+        { -17.5f,   -5.5f,   7.0f, +1, +1 },
+        { -17.5f,   -5.5f,  12.0f, +1, +1 },
+        {  -4.5f,    0.5f,   4.0f, +1, +1 },   //   ... the weapon-menu star (-4 at rest, sliding in from 0; verified by elimination 2026-09-13)
+        { -17.5f,   -5.5f,   0.0f, +1, +1 },   // the "N/A" box and the weapon star (-6 at rest, sliding to -17 in a menu)
+        { 111.5f,  112.5f,   4.0f, +1, -1 },   // top-right gauge
+        { 454.3f,  455.3f,  65.5f, +1, -1 },   // gauge percentage
+        { 112.5f,  133.5f,  58.0f, +1, +1 },   // weapon box (133 at rest, 117 in the weapon menu)
+        { 112.5f,  133.5f,  85.0f, +1, +1 },   // item box (133 at rest, 113 in the item menu)
+        { 287.5f,  298.5f, 121.0f, +1, +1 },   // "N/A" text (288 or 298)
     };
     float g_MoveX = 0, g_MoveY = 0;   // half the canvas growth, in units
     std::atomic<uint32_t> g_PostQuads { 0 };
+
+    // Per-object exception. The tall column quad (445,155)-(472,258) is drawn on the ty 6 row:
+    // at rest (-6) it is the right-hand column background and moves with the group, but when a
+    // menu opens the same quad becomes the selection highlight travelling left through the
+    // slide range of the text. Row and rectangle together tell them apart. The vertex upload
+    // and the constant upload of one draw happen on the same thread in either order, so both
+    // sides remember the other: a sliding ty 6 constant skips the move when the last quad was
+    // the column, and the column's vertices are shifted back when the last constant was moved.
+    struct ColumnQuad { float x0 = 445, y0 = 155, x1 = 472, y1 = 258; };
+    thread_local bool t_LastQuadIsColumn = false;
+    thread_local float t_LastMoveX = 0;   // the sideways move applied to the last sliding ty 6 constant
+    bool IsColumnQuad(float x0, float y0, float x1, float y1)
+    {
+        constexpr ColumnQuad c {};
+        return std::fabs(x0 - c.x0) < 2 && std::fabs(y0 - c.y0) < 2 && std::fabs(x1 - c.x1) < 2 && std::fabs(y1 - c.y1) < 2;
+    }
+
+    // The register applies only while the mission HUD is being drawn. Its markers are the
+    // groups only a mission draws, at their resting rows: the timer (not every mission has
+    // one), the life bar and name, the alert gauge, the weapon and item boxes at rest. Any of
+    // them seen in the last half second opens the gate; none of them ever appears on the
+    // title, in Mission Prep, in Options or on Mother Base, whatever rows those screens use.
+    constexpr float kHudMarkers[][2] = { { -11.0f, -8.0f }, { 8.0f, -12.0f }, { 112.0f, 4.0f }, { 133.0f, 58.0f }, { 133.0f, 85.0f } };
+    std::atomic<int64_t> g_HudSeenTicks { 0 };
+    int64_t Ticks() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
+    int64_t TicksPerSecond() { static const int64_t f = [] { LARGE_INTEGER q; QueryPerformanceFrequency(&q); return q.QuadPart; }(); return f; }
 }
 
 namespace Canvas
@@ -239,17 +272,51 @@ namespace Canvas
         // regardless, so it is always the handle.
         if (std::fabs(f[0] - 2.0f / 480.0f) > 1e-5f) { return false; }
         if (!Active()) { return true; }
+        const int64_t now = Ticks();
+        bool marker = false;
+        for (const auto& m : kHudMarkers) { if (std::fabs(f[28] - m[0]) <= 0.5f && std::fabs(f[29] - m[1]) <= 0.5f) { marker = true; break; } }
+        if (marker) { g_HudSeenTicks.store(now); }
+        else if (now - g_HudSeenTicks.load() > TicksPerSecond() / 2) { return true; }   // no mission HUD in the last half second
+        t_LastMoveX = 0;
         for (const HudGroup& g : kHudRegister)
         {
-            if (std::fabs(f[28] - g.tx) > 0.5f || std::fabs(f[29] - g.ty) > 0.5f) { continue; }
+            if (f[28] < g.txMin || f[28] > g.txMax || std::fabs(f[29] - g.ty) > 0.5f) { continue; }
+            const bool slidingSix = std::fabs(g.ty - 6.0f) < 0.5f && f[28] < -6.5f;
+            if (slidingSix && t_LastQuadIsColumn) { t_LastQuadIsColumn = false; break; }   // the travelling highlight
             f[28] += g_MoveX * static_cast<float>(g.sideWide);
             f[29] += g_MoveY * static_cast<float>(g.sideTall);
+            if (slidingSix) { t_LastMoveX = g_MoveX * static_cast<float>(g.sideWide); }
+            break;
         }
+        t_LastQuadIsColumn = false;
         return true;
     }
 
     void OnVertexUnmap(void* data, size_t size)
     {
+        // A single 24-byte-vertex quad (position last): note the column quad for the constant
+        // upload that follows, or undo the move the constant upload before it already applied.
+        if (Active() && size == 144)
+        {
+            auto* v = static_cast<uint8_t*>(data);
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+            for (size_t k = 0; k < 6; k++)
+            {
+                float xy[2];
+                std::memcpy(xy, v + k * 24 + 12, sizeof(xy));
+                x0 = std::min(x0, xy[0]); x1 = std::max(x1, xy[0]); y0 = std::min(y0, xy[1]); y1 = std::max(y1, xy[1]);
+            }
+            t_LastQuadIsColumn = IsColumnQuad(x0, y0, x1, y1);
+            if (t_LastQuadIsColumn && t_LastMoveX != 0)
+            {
+                for (size_t k = 0; k < 6; k++)
+                {
+                    float* x = reinterpret_cast<float*>(v + k * 24 + 12);
+                    *x -= t_LastMoveX;
+                }
+                t_LastMoveX = 0;
+            }
+        }
         // The post chain's full-canvas quads: six 20-byte vertices (u, v, x, y, z), 120 bytes
         // plus up to 8 of padding. The downscale into the 640x640 blur target samples the scene
         // over u 0..480 / v 0..272 (canvas units of the source), the composite draws over x

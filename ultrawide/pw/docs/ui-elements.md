@@ -137,6 +137,27 @@ map background is drawn separately (the user reports it offset; not attributed y
 | `(454.8,65.5)` | gauge percentage | 4 glyphs, scale 0.75 | right | top |
 | `(133,58)`, `(133,85)` | weapon and item boxes | (435..469, 78..142 / 190..254), scale 0.70 | right | bottom |
 | `(234..246, 130..142)` | centre reticle dots | four quads | centre | centre |
+| `(8,4)`, `(13.9,9.9)` | enemy alert bar and its value | 256x256 quad at (8..21, 8..84), four glyphs | left | top |
+| `(-4,4)` | the weapon-menu star | one 256x128 quad; slides in from `(0,4)` when the menu opens | right | bottom |
+| `(-6,0)` | the "N/A" box (and 64 quads drawn always, invisible outside the state) | 512x128 quads | right | bottom |
+| `(288..298,121)` | the "N/A" text | three glyphs, two positions | right | bottom |
+
+**Slides.** When the item or weapon menu opens, the right-column groups slide sideways over a
+few frames and the register must match every frame of it: the column text from -6 to -17
+(rows with ty 38, 32, 6, 7, 12), the weapon box from 133 to 117 (ty 58), the item box from
+133 to 113 (ty 85), the star from 0 to -4 (ty 4). The shipped register keys each group on
+its ty with a tx range that is exactly the observed slide; wider ranges reached rows the
+Options and Mission Prep menus draw at small offsets (2026-09-13).
+
+**Gate.** The register applies only while a mission-only marker row has been uploaded in the
+last half second: the timer `(-11,-8)` (not every mission has one), the life bar `(8,-12)`,
+the gauge `(112,4)`, the boxes at rest `(133,58)` / `(133,85)`. Title, Mission Prep, Options
+and Mother Base never see a move.
+
+**Known, stock:** the weapon menu's white column highlight starts its slide at the canvas
+edge, so at 21:9 it begins 85 units further right and lands correctly; the game does the
+same at 16:9 on a smaller scale (verified with the canvas off, 2026-09-13). Its quad lives in
+the menu panel group `(4.7..0, 0)`, which the register never touches.
 
 The move is half the canvas growth, signed by the side: on a wider canvas of W units, left
 groups get dx = -(W - 480) / 2 and right groups +(W - 480) / 2 (85 at 21:9); on a taller
