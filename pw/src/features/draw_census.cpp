@@ -127,6 +127,24 @@ namespace
     std::unordered_map<void*, ContextState> g_State;
     std::atomic<int> g_FramesToLog { 0 };
     std::atomic<uint64_t> g_Frame { 0 };
+
+    // Hitch log: every frame's present interval against a running average; a frame that takes
+    // twice the average (and over 25 ms) is logged with what happened inside it, so a regular
+    // stutter can be attributed (resource creation, maps that wait on the GPU, the present
+    // itself, our own log lines).
+    struct FrameWork
+    {
+        std::atomic<uint32_t> textures { 0 }, texturesLarge { 0 }, buffers { 0 }, maps { 0 }, mapWaits { 0 }, logLines { 0 };
+        std::atomic<uint64_t> textureTicks { 0 }, mapTicks { 0 }, bufferTicks { 0 };
+        std::string lastTexture;   // under g_Mutex
+        void Reset() { textures = 0; texturesLarge = 0; buffers = 0; maps = 0; mapWaits = 0; logLines = 0; textureTicks = 0; mapTicks = 0; bufferTicks = 0; }
+    };
+    FrameWork g_Work;
+    int64_t g_LastPresentEnd = 0, g_LastPresentTicks = 0;
+    double g_AvgFrameMs = 0;
+    uint32_t g_Hitches = 0;
+    int64_t Ticks() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
+    double TicksToMs(int64_t t) { static const double f = [] { LARGE_INTEGER q; QueryPerformanceFrequency(&q); return 1000.0 / static_cast<double>(q.QuadPart); }(); return static_cast<double>(t) * f; }
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
     std::atomic<uint64_t> g_GpuLocalStripped { 0 };
@@ -645,7 +663,12 @@ namespace
 
     HRESULT STDMETHODCALLTYPE Hooked_Map(ID3D11DeviceContext* self, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* mapped)
     {
+        const int64_t t0 = Ticks();
         const HRESULT r = Original<decltype(&Hooked_Map)>(self, kCtxMap)(self, res, sub, type, flags, mapped);
+        const int64_t dt = Ticks() - t0;
+        g_Work.mapTicks.fetch_add(dt);
+        g_Work.maps.fetch_add(1);
+        if (TicksToMs(dt) > 1.0) { g_Work.mapWaits.fetch_add(1); }
         if (res)
         {
             bool stripped = false;
@@ -928,7 +951,11 @@ namespace
             }
             desc = &single;
         }
+        const int64_t t0 = Ticks();
         const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
+        g_Work.textureTicks.fetch_add(Ticks() - t0);
+        g_Work.textures.fetch_add(1);
+        if (desc && desc->Width >= 1024) { g_Work.texturesLarge.fetch_add(1); std::lock_guard lock(g_Mutex); g_Work.lastTexture = std::format("{}x{} fmt{} usage={} cpu={:#x}", desc->Width, desc->Height, static_cast<int>(desc->Format), static_cast<int>(desc->Usage), desc->CPUAccessFlags); }
         if (SUCCEEDED(r) && out && *out && desc == &single && single.CPUAccessFlags == 0 && InternalSize::bGpuLocalTextures)
         {
             std::lock_guard lock(g_Mutex);
@@ -936,6 +963,7 @@ namespace
         }
         if (SUCCEEDED(r) && desc && (((desc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) && desc->Width >= 256) || desc->Width >= 1024))
         {
+            g_Work.logLines.fetch_add(1);
             spdlog::info("PW census: texture {}x{} fmt{} samples={} bind={:#x} usage={} cpu={:#x} misc={:#x} mips={} {} | {}", desc->Width, desc->Height, static_cast<int>(desc->Format), desc->SampleDesc.Count, desc->BindFlags,
                 static_cast<int>(desc->Usage), desc->CPUAccessFlags, desc->MiscFlags, desc->MipLevels,
                 out && *out ? std::format("{:#x}", reinterpret_cast<uintptr_t>(*out) & 0xffffff) : std::string("-"), GameCallers(4));
@@ -1000,9 +1028,34 @@ namespace
                 if (left - 1 == 0) { spdlog::info("PW census: done."); }
             }
             g_Frame.fetch_add(1);
-            std::lock_guard lock(g_Mutex);
-            g_DrawsThisFrame = 0;
-            for (auto& [ctx, st] : g_State) { st.draws = 0; }
+            {
+                std::lock_guard lock(g_Mutex);
+                g_DrawsThisFrame = 0;
+                for (auto& [ctx, st] : g_State) { st.draws = 0; }
+            }
+            // The hitch log: this frame's interval is the time since the previous present returned.
+            const int64_t now = Ticks();
+            if (g_LastPresentEnd)
+            {
+                const double ms = TicksToMs(now - g_LastPresentEnd);
+                if (g_AvgFrameMs <= 0) { g_AvgFrameMs = ms; }
+                if (ms > 25.0 && ms > 2.0 * g_AvgFrameMs && g_Hitches < 400)
+                {
+                    g_Hitches++;
+                    std::string last;
+                    { std::lock_guard lock(g_Mutex); last = g_Work.lastTexture; }
+                    spdlog::warn("PW hitch: frame {} took {:.1f} ms (running average {:.1f}): previous Present {:.1f} ms; textures created {} ({} large, {:.1f} ms in CreateTexture2D{}{}); buffers {} ({:.1f} ms); maps {} ({} waited >1 ms, {:.1f} ms total); census log lines {}.",
+                        g_Frame.load(), ms, g_AvgFrameMs, TicksToMs(g_LastPresentTicks), g_Work.textures.load(), g_Work.texturesLarge.load(), TicksToMs(g_Work.textureTicks.load()),
+                        last.empty() ? "" : ", last ", last, g_Work.buffers.load(), TicksToMs(g_Work.bufferTicks.load()), g_Work.maps.load(), g_Work.mapWaits.load(), TicksToMs(g_Work.mapTicks.load()), g_Work.logLines.load());
+                }
+                g_AvgFrameMs = g_AvgFrameMs * 0.95 + ms * 0.05;
+            }
+            g_Work.Reset();
+            { std::lock_guard lock(g_Mutex); g_Work.lastTexture.clear(); }
+            const HRESULT pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags);
+            g_LastPresentEnd = Ticks();
+            g_LastPresentTicks = g_LastPresentEnd - now;
+            return pr;
         }
         return SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags);
     }
@@ -1015,10 +1068,52 @@ namespace
         void** vtable = *reinterpret_cast<void***>(chain);
         SwapChain_Present_hook = safetyhook::create_inline(vtable[kSwapChainPresent], reinterpret_cast<void*>(Hooked_Present));
         spdlog::info("PW census: swap chain Present hook {}.", SwapChain_Present_hook ? "ok" : "FAILED");
+        // The mode the chain actually runs at: in exclusive fullscreen the refresh rate decides
+        // whether a game paced at 60 Hz drops a frame every second (59 Hz) or every 16 s (59.94).
+        IDXGISwapChain* sc = nullptr;
+        if (SUCCEEDED(chain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&sc))) && sc)
+        {
+            DXGI_SWAP_CHAIN_DESC d {};
+            BOOL fullscreen = FALSE;
+            IDXGIOutput* output = nullptr;
+            sc->GetDesc(&d);
+            sc->GetFullscreenState(&fullscreen, &output);
+            std::string mode = "?";
+            if (output)
+            {
+                DXGI_OUTPUT_DESC od {};
+                output->GetDesc(&od);
+                DXGI_MODE_DESC want = d.BufferDesc, got {};
+                if (SUCCEEDED(output->FindClosestMatchingMode(&want, &got, nullptr)))
+                {
+                    mode = std::format("{}x{} @ {}/{} ({:.3f} Hz) on {}", got.Width, got.Height, got.RefreshRate.Numerator, got.RefreshRate.Denominator,
+                        got.RefreshRate.Denominator ? static_cast<double>(got.RefreshRate.Numerator) / got.RefreshRate.Denominator : 0.0, std::filesystem::path(od.DeviceName).string());
+                }
+                output->Release();
+            }
+            spdlog::info("PW census: swap chain runs {}x{} requested {}/{} Hz, fullscreen={}, closest display mode {}.", d.BufferDesc.Width, d.BufferDesc.Height,
+                d.BufferDesc.RefreshRate.Numerator, d.BufferDesc.RefreshRate.Denominator, fullscreen ? "yes" : "no", mode);
+            sc->Release();
+        }
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain)
     {
+        // Exclusive fullscreen: the game asks for 60/1 whatever the display runs at, and on a
+        // 120 Hz desktop the mode it lands on drops one frame a second (measured 2026-09-13:
+        // 59 frames per second, a 33 ms frame every 50). The display's current refresh rate
+        // is requested instead, so the chain lands on the mode the desktop already runs.
+        if (desc && !desc->Windowed)
+        {
+            DEVMODEW dm {};
+            dm.dmSize = sizeof(dm);
+            if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+            {
+                spdlog::info("PW census: exclusive swap chain: refresh {}/{} requested by the game, replaced by the display's {} Hz.", desc->BufferDesc.RefreshRate.Numerator, desc->BufferDesc.RefreshRate.Denominator, dm.dmDisplayFrequency);
+                desc->BufferDesc.RefreshRate.Numerator = dm.dmDisplayFrequency;
+                desc->BufferDesc.RefreshRate.Denominator = 1;
+            }
+        }
         if (desc && InternalSize::BackBufferWidth() > 0)
         {
             desc->BufferDesc.Width = InternalSize::BackBufferWidth();

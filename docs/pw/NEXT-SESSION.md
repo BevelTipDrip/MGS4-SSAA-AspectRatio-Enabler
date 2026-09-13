@@ -94,3 +94,15 @@ Next:
 - Bake the thirteen HUD moves into the shipped fix (private aspect_ratio.cpp) instead of the
   live `tbias` commands; table the pause menu, Codec and overlays.
 - The Window Mode knob and the saved-display-mode log belong in the Release feature set.
+
+## 2026-09-13: exclusive fullscreen stutter (fixed in the Lab build)
+
+The game hard-codes 60/1 as the refresh rate of its swap chain description. In exclusive
+fullscreen on a 120 Hz display the chain landed on a 60 Hz mode and the game dropped exactly one
+frame a second (59 frames per second, a 33 ms frame every 50; the census's hitch log showed no
+resource creation, no waiting maps and no log lines in those frames, and Light Hooks made no
+difference; Windowed and Borderless were clean). The census's CreateSwapChain hook now replaces
+the requested rate with the display's current one for exclusive chains (3840x2160 @ 120 Hz on
+the user's desktop): 60 frames per second, no stutter, user-confirmed. The hitch log (a warning
+per frame over twice the running average, with what happened inside it) and the chain's actual
+mode line stay in the Lab build. For Release this belongs in the Window Mode feature.
