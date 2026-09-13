@@ -1,6 +1,7 @@
 #include "pch.hpp"
 #include "internal_size.hpp"
 #include <atomic>
+#include <cmath>
 
 #include "game.hpp"
 #include "log.hpp"
@@ -114,6 +115,28 @@ namespace InternalSize
 
     void Apply()
     {
+        // The wide canvas is one switch: off means a plain 16:9 run whatever the units say; on
+        // with no units takes the primary display's aspect (650 at 21:9), and an output size
+        // of 0 becomes the display size, so one toggle moves between the two runs.
+        if (!bWideCanvas) { iWideCanvasUnits = 0; }
+        else
+        {
+            const int screenW = GetSystemMetrics(SM_CXSCREEN), screenH = GetSystemMetrics(SM_CYSCREEN);
+            if (iWideCanvasUnits <= 0 && screenW > 0 && screenH > 0)
+            {
+                iWideCanvasUnits = static_cast<int>(std::lround(272.0 * screenW / screenH));
+            }
+            if (iWideCanvasUnits <= 480)
+            {
+                spdlog::info("PW wide canvas: on, but the canvas would be {} units (16:9 or narrower): off for this run.", iWideCanvasUnits);
+                iWideCanvasUnits = 0;
+            }
+            else
+            {
+                if (iOutputWidth <= 0 || iOutputHeight <= 0) { iOutputWidth = screenW; iOutputHeight = screenH; }
+                spdlog::info("PW wide canvas: on: {} units, output {}x{}.", iWideCanvasUnits, iOutputWidth, iOutputHeight);
+            }
+        }
         if (iRenderScale > 0)
         {
             const uint64_t packed = (static_cast<uint64_t>(iRenderScale) << 32) | static_cast<uint32_t>(iRenderScale);

@@ -108,6 +108,8 @@ namespace mgspwe::config
             Report(Graphics, LiveCommands, DrawCensus::bLiveCommands);
             Read(ini, Graphics, RenderScale, InternalSize::iRenderScale);
             Read(ini, Graphics, RenderScaleHundredths, InternalSize::iRenderScaleHundredths);
+            Read(ini, Graphics, WideCanvas, InternalSize::bWideCanvas);
+            Report(Graphics, WideCanvas, InternalSize::bWideCanvas);
             Read(ini, Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
             Report(Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
             Read(ini, Graphics, SceneSizeWidth, InternalSize::iSceneWidth);

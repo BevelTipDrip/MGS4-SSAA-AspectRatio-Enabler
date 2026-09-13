@@ -19,7 +19,8 @@ namespace mgspwe::keys
     constexpr const char* RenderScaleHundredths = "Render Scale Hundredths";   // experiment: force the two float copies of the scale to this / 100 (Afevis's fractional scale); 0 = off
     constexpr const char* SceneSizeWidth = "Scene Size Width";                 // experiment: full-canvas scene targets created at this size instead of canvas x scale (Afevis's target replacement); 0 = off
     constexpr const char* SceneSizeHeight = "Scene Size Height";
-    constexpr const char* WideCanvasUnits = "Wide Canvas Units";               // experiment (private module): the scene target this many canvas units wide, the UI kept at 480; 0 = off
+    constexpr const char* WideCanvas = "Wide Canvas";                          // the non-16:9 infrastructure (private module): canvas widened to the display aspect, UI centred, effects widened; off = a plain 16:9 run
+    constexpr const char* WideCanvasUnits = "Wide Canvas Units";               // canvas width in PSP units when Wide Canvas is on (650 at 21:9); 0 = from the primary display's aspect
     constexpr const char* InternalSizeWidth = "Internal Size Width";           // post-chain target size; 0 = the scene size
     constexpr const char* InternalSizeHeight = "Internal Size Height";
     constexpr const char* OutputSizeWidth = "Output Size Width";               // the picture the game fits into the window; 0 = the game's table
