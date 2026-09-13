@@ -1,4 +1,5 @@
 #include "pch.hpp"
+#include <algorithm>
 #include "config.hpp"
 
 #include "game.hpp"
@@ -86,6 +87,78 @@ namespace mgspwe::config
 
 #if MGS4E_LAB_BUILD
         // Research keys (shared/pw/settings_keys.hpp). Lab builds only; a Release build ignores them.
+        // "WxH" or "WxH (..." -> width, height; false when the text is not that.
+        bool ParseSize(const std::string& text, int& w, int& h)
+        {
+            int a = 0, b = 0;
+            if (sscanf_s(text.c_str(), "%dx%d", &a, &b) != 2 || a <= 0 || b <= 0) { return false; }
+            w = a; h = b;
+            return true;
+        }
+
+        // The window's settings: aspect ratio, the resolution lists of the selected shape, the
+        // window mode and MSAA, mapped onto the switches the Lab build runs on. Files written
+        // before the window had these keys keep their old meaning.
+        void ReadWindowKeys(const mgs4e::Ini& ini)
+        {
+            using namespace mgspwe::keys;
+            struct Shape { const char* name; int w, h; const char* screenKey; const char* renderKey; };
+            static const Shape kShapes[] = {
+                { AspectRatio_16_9,  480, 272, ScreenResolution16x9,  RenderResolution16x9 },
+                { AspectRatio_16_10, 480, 300, ScreenResolution16x10, RenderResolution16x10 },
+                { AspectRatio_21_9,  650, 272, ScreenResolution21x9,  RenderResolution21x9 },
+                { AspectRatio_32_9,  967, 272, ScreenResolution32x9,  RenderResolution32x9 },
+                { AspectRatio_4_3,   480, 360, ScreenResolution4x3,   RenderResolution4x3 },
+            };
+            const auto aspect = ini.Raw(Graphics, AspectRatio);
+            if (aspect)
+            {
+                const Shape* shape = nullptr;
+                for (const Shape& sh : kShapes) { if (*aspect == sh.name) { shape = &sh; } }
+                if (shape)
+                {
+                    InternalSize::bWideCanvas = !(shape->w == 480 && shape->h == 272);
+                    InternalSize::iWideCanvasUnits = shape->w;
+                    InternalSize::iWideCanvasHeightUnits = shape->h;
+                    int w = 0, h = 0;
+                    if (const auto screen = ini.Raw(Graphics, shape->screenKey); screen && ParseSize(*screen, w, h))
+                    {
+                        InternalSize::iOutputWidth = w; InternalSize::iOutputHeight = h;
+                    }
+                    if (const auto render = ini.Raw(Graphics, shape->renderKey); render && ParseSize(*render, w, h))
+                    {
+                        InternalSize::iRenderScale = std::max(1, w / shape->w);
+                    }
+                    spdlog::info("Config: [Graphics] {} = {} -> canvas {}x{}, output {}x{}, render scale {}.", AspectRatio, *aspect,
+                        shape->w, shape->h, InternalSize::iOutputWidth, InternalSize::iOutputHeight, InternalSize::iRenderScale);
+                }
+                else if (*aspect == AspectRatio_Display)
+                {
+                    // The display's shape: the canvas and the output resolve at start-up.
+                    InternalSize::bWideCanvas = true;
+                    InternalSize::iWideCanvasUnits = 0; InternalSize::iWideCanvasHeightUnits = 0;
+                    InternalSize::iOutputWidth = 0; InternalSize::iOutputHeight = 0;
+                    Read(ini, Graphics, RenderScale, InternalSize::iRenderScale);
+                    spdlog::info("Config: [Graphics] {} = {} -> from the display, render scale {}.", AspectRatio, *aspect, InternalSize::iRenderScale);
+                }
+                else { spdlog::warn("[Graphics] {}: '{}' is not a shape the window offers; the display's shape is used.", AspectRatio, *aspect); InternalSize::bWideCanvas = true; }
+            }
+            if (const auto mode = ini.Raw(Graphics, WindowMode))
+            {
+                if (*mode == WindowMode_Off) { InternalSize::iWindowMode = -1; }
+                else if (*mode == WindowMode_Fullscreen) { InternalSize::iWindowMode = 2; }
+                else if (*mode == WindowMode_Borderless) { InternalSize::iWindowMode = 1; }
+                else if (*mode == WindowMode_Windowed) { InternalSize::iWindowMode = 0; }
+                else { Read(ini, Graphics, WindowMode, InternalSize::iWindowMode); }   // a Lab file's number
+                Report(Graphics, WindowMode, InternalSize::iWindowMode);
+            }
+            if (const auto msaa = ini.Raw(Graphics, Msaa))
+            {
+                InternalSize::bDisableMsaa = (*msaa == Msaa_Off);
+                Report(Graphics, Msaa, *msaa);
+            }
+        }
+
         void ReadLabKeys(const mgs4e::Ini& ini)
         {
             using namespace mgspwe::keys;
@@ -123,8 +196,6 @@ namespace mgspwe::config
             Read(ini, Graphics, InternalSizeHeight, InternalSize::iInternalHeight);
             Read(ini, Graphics, OutputSizeWidth, InternalSize::iOutputWidth);
             Read(ini, Graphics, OutputSizeHeight, InternalSize::iOutputHeight);
-            Read(ini, Graphics, WindowMode, InternalSize::iWindowMode);
-            Report(Graphics, WindowMode, InternalSize::iWindowMode);
             Read(ini, Graphics, DisableMsaa, InternalSize::bDisableMsaa);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
@@ -169,6 +240,7 @@ namespace mgspwe::config
         // A Lab build reads the research knobs from whichever file it loaded: the user's own
         // settings (the tool's Peace Walker window edits them) or, with the marker, the lab file.
         ReadLabKeys(ini);
+        ReadWindowKeys(ini);
 #endif
     }
 

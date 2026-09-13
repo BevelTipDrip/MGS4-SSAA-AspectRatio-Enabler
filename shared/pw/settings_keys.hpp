@@ -11,6 +11,33 @@ namespace mgspwe::keys
     // [Debugging]
     constexpr const char* DebugLogging = "Debug Logging";
 
+    // [Graphics] - the settings of the Peace Walker window (the same shape as the MGS4 one).
+    constexpr const char* AspectRatio = "Aspect Ratio";
+    constexpr const char* AspectRatio_Display = "Use Display";   // the primary display's shape; 16:9 there means a plain run
+    constexpr const char* AspectRatio_16_9 = "16:9";
+    constexpr const char* AspectRatio_16_10 = "16:10";
+    constexpr const char* AspectRatio_21_9 = "21:9";
+    constexpr const char* AspectRatio_32_9 = "32:9";
+    constexpr const char* AspectRatio_4_3 = "4:3";
+    // One screen (output) and one render list per shape; the ASI reads the one of the selected shape.
+    constexpr const char* ScreenResolution16x9 = "Screen Resolution (16:9)";
+    constexpr const char* ScreenResolution16x10 = "Screen Resolution (16:10)";
+    constexpr const char* ScreenResolution21x9 = "Screen Resolution (21:9)";
+    constexpr const char* ScreenResolution32x9 = "Screen Resolution (32:9)";
+    constexpr const char* ScreenResolution4x3 = "Screen Resolution (4:3)";
+    constexpr const char* RenderResolution16x9 = "Render Resolution (16:9)";
+    constexpr const char* RenderResolution16x10 = "Render Resolution (16:10)";
+    constexpr const char* RenderResolution21x9 = "Render Resolution (21:9)";
+    constexpr const char* RenderResolution32x9 = "Render Resolution (32:9)";
+    constexpr const char* RenderResolution4x3 = "Render Resolution (4:3)";
+    constexpr const char* WindowMode_Off = "Use Game Setting";
+    constexpr const char* WindowMode_Fullscreen = "Fullscreen";   // the game's exclusive mode (2)
+    constexpr const char* WindowMode_Borderless = "Borderless";   // a frameless window the size of the display (1)
+    constexpr const char* WindowMode_Windowed = "Windowed";       // a normal window (0)
+    constexpr const char* Msaa = "MSAA";
+    constexpr const char* Msaa_4x = "4x";
+    constexpr const char* Msaa_Off = "Off";
+
     // [Graphics] - research knobs. A Lab build of the ASI reads them from this file (and from
     // MGSPWEnabler.lab.settings when the lab marker is present, which then wins); a Release
     // build does not know them. The tool shows them on the Peace Walker window so the knobs
@@ -26,7 +53,7 @@ namespace mgspwe::keys
     constexpr const char* InternalSizeHeight = "Internal Size Height";
     constexpr const char* OutputSizeWidth = "Output Size Width";               // the picture the game fits into the window; 0 = the game's table
     constexpr const char* OutputSizeHeight = "Output Size Height";
-    constexpr const char* WindowMode = "Window Mode";                          // the game's saved display mode read as this: 0 windowed, 1 fullscreen window, 2 exclusive fullscreen; -1 = leave the saved value
+    constexpr const char* WindowMode = "Window Mode";                          // one of the WindowMode_ names (a Lab file may still hold 0/1/2/-1)
     constexpr const char* DisableMsaa = "Disable MSAA";
     constexpr const char* GpuLocalTextures = "GPU Local Textures";
     constexpr const char* BackBufferAtInternalSize = "Back Buffer At Internal Size";

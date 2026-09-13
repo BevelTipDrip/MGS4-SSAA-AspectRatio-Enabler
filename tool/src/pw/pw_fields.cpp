@@ -4,8 +4,9 @@
 #include "pw/settings_keys.hpp"
 #include "pw/identity.hpp"
 
-// The Peace Walker settings the tool edits: the research knobs a Lab build of the ASI reads
-// (docs/pw/lab.md) and the logging switch. A Release build reads only the logging switch.
+// The Peace Walker settings the tool edits: the window (aspect ratio, the resolution lists of the
+// selected shape, window mode, rendering), the Lab page a Lab build of the ASI reads (docs/pw/lab.md)
+// and the logging switch.
 namespace mgs4e::tool::pw
 {
     namespace
@@ -72,27 +73,89 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_Probe =
             "One-off log lines at start-up: the loaded modules, the code decryption timing, the command line.";
 
+        constexpr const char* kHelp_AspectRatio =
+            "The shape of the picture. 16:9 is the game's own layout. Any other shape widens or heightens the\n"
+            "PSP canvas to it (650x272 units at 21:9, 480x360 at 4:3): the world fills the display at correct\n"
+            "proportions, the HUD and menus keep the 16:9 scale and stay centred, the full-screen effects follow,\n"
+            "and the HUD groups move to the edges with the 16:9 margin. Use Display takes the shape of your\n"
+            "primary display at start-up.";
+        constexpr const char* kHelp_ScreenResolution =
+            "The size of the picture on screen: the window's client area, or the display mode in Fullscreen. Only\n"
+            "the list of the selected shape is used. With Use Display the picture is the display's size.";
+        constexpr const char* kHelp_RenderResolution =
+            "The size the scene is rendered at, before the game's own downscale into the picture: an integer\n"
+            "multiple of the canvas (the game's launcher offers 3x and 4x). Higher is supersampling; 8x is fine on\n"
+            "a 4090, 16x needs the frame textures kept in video memory. Only the list of the selected shape is used.";
+        constexpr const char* kHelp_RenderScaleDisplay =
+            "With Use Display the canvas is not known until start-up, so the render size is given as the integer\n"
+            "multiple of the canvas: 4 = the game's Full HD setting, 8, 10, 12, 16.";
+        constexpr const char* kHelp_Msaa =
+            "The game renders the scene with 4x MSAA. Off creates the scene targets single-sampled and turns the\n"
+            "game's resolve into a copy: about 2 ms saved at 8K. The game's resolve shaders are written for 4\n"
+            "samples; check aiming and depth of field with it off.";
+        constexpr const char* kHelp_GpuLocalRelease =
+            "The game's full-size frame textures carry CPU write access and end up in system memory, so its\n"
+            "per-frame copies into them cross PCIe (5 ms each at 8K). On, they stay in video memory: 60 fps at 8K\n"
+            "instead of 27. The game was never seen to write them from the CPU; the log reports it if it ever does.";
+        constexpr const char* kHelp_WindowModeRelease =
+            "Fullscreen is the game's exclusive mode (it takes the display mode Windows offers: on a monitor whose\n"
+            "native resolution is 16:9 that is the native mode, not a 21:9 desktop resolution), Borderless a\n"
+            "frameless window the size of the display, Windowed a normal window. Use Game Setting keeps the value\n"
+            "saved by the in-game Options.";
+
         std::vector<Page> BuildPages()
         {
             const char* G = K::Graphics;
             const char* D = K::Debugging;
             return {
-                { "Rendering (Lab)", {
-                    { "Internal resolution", {
-                        F::Int(G, K::RenderScale, kHelp_RenderScale, 0, 0, 24),
-                        F::Bool(G, K::DisableMsaa, kHelp_DisableMsaa, false),
-                        F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocal, false),
+                { "Graphics", {
+                    { "Window", {
+                        F::Choice(G, K::AspectRatio, kHelp_AspectRatio, K::AspectRatio_16_9,
+                            { K::AspectRatio_Display, K::AspectRatio_16_9, K::AspectRatio_16_10, K::AspectRatio_21_9, K::AspectRatio_32_9, K::AspectRatio_4_3 }),
+
+                        // One screen list per shape, shown only while its shape is selected (the MGS4 window's pattern).
+                        F::Choice(G, K::ScreenResolution16x9, kHelp_ScreenResolution, "1920x1080",
+                            { "1280x720", "1366x768", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160", "5120x2880", "7680x4320" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_16_9 }),
+                        F::Choice(G, K::ScreenResolution16x10, kHelp_ScreenResolution, "1920x1200",
+                            { "1280x800", "1440x900", "1680x1050", "1920x1200", "2560x1600", "2880x1800", "3840x2400" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_16_10 }),
+                        F::Choice(G, K::ScreenResolution21x9, kHelp_ScreenResolution, "3440x1440",
+                            { "2560x1080", "2560x1088", "3440x1440", "3440x1600", "3840x1600", "3840x1620", "5120x2160" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_21_9 }),
+                        F::Choice(G, K::ScreenResolution32x9, kHelp_ScreenResolution, "5120x1440",
+                            { "3840x1080", "3840x1200", "5120x1440", "5120x1600", "7680x2160" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_32_9 }),
+                        F::Choice(G, K::ScreenResolution4x3, kHelp_ScreenResolution, "1024x768",
+                            { "640x480", "800x600", "1024x768", "1152x864", "1280x960", "1400x1050", "1440x1080", "1600x1200", "1920x1440", "2048x1536", "2560x1920", "2880x2160", "3200x2400" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_4_3 }),
+
+                        F::Choice(G, K::WindowMode, kHelp_WindowModeRelease, K::WindowMode_Off,
+                            { K::WindowMode_Off, K::WindowMode_Fullscreen, K::WindowMode_Borderless, K::WindowMode_Windowed }),
                     }},
-                    { "Sizes (0 = the game's)", {
-                        F::Bool(G, K::WideCanvas, kHelp_WideCanvas, false),
-                        F::Int(G, K::WideCanvasUnits, kHelp_WideCanvas, 0, 0, 2000),
-                        F::Int(G, K::WideCanvasHeightUnits, kHelp_WideCanvas, 0, 0, 2000),
-                        F::Int(G, K::WindowMode, kHelp_WindowMode, -1, -1, 2),
-                        F::Int(G, K::OutputSizeWidth, kHelp_OutputSize, 0, 0, 16384),
-                        F::Int(G, K::OutputSizeHeight, kHelp_OutputSize, 0, 0, 16384),
-                        F::Int(G, K::InternalSizeWidth, kHelp_InternalSize, 0, 0, 16384),
-                        F::Int(G, K::InternalSizeHeight, kHelp_InternalSize, 0, 0, 16384),
-                        F::Bool(G, K::BackBufferAtInternalSize, kHelp_BackBuffer, false),
+
+                    { "Rendering", {
+                        // One render list per shape: the canvas of that shape times the integer scales.
+                        F::Choice(G, K::RenderResolution16x9, kHelp_RenderResolution, "1920x1088 (4x)",
+                            { "1440x816 (3x)", "1920x1088 (4x)", "2880x1632 (6x)", "3840x2176 (8x)", "4800x2720 (10x)", "5760x3264 (12x)", "7680x4352 (16x)" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_16_9 }),
+                        F::Choice(G, K::RenderResolution16x10, kHelp_RenderResolution, "1920x1200 (4x)",
+                            { "1440x900 (3x)", "1920x1200 (4x)", "2880x1800 (6x)", "3840x2400 (8x)", "4800x3000 (10x)", "5760x3600 (12x)", "7680x4800 (16x)" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_16_10 }),
+                        F::Choice(G, K::RenderResolution21x9, kHelp_RenderResolution, "2600x1088 (4x)",
+                            { "1950x816 (3x)", "2600x1088 (4x)", "3900x1632 (6x)", "5200x2176 (8x)", "6500x2720 (10x)", "7800x3264 (12x)", "10400x4352 (16x)" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_21_9 }),
+                        F::Choice(G, K::RenderResolution32x9, kHelp_RenderResolution, "3868x1088 (4x)",
+                            { "2901x816 (3x)", "3868x1088 (4x)", "5802x1632 (6x)", "7736x2176 (8x)", "9670x2720 (10x)", "11604x3264 (12x)" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_32_9 }),
+                        F::Choice(G, K::RenderResolution4x3, kHelp_RenderResolution, "1920x1440 (4x)",
+                            { "1440x1080 (3x)", "1920x1440 (4x)", "2880x2160 (6x)", "3840x2880 (8x)", "4800x3600 (10x)", "5760x4320 (12x)", "7680x5760 (16x)" })
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_4_3 }),
+                        F::Int(G, K::RenderScale, kHelp_RenderScaleDisplay, 4, 1, 24)
+                            .ShownWhen(K::AspectRatio, { K::AspectRatio_Display }),
+
+                        F::Choice(G, K::Msaa, kHelp_Msaa, K::Msaa_4x, { K::Msaa_4x, K::Msaa_Off }),
+                        F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocalRelease, true),
                     }},
                 }},
                 { "Lab", {
@@ -104,6 +167,11 @@ namespace mgs4e::tool::pw
                     { "GPU timing", {
                         F::Bool(G, K::TimePasses, kHelp_Timing, true),
                         F::Int(G, K::TimeFrames, kHelp_Timing, 60, 1, 600),
+                    }},
+                    { "Experiments (0 = off)", {
+                        F::Int(G, K::InternalSizeWidth, kHelp_InternalSize, 0, 0, 16384),
+                        F::Int(G, K::InternalSizeHeight, kHelp_InternalSize, 0, 0, 16384),
+                        F::Bool(G, K::BackBufferAtInternalSize, kHelp_BackBuffer, false),
                     }},
                     { "Other", {
                         F::Bool(G, K::DumpShaders, kHelp_DumpShaders, false),
