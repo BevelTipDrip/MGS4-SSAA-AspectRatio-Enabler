@@ -147,8 +147,8 @@ namespace mgspwe::config
             {
                 if (*mode == WindowMode_Off) { InternalSize::iWindowMode = -1; }
                 else if (*mode == WindowMode_Fullscreen) { InternalSize::iWindowMode = 2; }
-                else if (*mode == WindowMode_Borderless) { InternalSize::iWindowMode = 1; }
-                else if (*mode == WindowMode_Windowed) { InternalSize::iWindowMode = 0; }
+                else if (*mode == WindowMode_Borderless) { InternalSize::iWindowMode = 0; }
+                else if (*mode == WindowMode_Windowed) { InternalSize::iWindowMode = 1; }
                 else { Read(ini, Graphics, WindowMode, InternalSize::iWindowMode); }   // a Lab file's number
                 Report(Graphics, WindowMode, InternalSize::iWindowMode);
             }

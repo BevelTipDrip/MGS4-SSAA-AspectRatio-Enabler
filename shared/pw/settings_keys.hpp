@@ -32,8 +32,8 @@ namespace mgspwe::keys
     constexpr const char* RenderResolution4x3 = "Render Resolution (4:3)";
     constexpr const char* WindowMode_Off = "Use Game Setting";
     constexpr const char* WindowMode_Fullscreen = "Fullscreen";   // the game's exclusive mode (2)
-    constexpr const char* WindowMode_Borderless = "Borderless";   // a frameless window the size of the display (1)
-    constexpr const char* WindowMode_Windowed = "Windowed";       // a normal window (0)
+    constexpr const char* WindowMode_Borderless = "Borderless";   // a frameless window the size of the display (the game's 0)
+    constexpr const char* WindowMode_Windowed = "Windowed";       // a normal window (the game's 1)
     constexpr const char* AnisotropicFiltering = "Anisotropic Filtering";   // true = 16x on every linear sampler (a number 2..16 is accepted too); false = the game's samplers
     constexpr const char* Msaa = "MSAA";
     constexpr const char* Msaa_4x = "4x";

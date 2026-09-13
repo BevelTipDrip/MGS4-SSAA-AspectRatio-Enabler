@@ -1155,6 +1155,27 @@ namespace
         }
     }
 
+    // Windowed (the game's mode 1): the game makes a normal window at its saved or preset size;
+    // the client is set to the selected screen resolution and centred on the monitor, and the
+    // game's WM_SIZE handling resizes the chain to it. Borderless (0) and Fullscreen (2) are the
+    // game's own and need nothing here.
+    void ShapeWindow(HWND hwnd)
+    {
+        if (InternalSize::iWindowMode != 1 || InternalSize::iOutputWidth <= 0 || InternalSize::iOutputHeight <= 0) { return; }
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi {};
+        mi.cbSize = sizeof(mi);
+        if (!GetMonitorInfoW(mon, &mi)) { return; }
+        const RECT m = mi.rcMonitor;
+        const LONG style = static_cast<LONG>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+        RECT r { 0, 0, InternalSize::iOutputWidth, InternalSize::iOutputHeight };
+        AdjustWindowRectEx(&r, static_cast<DWORD>(style), FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
+        const int w = r.right - r.left, h = r.bottom - r.top;
+        const int x = m.left + std::max(0L, ((m.right - m.left) - w) / 2), y = m.top + std::max(0L, ((m.bottom - m.top) - h) / 2);
+        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOACTIVATE);
+        spdlog::info("PW window: windowed: client {}x{} at {},{} (window {}x{}).", InternalSize::iOutputWidth, InternalSize::iOutputHeight, x, y, w, h);
+    }
+
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain)
     {
         // Exclusive fullscreen: the game asks for 60/1 whatever the display runs at, and on a
@@ -1179,6 +1200,7 @@ namespace
             spdlog::info("PW census: swap chain buffers requested at {}x{} (flip model stretches them onto the window).", desc->BufferDesc.Width, desc->BufferDesc.Height);
         }
         const HRESULT r = Factory_CreateSwapChain_hook.stdcall<HRESULT>(self, device, desc, chain);
+        if (SUCCEEDED(r) && desc && desc->Windowed && desc->OutputWindow && IsWindow(desc->OutputWindow)) { ShapeWindow(desc->OutputWindow); }
         if (SUCCEEDED(r) && chain && *chain)
         {
             if (desc) { spdlog::info("PW census: swap chain {}x{} fmt{} windowed={} buffers={} effect={} window={:#x}.", desc->BufferDesc.Width, desc->BufferDesc.Height, static_cast<int>(desc->BufferDesc.Format), desc->Windowed, desc->BufferCount, static_cast<int>(desc->SwapEffect), reinterpret_cast<uintptr_t>(desc->OutputWindow)); }

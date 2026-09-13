@@ -104,8 +104,9 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_WindowModeRelease =
             "Fullscreen is the game's exclusive mode (it takes the display mode Windows offers: on a monitor whose\n"
             "native resolution is 16:9 that is the native mode, not a 21:9 desktop resolution), Borderless a\n"
-            "frameless window the size of the display, Windowed a normal window. Use Game Setting keeps the value\n"
-            "saved by the in-game Options.";
+            "frameless window the size of the display, Windowed a normal window with the selected Screen\n"
+            "Resolution as its client area. The choice is applied every launch and shows in the in-game Options,\n"
+            "which can still change it for the run. Use Game Setting keeps the value saved by the game.";
 
         std::vector<Page> BuildPages()
         {

@@ -43,7 +43,6 @@ namespace
     // offsets into the display object (rsi): picture w/h at +0x2940/+0x2944, x/y offset at
     // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
     constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
-    constexpr uintptr_t kGameWindow = 0x107BD50;   // the game window (HWND), .data; the swap chain desc takes it from here
     SafetyHookMid g_AfterFit {};
     // The two sites that turn the integer scale into a float: the game scaler (+596E5,
     // `cvtsi2ss xmm1, rcx` after the getter; replaced by our value, the instruction skipped) and
@@ -60,7 +59,9 @@ namespace
     // The settings getter (+84D50, a 14-byte leaf: `mov rax,[array]; movsxd rdx,ecx; mov eax,[rax+rdx*4]`)
     // and setter (+85130). The window code reads id 3 (display mode), 4/5 (position), 7/8
     // (size), 17 (monitor), 19 (windowed preset) and 246 (applied mode) through the getter;
-    // the in-game Options menu persists the mode through the setter. Mode 2 creates an
+    // the in-game Options menu persists the mode through the setter. The game's numbering:
+    // 0 Borderless (frameless, the monitor), 1 Windowed, 2 Fullscreen (exclusive; user-verified
+    // against the in-game menu 2026-09-13). Mode 2 creates an
     // exclusive-fullscreen chain at the display mode Windows offers: on a monitor whose native
     // resolution is 16:9 that is the native mode rather than a 21:9 desktop resolution (a
     // native 21:9 output is fine), so the Lab can pin the mode and logs the saved values once.
@@ -69,6 +70,7 @@ namespace
     constexpr uintptr_t kSettingsArray = 0x10C58A0;
     SafetyHookInline g_SettingsGet {}, g_SettingsSet {};
     std::atomic<bool> g_SettingsLogged { false };
+    std::atomic<bool> g_ModeWritten { false };
 
     int __fastcall Hooked_SettingsGet(int id)
     {
@@ -81,7 +83,19 @@ namespace
                     array[3], array[4], array[5], array[7], array[8], array[17], array[19], array[246]);
             }
         }
-        if (id == 3 && InternalSize::iWindowMode >= 0) { return InternalSize::iWindowMode; }
+        // The selected window mode is written into the game's settings array once, on the
+        // first read of the mode after the saved settings are loaded, and nothing is overridden
+        // after that: the in-game Options menu shows the running mode and can still change it
+        // (its runtime switch handler does the work), and the game persists whatever it ends on.
+        if (id == 3 && InternalSize::iWindowMode >= 0 && !g_ModeWritten.exchange(true))
+        {
+            auto* array = *reinterpret_cast<int32_t**>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kSettingsArray);
+            if (array)
+            {
+                spdlog::info("PW window: saved display mode {} replaced by {} for this run.", array[3], InternalSize::iWindowMode);
+                array[3] = InternalSize::iWindowMode;
+            }
+        }
         return g_SettingsGet.fastcall<int>(id);
     }
 
@@ -231,7 +245,7 @@ namespace InternalSize
             {
                 g_SettingsGet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsGet), reinterpret_cast<void*>(&Hooked_SettingsGet));
                 g_SettingsSet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsSet), reinterpret_cast<void*>(&Hooked_SettingsSet));
-                if (iWindowMode >= 0) { spdlog::info("PW window: display mode pinned to {} ({}).", iWindowMode, g_SettingsGet ? "hooked" : "hook FAILED"); }
+                if (iWindowMode >= 0) { spdlog::info("PW window: display mode {} will replace the saved one ({}).", iWindowMode, g_SettingsGet ? "hooked" : "hook FAILED"); }
                 else { spdlog::info("PW window: settings getter {} (saved values logged on first read).", g_SettingsGet ? "hooked" : "hook FAILED"); }
             }
             else { spdlog::warn("PW window: settings getter +{:X} does not look as expected; not hooked.", kSettingsGet); }
