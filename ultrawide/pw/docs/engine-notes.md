@@ -175,7 +175,11 @@ monitor, position or the swap chain. Consequences he did not handle:
 
 - **Mode 2 is exclusive fullscreen** (`Windowed = FALSE`, DISCARD): a custom size the display
   cannot present (6880x2880) is only safe in modes 0 and 1; his bigger-window supersampling
-  works because the chain is windowed and DWM scales it.
+  works because the chain is windowed and DWM scales it. Exclusive mode takes the display
+  mode Windows offers: on a monitor whose native resolution is 16:9 that is the native mode
+  even when the desktop is set to a 21:9 resolution, which is why the runs of 2026-09-12 came
+  up 3840x2160 / 2560x1440 exclusive. The wide canvas itself works in exclusive fullscreen on a
+  native 21:9 output (user-verified 2026-09-13).
 - **The windowed preset chooser** (`+1AA40`, largest preset that fits the monitor) has nothing
   that fits once the entries are 6880x2880, so it falls back to index 0 (custom), which is why
   his ini size still applies; the launcher's windowed presets are gone.
