@@ -43,8 +43,10 @@ namespace mgs4e::tool::pw
             "The infrastructure for displays that are not 16:9: the canvas is widened to the display's aspect\n"
             "(650 PSP units at 21:9), the world fills it, the HUD and menus stay at the 16:9 scale and are\n"
             "centred, and the full-screen effects are widened with it. Off = a plain 16:9 run, pillarboxed.\n"
-            "Units: the canvas width in PSP units; 0 takes it from the primary display. With Wide Canvas on and\n"
-            "Output Size 0, the output becomes the display size.";
+            "Narrower than 16:9 makes the canvas taller instead (480x360 at 4:3, 480x300 at 16:10), with the world\n"
+            "above and below the UI. Units: the canvas width and height in PSP units; 0 takes them from the\n"
+            "primary display. With Wide Canvas on and Output Size 0, the output becomes the display size. For a\n"
+            "4:3 or 16:10 desktop mode use Window Mode 1 (windowed picks a 16:9 preset, exclusive the native mode).";
         constexpr const char* kHelp_WindowMode =
             "What the game is told its saved display mode is: 0 windowed, 1 fullscreen window, 2 exclusive\n"
             "fullscreen (the in-game Options value, kept in the save folder). Exclusive fullscreen takes the\n"
@@ -84,6 +86,7 @@ namespace mgs4e::tool::pw
                     { "Sizes (0 = the game's)", {
                         F::Bool(G, K::WideCanvas, kHelp_WideCanvas, false),
                         F::Int(G, K::WideCanvasUnits, kHelp_WideCanvas, 0, 0, 2000),
+                        F::Int(G, K::WideCanvasHeightUnits, kHelp_WideCanvas, 0, 0, 2000),
                         F::Int(G, K::WindowMode, kHelp_WindowMode, -1, -1, 2),
                         F::Int(G, K::OutputSizeWidth, kHelp_OutputSize, 0, 0, 16384),
                         F::Int(G, K::OutputSizeHeight, kHelp_OutputSize, 0, 0, 16384),

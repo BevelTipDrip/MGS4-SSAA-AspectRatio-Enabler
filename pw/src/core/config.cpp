@@ -112,6 +112,8 @@ namespace mgspwe::config
             Report(Graphics, WideCanvas, InternalSize::bWideCanvas);
             Read(ini, Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
             Report(Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
+            Read(ini, Graphics, WideCanvasHeightUnits, InternalSize::iWideCanvasHeightUnits);
+            Report(Graphics, WideCanvasHeightUnits, InternalSize::iWideCanvasHeightUnits);
             Read(ini, Graphics, SceneSizeWidth, InternalSize::iSceneWidth);
             Read(ini, Graphics, SceneSizeHeight, InternalSize::iSceneHeight);
             Report(Graphics, SceneSizeWidth, InternalSize::iSceneWidth);

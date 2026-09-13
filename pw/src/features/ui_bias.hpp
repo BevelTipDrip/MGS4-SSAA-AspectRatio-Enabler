@@ -12,7 +12,7 @@ namespace UiBias
     inline bool Active() { return false; }
     inline bool GameplaySeen() { return false; }
     inline bool OnConstantUnmap(void*, size_t, float* = nullptr) { return false; }
-    inline void ConfigureWideScene(int, int) {}
+    inline void ConfigureWideScene(int, int, int) {}
     inline bool WideSceneActive() { return false; }
     inline void BeforeDraw(ID3D11DeviceContext*, bool, uint64_t, float = 0) {}
     inline const char* Classify(ID3D11DeviceContext*, bool, uint64_t) { return ""; }

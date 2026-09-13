@@ -91,6 +91,7 @@ namespace
         g_SettingsSet.fastcall<void>(id, value);
     }
     int g_SceneW = 0, g_SceneH = 0;
+    int g_CanvasW = 480, g_CanvasH = 272;   // the canvas in PSP units for this run (the fit hook reads it)
     float g_FloatScale = 0;
 
     template <typename T>
@@ -117,27 +118,35 @@ namespace InternalSize
     void Apply()
     {
         // The wide canvas is one switch: off means a plain 16:9 run whatever the units say; on
-        // with no units takes the primary display's aspect (650 at 21:9), and an output size
-        // of 0 becomes the display size, so one toggle moves between the two runs.
-        if (!bWideCanvas) { iWideCanvasUnits = 0; }
-        else
+        // with no units takes the primary display's aspect: wider than 16:9 widens the canvas
+        // (650x272 at 21:9), narrower makes it taller (480x360 at 4:3, 480x300 at 16:10). An
+        // output size of 0 becomes the display size, so one toggle moves between the runs.
+        int canvasW = 480, canvasH = 272;
+        if (bWideCanvas)
         {
             const int screenW = GetSystemMetrics(SM_CXSCREEN), screenH = GetSystemMetrics(SM_CYSCREEN);
-            if (iWideCanvasUnits <= 0 && screenW > 0 && screenH > 0)
+            // The canvas follows the picture: an explicit output size sets the aspect, else the display.
+            const bool outputGiven = iOutputWidth > 0 && iOutputHeight > 0;
+            const double aspect = outputGiven ? static_cast<double>(iOutputWidth) / iOutputHeight
+                                : (screenW > 0 && screenH > 0) ? static_cast<double>(screenW) / screenH : 480.0 / 272.0;
+            const bool wider = aspect > 480.0 / 272.0;
+            canvasW = iWideCanvasUnits > 0 ? iWideCanvasUnits : (wider ? static_cast<int>(std::lround(272.0 * aspect)) : 480);
+            canvasH = iWideCanvasHeightUnits > 0 ? iWideCanvasHeightUnits : (wider ? 272 : static_cast<int>(std::lround(480.0 / aspect)));
+            if (canvasW <= 480 && canvasH <= 272)
             {
-                iWideCanvasUnits = static_cast<int>(std::lround(272.0 * screenW / screenH));
-            }
-            if (iWideCanvasUnits <= 480)
-            {
-                spdlog::info("PW wide canvas: on, but the canvas would be {} units (16:9 or narrower): off for this run.", iWideCanvasUnits);
-                iWideCanvasUnits = 0;
+                spdlog::info("PW wide canvas: on, but the canvas would be {}x{} units (16:9): off for this run.", canvasW, canvasH);
+                canvasW = 480; canvasH = 272;
             }
             else
             {
                 if (iOutputWidth <= 0 || iOutputHeight <= 0) { iOutputWidth = screenW; iOutputHeight = screenH; }
-                spdlog::info("PW wide canvas: on: {} units, output {}x{}.", iWideCanvasUnits, iOutputWidth, iOutputHeight);
+                spdlog::info("PW wide canvas: on: {}x{} units (display {}x{}), output {}x{}.", canvasW, canvasH, screenW, screenH, iOutputWidth, iOutputHeight);
             }
         }
+        const bool canvasActive = (canvasW != 480 || canvasH != 272);
+        iWideCanvasUnits = canvasActive ? canvasW : 0;
+        iWideCanvasHeightUnits = canvasActive ? canvasH : 0;
+        g_CanvasW = canvasW; g_CanvasH = canvasH;
         if (iRenderScale > 0)
         {
             const uint64_t packed = (static_cast<uint64_t>(iRenderScale) << 32) | static_cast<uint32_t>(iRenderScale);
@@ -148,13 +157,12 @@ namespace InternalSize
         // Scene size: the render scale's canvas multiple when set, else the explicit internal size.
         // With a wide canvas (private module) the scene targets are units x scale wide, but the
         // HUD scale sites keep 480 x scale: the UI is still laid out in 480 units at the same scale.
-        const int canvasUnits = (iWideCanvasUnits > 480) ? iWideCanvasUnits : 480;
-        const int sceneW = iRenderScale > 0 ? canvasUnits * iRenderScale : iInternalWidth;
-        const int sceneH = iRenderScale > 0 ? 272 * iRenderScale : iInternalHeight;
+        const int sceneW = iRenderScale > 0 ? canvasW * iRenderScale : iInternalWidth;
+        const int sceneH = iRenderScale > 0 ? canvasH * iRenderScale : iInternalHeight;
         // The two width sites of the UI-scale function follow the scene: with a wide canvas the
         // private module pins the UI scale itself (the engine's own canvas fields do the rest).
         const int hudW = sceneW;
-        if (iWideCanvasUnits > 480 && iRenderScale > 0 && iSceneWidth == 0 && iSceneHeight == 0)
+        if (canvasActive && iRenderScale > 0 && iSceneWidth == 0 && iSceneHeight == 0)
         {
             iSceneWidth = sceneW; iSceneHeight = sceneH;   // the full-canvas targets must follow
         }
@@ -215,7 +223,7 @@ namespace InternalSize
             }
             else { spdlog::warn("PW internal size: scene creation site does not look as expected; experiment not installed."); }
         }
-        if (iWideCanvasUnits > 0 && iRenderScale > 0) { UiBias::ConfigureWideScene(iWideCanvasUnits, iRenderScale); }
+        if (canvasActive && iRenderScale > 0) { UiBias::ConfigureWideScene(canvasW, canvasH, iRenderScale); }
         {
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* get = reinterpret_cast<const uint8_t*>(base + kSettingsGet);
@@ -247,7 +255,7 @@ namespace InternalSize
                         obj[0x2940 / 4] = iInternalWidth; obj[0x2944 / 4] = iInternalHeight;
                         obj[0x2948 / 4] = 0; obj[0x294C / 4] = 0;
                     }
-                    else if (iWideCanvasUnits > 480)
+                    else if (g_CanvasW != 480 || g_CanvasH != 272)
                     {
                         // The game fits a 480x272-shaped picture; the wide canvas needs its own
                         // aspect fitted into the window.
@@ -257,12 +265,12 @@ namespace InternalSize
                         int cw = iOutputWidth, ch = iOutputHeight;
                         if (cw > 0 && ch > 0)
                         {
-                            const double aspect = static_cast<double>(iWideCanvasUnits) / 272.0;
+                            const double aspect = static_cast<double>(g_CanvasW) / static_cast<double>(g_CanvasH);
                             int w = cw, h = static_cast<int>(cw / aspect + 0.5);
                             if (h > ch) { h = ch; w = static_cast<int>(ch * aspect + 0.5); }
                             obj[0x2940 / 4] = w; obj[0x2944 / 4] = h;
                             obj[0x2948 / 4] = (cw - w) / 2; obj[0x294C / 4] = (ch - h) / 2;
-                            spdlog::info("PW window: fit overridden for the {}-unit canvas: box {}x{}, picture {}x{} at {},{}.", iWideCanvasUnits, cw, ch, w, h, obj[0x2948 / 4], obj[0x294C / 4]);
+                            spdlog::info("PW window: fit overridden for the {}x{}-unit canvas: box {}x{}, picture {}x{} at {},{}.", g_CanvasW, g_CanvasH, cw, ch, w, h, obj[0x2948 / 4], obj[0x294C / 4]);
                         }
                     }
                 });
