@@ -748,6 +748,27 @@ namespace
                 if (!constant && size && g_FramesToLog.load() > 0)
                 {
                     Trace(self, std::format("Unmap vb {}B", size));
+                    // Every quad of the upload (24-byte vertices, position last): the shared text
+                    // buffer positions glyphs here rather than by a translation row.
+                    if (size % 24 == 0 && size <= 65536)
+                    {
+                        const auto* v = static_cast<const uint8_t*>(it->second.data);
+                        const size_t verts = size / 24;
+                        std::string quads;
+                        int shown = 0;
+                        for (size_t q = 0; q + 4 <= verts && shown < 80; q += 4, shown++)
+                        {
+                            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+                            for (size_t k = 0; k < 4; k++)
+                            {
+                                float xy[2];
+                                std::memcpy(xy, v + (q + k) * 24 + 12, sizeof(xy));
+                                x0 = std::min(x0, xy[0]); x1 = std::max(x1, xy[0]); y0 = std::min(y0, xy[1]); y1 = std::max(y1, xy[1]);
+                            }
+                            quads += std::format(" ({:.0f},{:.0f})-({:.0f},{:.0f})", x0, y0, x1, y1);
+                        }
+                        spdlog::info("PW census: f{} {} vb upload {}B tex={} quads{}{}", g_Frame.load(), HooksFor(self).name, size, g_State[self].texture, quads, verts / 4 > 80 ? " ..." : "");
+                    }
                     ContextState& st = g_State[self];
                     const size_t keep = std::min<size_t>(size, 64 * 24);
                     st.lastVertexUpload.assign(static_cast<const uint8_t*>(it->second.data), static_cast<const uint8_t*>(it->second.data) + keep);
@@ -1299,7 +1320,7 @@ namespace
             if (down && !f11Down)
             {
                 spdlog::info("PW live: F11 pressed: census and timing start now (frame {}).", g_Frame.load());
-                RunCommand("census 2");
+                RunCommand(std::format("census {}", std::max(1, DrawCensus::iCensusFrames)));
             }
             f11Down = down;
             static int tick = 0;
