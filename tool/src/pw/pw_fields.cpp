@@ -39,6 +39,10 @@ namespace mgs4e::tool::pw
             "The game's full-size frame textures carry CPU write access and end up in system memory, so its\n"
             "per-frame copies into them cross PCIe (5 ms each at 8K). This keeps them in video memory. The game\n"
             "was never seen to write them from the CPU; the log reports it if it ever does.";
+        constexpr const char* kHelp_WindowMode =
+            "What the game is told its saved display mode is: 0 windowed, 1 fullscreen window, 2 exclusive\n"
+            "fullscreen (the in-game Options value, kept in the save folder; 2 makes an exclusive swap chain that\n"
+            "the size experiments cannot survive). -1 leaves the saved value. The saved values go to the log.";
         constexpr const char* kHelp_BackBuffer =
             "Experiment: the swap chain's buffers at the scene size, stretched onto the window by the compositor\n"
             "instead of the game's blit. Measured to cost about the same as the game's own blit.";
@@ -70,6 +74,7 @@ namespace mgs4e::tool::pw
                         F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocal, false),
                     }},
                     { "Sizes (0 = the game's)", {
+                        F::Int(G, K::WindowMode, kHelp_WindowMode, -1, -1, 2),
                         F::Int(G, K::OutputSizeWidth, kHelp_OutputSize, 0, 0, 16384),
                         F::Int(G, K::OutputSizeHeight, kHelp_OutputSize, 0, 0, 16384),
                         F::Int(G, K::InternalSizeWidth, kHelp_InternalSize, 0, 0, 16384),

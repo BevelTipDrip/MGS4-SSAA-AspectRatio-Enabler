@@ -120,6 +120,7 @@ namespace
         std::string trace;              // call order on this context since its last draw (first draws of a census frame only)
         std::string lastStampedTarget;  // timing: the target of the last stamped draw on this context
         bool stampNext = false;         // timing: the op after a stamped op gets a closing stamp, so each pass is bounded
+        bool uiUpload = false;          // the last constant upload on this context was a UI one (the private module says)
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     std::mutex g_Mutex;
@@ -238,6 +239,8 @@ namespace
 
     struct Snapshot { float f[64]; size_t count; bool valid; };
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
+    std::unordered_map<ID3D11Resource*, bool> g_UiBuffer;          // constant buffer -> its last upload carried the UI ortho (private module)
+    std::unordered_map<ID3D11Resource*, float> g_UiShift;          // constant buffer -> the wide-scene move (canvas units) of its last upload
     std::unordered_map<ID3D11Resource*, Snapshot> g_LatestUpload;  // constant buffer -> latest 16 floats
     struct Mapping { void* data; size_t size; };
     std::unordered_map<ID3D11Resource*, Mapping> g_Mapped;         // Map(): pData until Unmap()
@@ -462,13 +465,16 @@ namespace
         if (cb.empty()) { cb = "cb -"; }
         const auto vs = g_ShaderHash.find(st.vs);
         const auto ps = g_ShaderHash.find(st.ps);
-        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} vs={} ps={} {} | {}",
+        bool uiBound = st.uiUpload;
+        if (const auto ub = g_UiBuffer.find(static_cast<ID3D11Resource*>(st.vsCb[0])); ub != g_UiBuffer.end()) { uiBound = ub->second; }
+        const char* wide = UiBias::WideSceneActive() ? UiBias::Classify(static_cast<ID3D11DeviceContext*>(self), uiBound, ps == g_ShaderHash.end() ? 0 : ps->second) : "";
+        spdlog::info("PW census: f{} {}#{} {} n={} start={} base={} topo={} vp=({:.0f},{:.0f} {:.0f}x{:.0f}) sc=({},{})-({},{}) rt={} tex={} vs={} ps={} {} {} | {}",
             g_Frame.load(), HooksFor(self).name, st.draws, kind, count, start, baseVertex, static_cast<int>(st.topology),
             st.viewport.TopLeftX, st.viewport.TopLeftY, st.viewport.Width, st.viewport.Height,
             st.scissor.left, st.scissor.top, st.scissor.right, st.scissor.bottom, st.target, st.texture,
             vs == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", vs->second).substr(0, 8),
             ps == g_ShaderHash.end() ? std::string("?") : std::format("{:016x}", ps->second).substr(0, 8),
-            cb, GameCallers(10));
+            wide, cb, GameCallers(10));
         if (!st.trace.empty())
         {
             spdlog::info("PW census:   calls {} > {}", st.trace, kind);
@@ -489,13 +495,45 @@ namespace
     void STDMETHODCALLTYPE Hooked_Draw(ID3D11DeviceContext* self, UINT vertexCount, UINT startVertex)
     {
         LogDraw(self, "Draw", vertexCount, startVertex, 0);
+        bool ui = false;
+        uint64_t ps = 0;
+        float shift = 0;
+        if (UiBias::WideSceneActive())
+        {
+            std::lock_guard lock(g_Mutex);
+            auto* cb = static_cast<ID3D11Resource*>(g_State[self].vsCb[0]);
+            const auto ub = g_UiBuffer.find(cb);
+            ui = ub != g_UiBuffer.end() ? ub->second : g_State[self].uiUpload;
+            const auto us = g_UiShift.find(cb);
+            if (us != g_UiShift.end()) { shift = us->second; }
+            const auto it = g_ShaderHash.find(g_State[self].ps);
+            if (it != g_ShaderHash.end()) { ps = it->second; }
+        }
+        UiBias::BeforeDraw(self, ui, ps, shift);
         Original<decltype(&Hooked_Draw)>(self, kCtxDraw)(self, vertexCount, startVertex);
+        UiBias::AfterDraw(self, ui);
     }
 
     void STDMETHODCALLTYPE Hooked_DrawIndexed(ID3D11DeviceContext* self, UINT indexCount, UINT startIndex, INT baseVertex)
     {
         LogDraw(self, "DrawIndexed", indexCount, startIndex, static_cast<UINT>(baseVertex));
+        bool ui = false;
+        uint64_t ps = 0;
+        float shift = 0;
+        if (UiBias::WideSceneActive())
+        {
+            std::lock_guard lock(g_Mutex);
+            auto* cb = static_cast<ID3D11Resource*>(g_State[self].vsCb[0]);
+            const auto ub = g_UiBuffer.find(cb);
+            ui = ub != g_UiBuffer.end() ? ub->second : g_State[self].uiUpload;
+            const auto us = g_UiShift.find(cb);
+            if (us != g_UiShift.end()) { shift = us->second; }
+            const auto it = g_ShaderHash.find(g_State[self].ps);
+            if (it != g_ShaderHash.end()) { ps = it->second; }
+        }
+        UiBias::BeforeDraw(self, ui, ps, shift);
         Original<decltype(&Hooked_DrawIndexed)>(self, kCtxDrawIndexed)(self, indexCount, startIndex, baseVertex);
+        UiBias::AfterDraw(self, ui);
     }
 
     void STDMETHODCALLTYPE Hooked_DrawIndexedInstanced(ID3D11DeviceContext* self, UINT indexCount, UINT instances, UINT startIndex, INT baseVertex, UINT startInstance)
@@ -512,12 +550,24 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_RSSetViewports(ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports)
     {
+        D3D11_VIEWPORT copy[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] {};
+        if (count > 0 && viewports && count <= std::size(copy))
+        {
+            std::memcpy(copy, viewports, count * sizeof(D3D11_VIEWPORT));
+            if (UiBias::AdjustViewports(count, copy)) { viewports = copy; }
+        }
         if (count > 0 && viewports) { std::lock_guard lock(g_Mutex); g_State[self].viewport = viewports[0]; }
         Original<decltype(&Hooked_RSSetViewports)>(self, kCtxRSSetViewports)(self, count, viewports);
     }
 
     void STDMETHODCALLTYPE Hooked_RSSetScissorRects(ID3D11DeviceContext* self, UINT count, const D3D11_RECT* rects)
     {
+        D3D11_RECT copy[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] {};
+        if (count > 0 && rects && count <= std::size(copy))
+        {
+            std::memcpy(copy, rects, count * sizeof(D3D11_RECT));
+            if (UiBias::AdjustScissors(count, copy)) { rects = copy; }
+        }
         if (count > 0 && rects) { std::lock_guard lock(g_Mutex); g_State[self].scissor = rects[0]; }
         Original<decltype(&Hooked_RSSetScissorRects)>(self, kCtxRSSetScissorRects)(self, count, rects);
     }
@@ -656,8 +706,16 @@ namespace
             {
                 bool constant = false;
                 const size_t size = BufferSize(res, constant);
-                if (constant) { UiBias::OnConstantUnmap(it->second.data, size); Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size)); }
-                if (!constant && size) { UiBias::OnVertexUnmap(g_State[self].texture, it->second.data, size); }
+                if (constant)
+                {
+                    float shift = 0;
+                    const bool ui = UiBias::OnConstantUnmap(it->second.data, size, &shift);
+                    g_State[self].uiUpload = ui;
+                    g_UiBuffer[res] = ui;   // the flag belongs to the buffer: the draw reads it from VS slot 0
+                    g_UiShift[res] = shift;
+                    Snapshot16(res, it->second.data, size); Trace(self, std::format("Unmap cb {}B", size));
+                }
+                if (!constant && size) { UiBias::OnVertexUnmap(self, g_State[self].texture, it->second.data, size); }
                 if (!constant && size && g_FramesToLog.load() > 0)
                 {
                     Trace(self, std::format("Unmap vb {}B", size));

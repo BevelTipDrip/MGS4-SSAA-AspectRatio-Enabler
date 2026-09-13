@@ -108,6 +108,8 @@ namespace mgspwe::config
             Report(Graphics, LiveCommands, DrawCensus::bLiveCommands);
             Read(ini, Graphics, RenderScale, InternalSize::iRenderScale);
             Read(ini, Graphics, RenderScaleHundredths, InternalSize::iRenderScaleHundredths);
+            Read(ini, Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
+            Report(Graphics, WideCanvasUnits, InternalSize::iWideCanvasUnits);
             Read(ini, Graphics, SceneSizeWidth, InternalSize::iSceneWidth);
             Read(ini, Graphics, SceneSizeHeight, InternalSize::iSceneHeight);
             Report(Graphics, SceneSizeWidth, InternalSize::iSceneWidth);
@@ -117,6 +119,8 @@ namespace mgspwe::config
             Read(ini, Graphics, InternalSizeHeight, InternalSize::iInternalHeight);
             Read(ini, Graphics, OutputSizeWidth, InternalSize::iOutputWidth);
             Read(ini, Graphics, OutputSizeHeight, InternalSize::iOutputHeight);
+            Read(ini, Graphics, WindowMode, InternalSize::iWindowMode);
+            Report(Graphics, WindowMode, InternalSize::iWindowMode);
             Read(ini, Graphics, DisableMsaa, InternalSize::bDisableMsaa);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);

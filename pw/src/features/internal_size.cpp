@@ -1,9 +1,11 @@
 #include "pch.hpp"
 #include "internal_size.hpp"
+#include <atomic>
 
 #include "game.hpp"
 #include "log.hpp"
 #include "mem.hpp"
+#include "ui_bias.hpp"
 
 #if MGS4E_LAB_BUILD
 
@@ -53,6 +55,38 @@ namespace
     // full-canvas targets' size here with the output size; the experiment does the same.
     constexpr uintptr_t kSceneCreate = 0x89F8D;
     SafetyHookMid g_SceneCreate {};
+    // The settings getter (+84D50, a 14-byte leaf: `mov rax,[array]; movsxd rdx,ecx; mov eax,[rax+rdx*4]`)
+    // and setter (+85130). The window code reads id 3 (display mode), 4/5 (position), 7/8
+    // (size), 17 (monitor), 19 (windowed preset) and 246 (applied mode) through the getter;
+    // the in-game Options menu persists the mode through the setter. Mode 2 creates an
+    // exclusive-fullscreen chain at the monitor's largest mode, which none of the size
+    // experiments can survive, so the Lab can pin the mode and logs the saved values once.
+    constexpr uintptr_t kSettingsGet = 0x84D50;
+    constexpr uintptr_t kSettingsSet = 0x85130;
+    constexpr uintptr_t kSettingsArray = 0x10C58A0;
+    SafetyHookInline g_SettingsGet {}, g_SettingsSet {};
+    std::atomic<bool> g_SettingsLogged { false };
+
+    int __fastcall Hooked_SettingsGet(int id)
+    {
+        if (!g_SettingsLogged.exchange(true))
+        {
+            const auto* array = *reinterpret_cast<const int32_t* const*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kSettingsArray);
+            if (array)
+            {
+                spdlog::info("PW window: saved settings: mode(3)={} pos(4,5)={},{} size(7,8)={}x{} monitor(17)={} preset(19)={} applied mode(246)={}.",
+                    array[3], array[4], array[5], array[7], array[8], array[17], array[19], array[246]);
+            }
+        }
+        if (id == 3 && InternalSize::iWindowMode >= 0) { return InternalSize::iWindowMode; }
+        return g_SettingsGet.fastcall<int>(id);
+    }
+
+    void __fastcall Hooked_SettingsSet(int id, int value)
+    {
+        if (id == 3 || id == 246) { spdlog::info("PW window: game writes setting {} = {}.", id, value); }
+        g_SettingsSet.fastcall<void>(id, value);
+    }
     int g_SceneW = 0, g_SceneH = 0;
     float g_FloatScale = 0;
 
@@ -87,8 +121,19 @@ namespace InternalSize
             spdlog::info("PW internal size: render scale set to {} at {} of {} sites.", iRenderScale, ok, std::size(kScale));
         }
         // Scene size: the render scale's canvas multiple when set, else the explicit internal size.
-        const int sceneW = iRenderScale > 0 ? 480 * iRenderScale : iInternalWidth;
+        // With a wide canvas (private module) the scene targets are units x scale wide, but the
+        // HUD scale sites keep 480 x scale: the UI is still laid out in 480 units at the same scale.
+        const int canvasUnits = (iWideCanvasUnits > 480) ? iWideCanvasUnits : 480;
+        const int sceneW = iRenderScale > 0 ? canvasUnits * iRenderScale : iInternalWidth;
         const int sceneH = iRenderScale > 0 ? 272 * iRenderScale : iInternalHeight;
+        // The two UI-scale width sites stay at 480 units: they set the UI scale (uniform, from the
+        // width) and the gameplay viewport (scale x 480x272); the viewport is widened per call and
+        // the UI narrowed per draw by the private module.
+        const int hudW = iRenderScale > 0 ? 480 * iRenderScale : iInternalWidth;
+        if (iWideCanvasUnits > 480 && iRenderScale > 0 && iSceneWidth == 0 && iSceneHeight == 0)
+        {
+            iSceneWidth = sceneW; iSceneHeight = sceneH;   // the full-canvas targets must follow
+        }
         // Post size: the explicit internal size when given together with a render scale, else the scene size.
         const int postW = (iRenderScale > 0 && iInternalWidth > 0) ? iInternalWidth : sceneW;
         const int postH = (iRenderScale > 0 && iInternalHeight > 0) ? iInternalHeight : sceneH;
@@ -97,7 +142,8 @@ namespace InternalSize
             int ok = 0;
             for (const Imm32Site& s : kImm32)
             {
-                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? sceneW : sceneH), "scene size immediate");
+                const bool hudSite = (s.rva == 0x56306 || s.rva == 0x56327);
+                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? (hudSite ? hudW : sceneW) : sceneH), "scene size immediate");
             }
             const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(sceneH)) << 32) | static_cast<uint32_t>(sceneW);
             for (const Imm64Site& s : kImm64)
@@ -108,7 +154,7 @@ namespace InternalSize
             {
                 ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? postW : postH), "post size immediate");
             }
-            spdlog::info("PW internal size: scene {}x{}, post chain {}x{}, at {} of {} sites.", sceneW, sceneH, postW, postH, ok, std::size(kImm32) + std::size(kImm64) + std::size(kPostImm32));
+            spdlog::info("PW internal size: scene {}x{} (HUD scale width {}), post chain {}x{}, at {} of {} sites.", sceneW, sceneH, hudW, postW, postH, ok, std::size(kImm32) + std::size(kImm64) + std::size(kPostImm32));
             iInternalWidth = postW; iInternalHeight = postH;
         }
         if (iRenderScaleHundredths > 0)
@@ -145,8 +191,24 @@ namespace InternalSize
             }
             else { spdlog::warn("PW internal size: scene creation site does not look as expected; experiment not installed."); }
         }
-        if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
+        if (iWideCanvasUnits > 0 && iRenderScale > 0) { UiBias::ConfigureWideScene(iWideCanvasUnits, iRenderScale); }
         {
+            const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+            const uint8_t* get = reinterpret_cast<const uint8_t*>(base + kSettingsGet);
+            if (get[0] == 0x48 && get[1] == 0x8B && get[2] == 0x05 && get[7] == 0x48 && get[8] == 0x63 && get[9] == 0xD1)
+            {
+                g_SettingsGet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsGet), reinterpret_cast<void*>(&Hooked_SettingsGet));
+                g_SettingsSet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsSet), reinterpret_cast<void*>(&Hooked_SettingsSet));
+                if (iWindowMode >= 0) { spdlog::info("PW window: display mode pinned to {} ({}).", iWindowMode, g_SettingsGet ? "hooked" : "hook FAILED"); }
+                else { spdlog::info("PW window: settings getter {} (saved values logged on first read).", g_SettingsGet ? "hooked" : "hook FAILED"); }
+            }
+            else { spdlog::warn("PW window: settings getter +{:X} does not look as expected; not hooked.", kSettingsGet); }
+        }
+        {
+            // The picture fit is always hooked: it logs what the game computed (the window's
+            // client size and the picture inside it), and it is overridden in two cases: the
+            // back-buffer experiment (picture = the whole buffer) and the wide canvas (the
+            // game fits a 16:9 picture; the wide frame must be fitted at its own aspect).
             const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterFit;
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);
             if (bytes[0] == 0xB9 && bytes[1] == 0x11)   // mov ecx, 0x11
@@ -154,14 +216,26 @@ namespace InternalSize
                 g_AfterFit = safetyhook::create_mid(site, [](SafetyHookContext& ctx)
                 {
                     auto* obj = reinterpret_cast<int32_t*>(ctx.rsi);
-                    obj[0x2940 / 4] = iInternalWidth;
-                    obj[0x2944 / 4] = iInternalHeight;
-                    obj[0x2948 / 4] = 0;
-                    obj[0x294C / 4] = 0;
+                    const int clientW = obj[0x2958 / 4], clientH = obj[0x295C / 4];
+                    spdlog::info("PW window: fit: client {}x{}, game picture {}x{} at {},{}.", clientW, clientH, obj[0x2940 / 4], obj[0x2944 / 4], obj[0x2948 / 4], obj[0x294C / 4]);
+                    if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
+                    {
+                        obj[0x2940 / 4] = iInternalWidth; obj[0x2944 / 4] = iInternalHeight;
+                        obj[0x2948 / 4] = 0; obj[0x294C / 4] = 0;
+                    }
+                    else if (iWideCanvasUnits > 480 && clientW > 0 && clientH > 0)
+                    {
+                        const double aspect = static_cast<double>(iWideCanvasUnits) / 272.0;
+                        int w = clientW, h = static_cast<int>(clientW / aspect + 0.5);
+                        if (h > clientH) { h = clientH; w = static_cast<int>(clientH * aspect + 0.5); }
+                        obj[0x2940 / 4] = w; obj[0x2944 / 4] = h;
+                        obj[0x2948 / 4] = (clientW - w) / 2; obj[0x294C / 4] = (clientH - h) / 2;
+                        spdlog::info("PW window: fit overridden for the {}-unit canvas: picture {}x{} at {},{}.", iWideCanvasUnits, w, h, obj[0x2948 / 4], obj[0x294C / 4]);
+                    }
                 });
-                spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", iInternalWidth, iInternalHeight, g_AfterFit ? "hooked" : "hook FAILED");
+                if (bBackBufferAtInternal) { spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", iInternalWidth, iInternalHeight, g_AfterFit ? "hooked" : "hook FAILED"); }
             }
-            else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; back buffer override not installed.", kAfterFit); }
+            else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; not hooked.", kAfterFit); }
         }
         if (iOutputWidth > 0 && iOutputHeight > 0)
         {

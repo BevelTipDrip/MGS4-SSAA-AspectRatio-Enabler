@@ -19,10 +19,12 @@ namespace mgspwe::keys
     constexpr const char* RenderScaleHundredths = "Render Scale Hundredths";   // experiment: force the two float copies of the scale to this / 100 (Afevis's fractional scale); 0 = off
     constexpr const char* SceneSizeWidth = "Scene Size Width";                 // experiment: full-canvas scene targets created at this size instead of canvas x scale (Afevis's target replacement); 0 = off
     constexpr const char* SceneSizeHeight = "Scene Size Height";
+    constexpr const char* WideCanvasUnits = "Wide Canvas Units";               // experiment (private module): the scene target this many canvas units wide, the UI kept at 480; 0 = off
     constexpr const char* InternalSizeWidth = "Internal Size Width";           // post-chain target size; 0 = the scene size
     constexpr const char* InternalSizeHeight = "Internal Size Height";
     constexpr const char* OutputSizeWidth = "Output Size Width";               // the picture the game fits into the window; 0 = the game's table
     constexpr const char* OutputSizeHeight = "Output Size Height";
+    constexpr const char* WindowMode = "Window Mode";                          // the game's saved display mode read as this: 0 windowed, 1 fullscreen window, 2 exclusive fullscreen; -1 = leave the saved value
     constexpr const char* DisableMsaa = "Disable MSAA";
     constexpr const char* GpuLocalTextures = "GPU Local Textures";
     constexpr const char* BackBufferAtInternalSize = "Back Buffer At Internal Size";

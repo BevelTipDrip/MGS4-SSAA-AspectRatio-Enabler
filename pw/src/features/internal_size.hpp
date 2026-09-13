@@ -14,12 +14,14 @@ namespace InternalSize
 {
     MGS4E_LAB_SWITCH(int, iRenderScale, 0);      // integer canvas multiple k (game: 3 or 4); 0: leave alone. Sets the scale getter and, unless given, the internal size 480k x 272k
     MGS4E_LAB_SWITCH(int, iRenderScaleHundredths, 0); // experiment: the float copies of the scale forced to this / 100 at +596E5 and +5B015 (what Afevis's patch does); 0 = off
+    MGS4E_LAB_SWITCH(int, iWideCanvasUnits, 0);    // experiment (private module): scene target this many canvas units wide, UI kept at 480; needs Scene Size and Internal Size set to units x scale
     MGS4E_LAB_SWITCH(int, iSceneWidth, 0);         // experiment: the full-canvas scene targets (480x272 x scale) created at this size instead, as Afevis's target replacement does; 0 = off
     MGS4E_LAB_SWITCH(int, iSceneHeight, 0);
     MGS4E_LAB_SWITCH(int, iInternalWidth, 0);    // 0: derive from the render scale, or leave the game's immediates alone
     MGS4E_LAB_SWITCH(int, iInternalHeight, 0);
     MGS4E_LAB_SWITCH(int, iOutputWidth, 0);      // 0: leave the output table alone
     MGS4E_LAB_SWITCH(int, iOutputHeight, 0);
+    MGS4E_LAB_SWITCH(int, iWindowMode, -1);        // the saved display mode (settings id 3) the game is told: 0 windowed, 1 fullscreen window, 2 exclusive fullscreen chain; -1 = leave. The saved values are logged either way
     MGS4E_LAB_SWITCH(bool, bBackBufferAtInternal, false); // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
     MGS4E_LAB_SWITCH(bool, bGpuLocalTextures, false); // strip CPU write access from large default textures so GPU copies into them stay in video memory (applied by the census hook)
     MGS4E_LAB_SWITCH(bool, bDisableMsaa, false); // scene targets created single-sampled; the game's resolve becomes a copy (applied by the census hooks)
