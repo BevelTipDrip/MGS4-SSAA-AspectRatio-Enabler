@@ -7,6 +7,7 @@
 #include "mem.hpp"
 #include "ui_bias.hpp"
 #include "internal_size.hpp"
+#include "render_policy.hpp"
 #include "post_scale.hpp"
 
 #include <unordered_set>
@@ -840,21 +841,11 @@ namespace
     {
         if (g_TimingState.load() == 2) { std::lock_guard lock(g_Mutex); g_State[self].stampNext = true; StampBefore(self, std::format("Resolve/copy dst={} src={}", DescribeResource(dst), DescribeResource(src))); }
         if (src && dst && PostScale::Downscale(self, dst, src)) { return; }
-        if (InternalSize::bDisableMsaa && src && dst)
+        if (dst && RenderPolicy::ResolveAsCopy(src))
         {
             // A single-sampled source cannot be resolved; copy it instead (same size and format).
-            ID3D11Texture2D* tex = nullptr;
-            if (SUCCEEDED(src->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex)
-            {
-                D3D11_TEXTURE2D_DESC d {};
-                tex->GetDesc(&d);
-                tex->Release();
-                if (d.SampleDesc.Count == 1)
-                {
-                    Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
-                    return;
-                }
-            }
+            Original<decltype(&Hooked_CopyResource)>(self, kCtxCopyResource)(self, dst, src);
+            return;
         }
         if (g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); spdlog::info("PW census: f{} {} ResolveSubresource dst={} src={} | {}", g_Frame.load(), HooksFor(self).name, DescribeResource(dst), DescribeResource(src), GameCallers(6)); }
         Original<decltype(&Hooked_ResolveSubresource)>(self, kCtxResolveSubresource)(self, dst, dstSub, src, srcSub, fmt);
@@ -963,16 +954,8 @@ namespace
             bool fresh = false;
             { std::lock_guard lock(g_Mutex); fresh = g_SamplersSeen.insert(key).second; }
             if (fresh) { spdlog::info("PW census: sampler {} | {}", key, GameCallers(4)); }
-            const bool comparison = desc->Filter >= D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
-            const bool linear = desc->Filter == D3D11_FILTER_MIN_MAG_MIP_LINEAR || desc->Filter == D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT || desc->Filter == D3D11_FILTER_ANISOTROPIC;
-            if (DrawCensus::iAnisotropy >= 2 && !comparison && linear)
-            {
-                changed = *desc;
-                changed.Filter = D3D11_FILTER_ANISOTROPIC;
-                changed.MaxAnisotropy = static_cast<UINT>(std::min(16, DrawCensus::iAnisotropy));
-                desc = &changed;
-                if (g_SamplersAniso.fetch_add(1) == 0) { spdlog::info("PW census: linear samplers created anisotropic {}x from here on.", changed.MaxAnisotropy); }
-            }
+            changed = *desc;
+            if (RenderPolicy::SamplerDesc(changed)) { desc = &changed; g_SamplersAniso.fetch_add(1); }
         }
         const HRESULT r = Device_CreateSamplerState_hook.stdcall<HRESULT>(self, desc, out);
         if (SUCCEEDED(r) && out && *out && desc)
@@ -998,23 +981,19 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateTexture2D(ID3D11Device* self, const D3D11_TEXTURE2D_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Texture2D** out)
     {
         D3D11_TEXTURE2D_DESC single {};
-        if (desc && ((InternalSize::bDisableMsaa && desc->SampleDesc.Count > 1) || (InternalSize::bGpuLocalTextures && desc->Usage == D3D11_USAGE_DEFAULT && desc->CPUAccessFlags && desc->Width >= 1024)))
+        bool strippedHere = false;
+        if (desc)
         {
             single = *desc;
-            if (InternalSize::bDisableMsaa && single.SampleDesc.Count > 1) { single.SampleDesc.Count = 1; single.SampleDesc.Quality = 0; }
-            if (InternalSize::bGpuLocalTextures && single.Usage == D3D11_USAGE_DEFAULT && single.CPUAccessFlags && single.Width >= 1024)
-            {
-                single.CPUAccessFlags = 0;
-                g_GpuLocalStripped.fetch_add(1);
-            }
-            desc = &single;
+            if (RenderPolicy::TextureDesc(single, strippedHere)) { desc = &single; }
+            if (strippedHere) { g_GpuLocalStripped.fetch_add(1); }
         }
         const int64_t t0 = Ticks();
         const HRESULT r = Device_CreateTexture2D_hook.stdcall<HRESULT>(self, desc, init, out);
         g_Work.textureTicks.fetch_add(Ticks() - t0);
         g_Work.textures.fetch_add(1);
         if (desc && desc->Width >= 1024) { g_Work.texturesLarge.fetch_add(1); std::lock_guard lock(g_Mutex); g_Work.lastTexture = std::format("{}x{} fmt{} usage={} cpu={:#x}", desc->Width, desc->Height, static_cast<int>(desc->Format), static_cast<int>(desc->Usage), desc->CPUAccessFlags); }
-        if (SUCCEEDED(r) && out && *out && desc == &single && single.CPUAccessFlags == 0 && InternalSize::bGpuLocalTextures)
+        if (SUCCEEDED(r) && out && *out && strippedHere)
         {
             std::lock_guard lock(g_Mutex);
             g_Stripped.insert(*out);
@@ -1155,44 +1134,9 @@ namespace
         }
     }
 
-    // Windowed (the game's mode 1): the game makes a normal window at its saved or preset size;
-    // the client is set to the selected screen resolution and centred on the monitor, and the
-    // game's WM_SIZE handling resizes the chain to it. Borderless (0) and Fullscreen (2) are the
-    // game's own and need nothing here.
-    void ShapeWindow(HWND hwnd)
-    {
-        if (InternalSize::iWindowMode != 1 || InternalSize::iOutputWidth <= 0 || InternalSize::iOutputHeight <= 0) { return; }
-        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-        MONITORINFO mi {};
-        mi.cbSize = sizeof(mi);
-        if (!GetMonitorInfoW(mon, &mi)) { return; }
-        const RECT m = mi.rcMonitor;
-        const LONG style = static_cast<LONG>(GetWindowLongPtrW(hwnd, GWL_STYLE));
-        RECT r { 0, 0, InternalSize::iOutputWidth, InternalSize::iOutputHeight };
-        AdjustWindowRectEx(&r, static_cast<DWORD>(style), FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
-        const int w = r.right - r.left, h = r.bottom - r.top;
-        const int x = m.left + std::max(0L, ((m.right - m.left) - w) / 2), y = m.top + std::max(0L, ((m.bottom - m.top) - h) / 2);
-        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOACTIVATE);
-        spdlog::info("PW window: windowed: client {}x{} at {},{} (window {}x{}).", InternalSize::iOutputWidth, InternalSize::iOutputHeight, x, y, w, h);
-    }
-
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain)
     {
-        // Exclusive fullscreen: the game asks for 60/1 whatever the display runs at, and on a
-        // 120 Hz desktop the mode it lands on drops one frame a second (measured 2026-09-13:
-        // 59 frames per second, a 33 ms frame every 50). The display's current refresh rate
-        // is requested instead, so the chain lands on the mode the desktop already runs.
-        if (desc && !desc->Windowed)
-        {
-            DEVMODEW dm {};
-            dm.dmSize = sizeof(dm);
-            if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
-            {
-                spdlog::info("PW census: exclusive swap chain: refresh {}/{} requested by the game, replaced by the display's {} Hz.", desc->BufferDesc.RefreshRate.Numerator, desc->BufferDesc.RefreshRate.Denominator, dm.dmDisplayFrequency);
-                desc->BufferDesc.RefreshRate.Numerator = dm.dmDisplayFrequency;
-                desc->BufferDesc.RefreshRate.Denominator = 1;
-            }
-        }
+        if (desc) { RenderPolicy::SwapChainDesc(*desc); }
         if (desc && InternalSize::BackBufferWidth() > 0)
         {
             desc->BufferDesc.Width = InternalSize::BackBufferWidth();
@@ -1200,7 +1144,7 @@ namespace
             spdlog::info("PW census: swap chain buffers requested at {}x{} (flip model stretches them onto the window).", desc->BufferDesc.Width, desc->BufferDesc.Height);
         }
         const HRESULT r = Factory_CreateSwapChain_hook.stdcall<HRESULT>(self, device, desc, chain);
-        if (SUCCEEDED(r) && desc && desc->Windowed && desc->OutputWindow && IsWindow(desc->OutputWindow)) { ShapeWindow(desc->OutputWindow); }
+        if (SUCCEEDED(r) && desc) { RenderPolicy::AfterSwapChain(desc->OutputWindow, *desc); }
         if (SUCCEEDED(r) && chain && *chain)
         {
             if (desc) { spdlog::info("PW census: swap chain {}x{} fmt{} windowed={} buffers={} effect={} window={:#x}.", desc->BufferDesc.Width, desc->BufferDesc.Height, static_cast<int>(desc->BufferDesc.Format), desc->Windowed, desc->BufferCount, static_cast<int>(desc->SwapEffect), reinterpret_cast<uintptr_t>(desc->OutputWindow)); }

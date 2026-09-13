@@ -8,10 +8,10 @@
 #include "version.hpp"
 #include "pw/settings_keys.hpp"
 
+#include "internal_size.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "draw_census.hpp"
-#include "internal_size.hpp"
 #endif
 
 namespace mgspwe::config
@@ -85,8 +85,8 @@ namespace mgspwe::config
             return file;
         }
 
-#if MGS4E_LAB_BUILD
-        // Research keys (shared/pw/settings_keys.hpp). Lab builds only; a Release build ignores them.
+        // Research keys (shared/pw/settings_keys.hpp) are read only by a Lab build; the window's
+        // keys (the shape, the resolutions of that shape, the window mode, MSAA, filtering) by both.
         // "WxH" or "WxH (..." -> width, height; false when the text is not that.
         bool ParseSize(const std::string& text, int& w, int& h)
         {
@@ -157,8 +157,19 @@ namespace mgspwe::config
                 InternalSize::bDisableMsaa = (*msaa == Msaa_Off);
                 Report(Graphics, Msaa, *msaa);
             }
+            if (const auto af = ini.Raw(Graphics, AnisotropicFiltering))
+            {
+                // A checkbox in the tool (true = 16x); a number from a hand-edited file is taken as the level.
+                if (*af == "true") { InternalSize::iAnisotropy = 16; }
+                else if (*af == "false") { InternalSize::iAnisotropy = 0; }
+                else { Read(ini, Graphics, AnisotropicFiltering, InternalSize::iAnisotropy); }
+                Report(Graphics, AnisotropicFiltering, InternalSize::iAnisotropy);
+            }
+            Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
+            Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
         }
 
+#if MGS4E_LAB_BUILD
         void ReadLabKeys(const mgs4e::Ini& ini)
         {
             using namespace mgspwe::keys;
@@ -168,14 +179,6 @@ namespace mgspwe::config
             Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
             Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
             Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
-            if (const auto af = ini.Raw(Graphics, AnisotropicFiltering))
-            {
-                // A checkbox in the tool (true = 16x); a number from a hand-edited file is taken as the level.
-                if (*af == "true") { DrawCensus::iAnisotropy = 16; }
-                else if (*af == "false") { DrawCensus::iAnisotropy = 0; }
-                else { Read(ini, Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy); }
-                Report(Graphics, AnisotropicFiltering, DrawCensus::iAnisotropy);
-            }
             Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);
@@ -248,8 +251,8 @@ namespace mgspwe::config
         // A Lab build reads the research knobs from whichever file it loaded: the user's own
         // settings (the tool's Peace Walker window edits them) or, with the marker, the lab file.
         ReadLabKeys(ini);
-        ReadWindowKeys(ini);
 #endif
+        ReadWindowKeys(ini);
     }
 
 #if MGS4E_LAB_BUILD

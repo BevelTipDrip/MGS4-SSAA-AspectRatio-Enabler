@@ -14,7 +14,6 @@
 // is on. A Release build has none of this.
 namespace DrawCensus
 {
-    MGS4E_LAB_SWITCH(int, iAnisotropy, 0);          // 0: the game's samplers; 2..16: anisotropic filtering at that level on every linear sampler (the census logs each distinct sampler either way)
     MGS4E_LAB_SWITCH(int, iCensusAtSeconds, 0);     // 0: only on command
     MGS4E_LAB_SWITCH(int, iCensusFrames, 2);
     MGS4E_LAB_SWITCH(bool, bLiveCommands, true);

@@ -6,9 +6,8 @@
 #include "game.hpp"
 #include "log.hpp"
 #include "mem.hpp"
-#include "ui_bias.hpp"
+#include "canvas.hpp"
 
-#if MGS4E_LAB_BUILD
 
 namespace
 {
@@ -104,7 +103,8 @@ namespace
         if (id == 3 || id == 246) { spdlog::info("PW window: game writes setting {} = {}.", id, value); }
         g_SettingsSet.fastcall<void>(id, value);
     }
-    int g_SceneW = 0, g_SceneH = 0;
+    int g_SceneW = 0, g_SceneH = 0;         // the full-canvas targets' size when overridden (wide canvas, or the Lab experiment)
+    int g_PostW = 0, g_PostH = 0;           // the post chain's target size as applied
     int g_CanvasW = 480, g_CanvasH = 272;   // the canvas in PSP units for this run (the fit hook reads it)
     float g_FloatScale = 0;
 
@@ -126,8 +126,8 @@ namespace
 
 namespace InternalSize
 {
-    int BackBufferWidth() { return bBackBufferAtInternal ? iInternalWidth : 0; }
-    int BackBufferHeight() { return bBackBufferAtInternal ? iInternalHeight : 0; }
+    int BackBufferWidth() { return bBackBufferAtInternal ? g_PostW : 0; }
+    int BackBufferHeight() { return bBackBufferAtInternal ? g_PostH : 0; }
 
     void Apply()
     {
@@ -176,9 +176,10 @@ namespace InternalSize
         // The two width sites of the UI-scale function follow the scene: with a wide canvas the
         // private module pins the UI scale itself (the engine's own canvas fields do the rest).
         const int hudW = sceneW;
-        if (canvasActive && iRenderScale > 0 && iSceneWidth == 0 && iSceneHeight == 0)
+        int sceneReqW = iSceneWidth, sceneReqH = iSceneHeight;   // the Lab experiment's explicit size, if any
+        if (canvasActive && iRenderScale > 0 && sceneReqW == 0 && sceneReqH == 0)
         {
-            iSceneWidth = sceneW; iSceneHeight = sceneH;   // the full-canvas targets must follow
+            sceneReqW = sceneW; sceneReqH = sceneH;   // the full-canvas targets must follow the canvas
         }
         // Post size: the explicit internal size when given together with a render scale, else the scene size.
         const int postW = (iRenderScale > 0 && iInternalWidth > 0) ? iInternalWidth : sceneW;
@@ -201,7 +202,7 @@ namespace InternalSize
                 ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? postW : postH), "post size immediate");
             }
             spdlog::info("PW internal size: scene {}x{} (HUD scale width {}), post chain {}x{}, at {} of {} sites.", sceneW, sceneH, hudW, postW, postH, ok, std::size(kImm32) + std::size(kImm64) + std::size(kPostImm32));
-            iInternalWidth = postW; iInternalHeight = postH;
+            g_PostW = postW; g_PostH = postH;
         }
         if (iRenderScaleHundredths > 0)
         {
@@ -217,9 +218,9 @@ namespace InternalSize
             }
             else { spdlog::warn("PW internal size: float scale sites do not look as expected; experiment not installed."); }
         }
-        if (iSceneWidth > 0 && iSceneHeight > 0)
+        if (sceneReqW > 0 && sceneReqH > 0)
         {
-            g_SceneW = iSceneWidth; g_SceneH = iSceneHeight;
+            g_SceneW = sceneReqW; g_SceneH = sceneReqH;
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* c = reinterpret_cast<const uint8_t*>(base + kSceneCreate);
             if (c[0] == 0xE8)   // call +17D20
@@ -233,11 +234,11 @@ namespace InternalSize
                         ctx.rbx = static_cast<uint32_t>(g_SceneH);
                     }
                 });
-                spdlog::info("PW internal size: EXPERIMENT: full-canvas scene targets created at {}x{} ({}).", g_SceneW, g_SceneH, g_SceneCreate ? "ok" : "hook FAILED");
+                spdlog::info("PW internal size: full-canvas scene targets created at {}x{} ({}).", g_SceneW, g_SceneH, g_SceneCreate ? "ok" : "hook FAILED");
             }
-            else { spdlog::warn("PW internal size: scene creation site does not look as expected; experiment not installed."); }
+            else { spdlog::warn("PW internal size: scene creation site does not look as expected; the full-canvas targets keep the game's size."); }
         }
-        if (canvasActive && iRenderScale > 0) { UiBias::ConfigureWideScene(canvasW, canvasH, iRenderScale); }
+        if (canvasActive && iRenderScale > 0) { Canvas::Configure(canvasW, canvasH, iRenderScale); }
         {
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* get = reinterpret_cast<const uint8_t*>(base + kSettingsGet);
@@ -264,9 +265,9 @@ namespace InternalSize
                     auto* obj = reinterpret_cast<int32_t*>(ctx.rsi);
                     const int clientW = obj[0x2958 / 4], clientH = obj[0x295C / 4];
                     spdlog::info("PW window: fit: client {}x{}, game picture {}x{} at {},{}.", clientW, clientH, obj[0x2940 / 4], obj[0x2944 / 4], obj[0x2948 / 4], obj[0x294C / 4]);
-                    if (bBackBufferAtInternal && iInternalWidth > 0 && iInternalHeight > 0)
+                    if (bBackBufferAtInternal && g_PostW > 0 && g_PostH > 0)
                     {
-                        obj[0x2940 / 4] = iInternalWidth; obj[0x2944 / 4] = iInternalHeight;
+                        obj[0x2940 / 4] = g_PostW; obj[0x2944 / 4] = g_PostH;
                         obj[0x2948 / 4] = 0; obj[0x294C / 4] = 0;
                     }
                     else if (g_CanvasW != 480 || g_CanvasH != 272)
@@ -288,7 +289,7 @@ namespace InternalSize
                         }
                     }
                 });
-                if (bBackBufferAtInternal) { spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", iInternalWidth, iInternalHeight, g_AfterFit ? "hooked" : "hook FAILED"); }
+                if (bBackBufferAtInternal) { spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", g_PostW, g_PostH, g_AfterFit ? "hooked" : "hook FAILED"); }
             }
             else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; not hooked.", kAfterFit); }
         }
@@ -305,4 +306,4 @@ namespace InternalSize
     }
 }
 
-#endif
+

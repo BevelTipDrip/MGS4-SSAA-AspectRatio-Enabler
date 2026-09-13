@@ -11,6 +11,7 @@
 #include "draw_census.hpp"
 #include "internal_size.hpp"
 #include "probe.hpp"
+#include "render_hooks.hpp"
 
 namespace
 {
@@ -46,11 +47,14 @@ namespace
 
 #if MGS4E_LAB_BUILD
             // A Lab build always runs its research features; their keys (from the user's settings
-            // file, or the lab file when the marker is present) decide what each one does.
+            // file, or the lab file when the marker is present) decide what each one does. Its
+            // census owns the Direct3D hooks and applies the same policy as the Release hooks.
             Probe::Run();
             DrawCensus::Install();
-            InternalSize::Apply();
+#else
+            RenderHooks::Install();
 #endif
+            InternalSize::Apply();
 
             AspectRatio::ApplyFixes();
 
