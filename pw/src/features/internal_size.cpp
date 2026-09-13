@@ -61,8 +61,9 @@ namespace
     // and setter (+85130). The window code reads id 3 (display mode), 4/5 (position), 7/8
     // (size), 17 (monitor), 19 (windowed preset) and 246 (applied mode) through the getter;
     // the in-game Options menu persists the mode through the setter. Mode 2 creates an
-    // exclusive-fullscreen chain at the monitor's largest mode, which none of the size
-    // experiments can survive, so the Lab can pin the mode and logs the saved values once.
+    // exclusive-fullscreen chain at the display mode Windows offers: on a monitor whose native
+    // resolution is 16:9 that is the native mode rather than a 21:9 desktop resolution (a
+    // native 21:9 output is fine), so the Lab can pin the mode and logs the saved values once.
     constexpr uintptr_t kSettingsGet = 0x84D50;
     constexpr uintptr_t kSettingsSet = 0x85130;
     constexpr uintptr_t kSettingsArray = 0x10C58A0;

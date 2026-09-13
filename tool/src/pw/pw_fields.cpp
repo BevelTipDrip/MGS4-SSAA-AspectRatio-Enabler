@@ -47,7 +47,10 @@ namespace mgs4e::tool::pw
             "Output Size 0, the output becomes the display size.";
         constexpr const char* kHelp_WindowMode =
             "What the game is told its saved display mode is: 0 windowed, 1 fullscreen window, 2 exclusive\n"
-            "fullscreen (the in-game Options value, kept in the save folder; 2 makes an exclusive swap chain that\n"
+            "fullscreen (the in-game Options value, kept in the save folder). Exclusive fullscreen takes the\n"
+            "display mode Windows offers: on a monitor whose native resolution is 16:9 that is the native mode,\n"
+            "not a 21:9 desktop resolution, so pin 0 there; on a native 21:9 output exclusive mode works with\n"
+            "the wide canvas. -1 leaves the saved value. The saved values go to the log."; 2 makes an exclusive swap chain that\n"
             "the size experiments cannot survive). -1 leaves the saved value. The saved values go to the log.";
         constexpr const char* kHelp_BackBuffer =
             "Experiment: the swap chain's buffers at the scene size, stretched onto the window by the compositor\n"
