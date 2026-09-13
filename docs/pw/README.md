@@ -17,12 +17,37 @@ The tool is one program that serves whichever game's folder it is dropped into: 
 `MGS4\mgs4.exe` or `mgspw\METAL GEAR SOLID PEACE WALKER.exe` beside itself (`--game MGS4` or
 `--game MGSPW` chooses when both are there). Each ASI works on its own without the tool.
 
-## State
+## What it does
 
-Research. The ASI loads, reads its settings and logs, and patches nothing yet; the Lab build
-carries a draw census and, with the private module, live editing of UI elements. What is known
-about the engine so far is in [engine-research.md](engine-research.md); the plan of work is in
-[NEXT-SESSION.md](NEXT-SESSION.md).
+The Graphics tab of the tool's Peace Walker window, all read by the Release ASI:
+
+- **Aspect Ratio** (Use Display, 16:9, 16:10, 21:9, 32:9, 4:3): 16:9 is the game's own layout.
+  Any other shape widens or heightens the PSP canvas to it: the world fills the display at
+  correct proportions, the HUD and menus keep the 16:9 scale and stay centred, the full-screen
+  effects follow, and the in-mission HUD groups move to the display edges with the 16:9 margin.
+  Use Display takes the primary display's shape at start-up. (The aspect work itself is the
+  private module; without it the setting only sizes the picture.)
+- **Screen Resolution**, one list per shape: the picture on screen (the window's client, or the
+  display mode in Fullscreen).
+- **Render Resolution**, one list per shape: the scene at an integer multiple of the canvas
+  (the game's launcher offers 3x and 4x; 8x is 4K-class, 16x is 8K-class), downscaled by the
+  game's own final blit into the picture. No oversized window.
+- **Window Mode** (Use Game Setting, Fullscreen, Borderless, Windowed): written into the game's
+  saved display mode every launch; the in-game Options show it and can change it for the run.
+  Fullscreen runs at the display's current refresh rate (the game asks for 60 Hz whatever the
+  display runs, which drops a frame a second on a 120 Hz desktop). Windowed sizes the window to
+  the selected screen resolution.
+- **MSAA** (4x, the game's own, or Off): about 2 ms a frame at 8K.
+- **Anisotropic Filtering**: 16x on every texture the game samples linearly (its own samplers
+  use none; little visible change at high render scales, since the PSP-sized textures are
+  magnified almost everywhere).
+- **GPU Local Textures**: the game's full-size frame textures carry CPU write access and end up
+  in system memory, so its three per-frame copies into them cross PCIe (5 ms each at 8K). On,
+  they stay in video memory: 60 fps at 8K instead of 27.
+
+The Lab build adds the draw census, GPU timing, a hitch log and the size experiments
+([lab.md](lab.md)); the engine facts are in [engine-research.md](engine-research.md), the plan
+in [NEXT-SESSION.md](NEXT-SESSION.md).
 
 ## For the code
 
