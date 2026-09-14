@@ -81,6 +81,44 @@ research keys remain Lab-only.
 - MGS4 regression boot after the shared-header change (`boot_to_aim.ps1 -Deploy -StopAtMenu`
   against the baseline log in the session scratchpad); waits for the user to be off the game.
 
+## 2026-09-14: two testing traps (open)
+
+- **Use Display on a 16:9 desktop builds a 484x272 canvas.** The start-up resolver
+  (`InternalSize::Apply`) compares the display aspect (3840x2160 = 1.7778) with the 480x272 canvas
+  (1.7647), calls it wider, and makes a 484-unit canvas with a 2-unit UI offset: gaps beside the
+  menu elements. Selecting "16:9" explicitly gives the game's own 480x272 (the stock 0.7 %
+  vertical squeeze into a 16:9 picture). Decision deferred by the user (2026-09-14): a display
+  within about half a percent of 16:9 should probably resolve to 480x272; how Use Display treats
+  near-16:9 shapes is to be re-assessed. Until then, test with an explicit shape, never Use
+  Display on a 16:9 desktop.
+- **The harness's lab settings file must mirror the user's settings.** `boot.ps1 -LabConfig`
+  makes the ASI read `MGSPWEnabler.lab.settings`; a stale copy of that file (old Internal Size
+  3840x2160 keys, Use Display, Render Scale 16 with 8x resolutions) produced a run with no
+  supersampling and the 484 canvas, which the user had to diagnose from the picture. Before a Lab
+  launch, regenerate the lab file from `MGSPWEnabler.settings` and change only the Lab keys under
+  test. Check in with the user before launching and before closing while they are live testing.
+
+## 2026-09-14: the 60 Hz stutter (root cause found; residual open)
+
+Full write-up: [frame-pacing.md](frame-pacing.md). Short form: the doubled frame once a second
+in Borderless and exclusive Fullscreen at 60 Hz (composed windows are smooth, 120 Hz is smooth,
+the stock game does it too) is the game's own frame-skip governor at `+78462`: a frame that
+measures a fraction over a vblank by wall clock raises the vblank wait count, so the next frame
+waits two vblanks. Direct presentation lands frame ends on the vblank boundary, so it trips 2-4
+times a second. `Frame Skip Governor = false` (Lab) skips that store; the user judged it
+"significantly better". Not yet as smooth as 120 Hz: the game thread still misses ~1.3 ticks a
+second with its work at 16.8-17.2 ms, cause unknown (D3D stall on the game thread, or CPU work,
+or idle GPU clocks).
+
+**Pick up here:**
+1. One run, governor off, user presses F10 in gameplay: the per-miss lines say where the 17 ms go
+   (D3D call, wait, lock, or plain work). Then fix that.
+2. Promote `Frame Skip Governor` into the Release ASI as a shipped setting (default: the fix on),
+   with the tool field on the Graphics tab; keep the Lab knobs as they are.
+3. Retest, without `Pacing Log`, anything judged under the heavy instrumentation if it becomes
+   relevant again (Swap Chain Buffers 3, Allow Tearing, VBlank ticker).
+4. Optional user-side check: NVIDIA "Prefer maximum performance" for the exe (idle GPU clocks).
+
 ## 2026-09-12 late: the 21:9 canvas works (Lab)
 
 Render Scale 10, Wide Canvas Units 650, Output 3440x1440, Window Mode 0 on a 3440x1440

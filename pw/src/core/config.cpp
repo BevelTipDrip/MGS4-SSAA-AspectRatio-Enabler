@@ -167,6 +167,10 @@ namespace mgspwe::config
             }
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
+            Read(ini, Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
+            Report(Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
+            Read(ini, Graphics, FullscreenResolutionFix, InternalSize::bFullscreenResolutionFix);
+            Report(Graphics, FullscreenResolutionFix, InternalSize::bFullscreenResolutionFix);
         }
 
 #if MGS4E_LAB_BUILD
@@ -187,6 +191,30 @@ namespace mgspwe::config
             Read(ini, Graphics, DumpShaders, DrawCensus::bDumpShaders);
             Read(ini, Graphics, LightHooks, DrawCensus::bLightHooks);
             Report(Graphics, LightHooks, DrawCensus::bLightHooks);
+            Read(ini, Graphics, PacingLog, DrawCensus::bPacingLog);
+            Report(Graphics, PacingLog, DrawCensus::bPacingLog);
+            Read(ini, Graphics, HitchSampler, DrawCensus::bHitchSampler);
+            Report(Graphics, HitchSampler, DrawCensus::bHitchSampler);
+            Read(ini, Graphics, VBlankWaitTimeout, DrawCensus::iVBlankWaitTimeout);
+            Report(Graphics, VBlankWaitTimeout, DrawCensus::iVBlankWaitTimeout);
+            Read(ini, Graphics, FrameHandoffWait, DrawCensus::iFrameHandoffWait);
+            Report(Graphics, FrameHandoffWait, DrawCensus::iFrameHandoffWait);
+            Read(ini, Graphics, VBlankWaitLog, DrawCensus::bVBlankWaitLog);
+            Report(Graphics, VBlankWaitLog, DrawCensus::bVBlankWaitLog);
+            Read(ini, Graphics, FrameSkipGovernor, DrawCensus::bFrameSkipGovernor);
+            Report(Graphics, FrameSkipGovernor, DrawCensus::bFrameSkipGovernor);
+            {
+                std::string pacing = "Game";
+                Read(ini, Graphics, FramePacing, pacing);
+                DrawCensus::iFramePacing = (_stricmp(pacing.c_str(), "Display") == 0) ? 1 : (_stricmp(pacing.c_str(), "VBlank") == 0) ? 2 : 0;
+                Report(Graphics, FramePacing, DrawCensus::iFramePacing == 1 ? "Display" : DrawCensus::iFramePacing == 2 ? "VBlank" : "Game");
+            }
+            Read(ini, Graphics, PresentSync, DrawCensus::iPresentSync);
+            Report(Graphics, PresentSync, DrawCensus::iPresentSync);
+            Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
+            Report(Graphics, AllowTearing, DrawCensus::bAllowTearing);
+            Read(ini, Graphics, SwapChainBuffers, InternalSize::iSwapChainBuffers);
+            Report(Graphics, SwapChainBuffers, InternalSize::iSwapChainBuffers);
             Report(Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Report(Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Report(Graphics, LiveCommands, DrawCensus::bLiveCommands);
@@ -210,6 +238,10 @@ namespace mgspwe::config
             Read(ini, Graphics, DisableMsaa, InternalSize::bDisableMsaa);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
+            Read(ini, Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
+            Report(Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
+            Read(ini, Graphics, FullscreenResolutionFix, InternalSize::bFullscreenResolutionFix);
+            Report(Graphics, FullscreenResolutionFix, InternalSize::bFullscreenResolutionFix);
             Read(ini, Graphics, BackBufferAtInternalSize, InternalSize::bBackBufferAtInternal);
             Report(Graphics, BackBufferAtInternalSize, InternalSize::bBackBufferAtInternal);
             Report(Graphics, DisableMsaa, InternalSize::bDisableMsaa);

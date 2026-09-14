@@ -26,7 +26,10 @@ namespace InternalSize
     inline int iOutputWidth = 0;      // 0: leave the output table alone
     inline int iOutputHeight = 0;
     inline int iWindowMode = -1;        // written into the game's saved display mode (settings id 3) once per run, the game's numbering: 0 Borderless, 1 Windowed, 2 Fullscreen (exclusive); -1 = leave. The saved values are logged either way
-    MGS4E_LAB_SWITCH(bool, bBackBufferAtInternal, false); // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
+    MGS4E_LAB_SWITCH(bool, bBackBufferAtInternal, false);
+    MGS4E_LAB_SWITCH(int, iSwapChainBuffers, 0);   // 0 the game's flip chain (2 buffers: one frame in flight, Present blocks on the display); 3 gives Present a frame of slack // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
+    inline bool bFullscreenRefreshFix = true;      // exclusive fullscreen asks for the display's current refresh rate instead of the game's 60/1 (render_policy.cpp)
+    inline bool bFullscreenResolutionFix = true;   // exclusive fullscreen runs at the selected screen resolution instead of the monitor's largest mode (the +1A25B hook and the buffer guard)
     inline bool bGpuLocalTextures = false; // strip CPU write access from large default textures so GPU copies into them stay in video memory (render_policy.cpp)
     inline bool bDisableMsaa = false; // scene targets created single-sampled; the game's resolve becomes a copy (render_policy.cpp)
     inline int iAnisotropy = 0;       // 2..16: every linear sampler anisotropic at that level; 0 = the game's samplers (render_policy.cpp)

@@ -152,9 +152,12 @@ namespace InternalSize
             const bool outputGiven = iOutputWidth > 0 && iOutputHeight > 0;
             const double aspect = outputGiven ? static_cast<double>(iOutputWidth) / iOutputHeight
                                 : (screenW > 0 && screenH > 0) ? static_cast<double>(screenW) / screenH : 480.0 / 272.0;
-            const bool wider = aspect > 480.0 / 272.0;
-            canvasW = iWideCanvasUnits > 0 ? iWideCanvasUnits : (wider ? static_cast<int>(std::lround(272.0 * aspect)) : 480);
-            canvasH = iWideCanvasHeightUnits > 0 ? iWideCanvasHeightUnits : (wider ? 272 : static_cast<int>(std::lround(480.0 / aspect)));
+            // A 16:9 display (1.7778) is a shade wider than the 480x272 canvas (1.7647): that is
+            // the game's own shape and stays 480x272, or a 484-unit canvas would shift the UI.
+            const bool sixteenNine = aspect >= 480.0 / 272.0 - 0.005 && aspect <= 16.0 / 9.0 + 0.005;
+            const bool wider = aspect > 16.0 / 9.0 + 0.005;
+            canvasW = iWideCanvasUnits > 0 ? iWideCanvasUnits : (sixteenNine ? 480 : wider ? static_cast<int>(std::lround(272.0 * aspect)) : 480);
+            canvasH = iWideCanvasHeightUnits > 0 ? iWideCanvasHeightUnits : (sixteenNine || wider ? 272 : static_cast<int>(std::lround(480.0 / aspect)));
             if (canvasW <= 480 && canvasH <= 272)
             {
                 spdlog::info("PW wide canvas: on, but the canvas would be {}x{} units (16:9): off for this run.", canvasW, canvasH);
@@ -302,6 +305,7 @@ namespace InternalSize
             }
             else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; not hooked.", kAfterFit); }
         }
+        if (bFullscreenResolutionFix)
         {
             const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterModeLoop;
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);

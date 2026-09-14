@@ -1,5 +1,11 @@
 #include "pch.hpp"
 #include <set>
+#include <psapi.h>
+#include <tlhelp32.h>
+#include <vector>
+#include <dwmapi.h>
+#include <mutex>
+#include <intrin.h>
 #include "draw_census.hpp"
 
 #include "game.hpp"
@@ -70,6 +76,8 @@ namespace
     constexpr size_t kCtxCopyResource = 47;
     constexpr size_t kCtxResolveSubresource = 57;
     constexpr size_t kCtxExecuteCommandList = 58;
+    constexpr size_t kCtxFlush = 111;
+    constexpr size_t kCtxFinishCommandList = 114;
     constexpr size_t kCtxCSSetShaderResources = 67;
     constexpr size_t kCtxCSSetUnorderedAccessViews = 68;
     constexpr size_t kCtxCSSetShader = 69;
@@ -77,6 +85,12 @@ namespace
     constexpr size_t kFactoryCreateSwapChain = 10;
     constexpr size_t kFactory2CreateSwapChainForHwnd = 15;
     constexpr size_t kSwapChainPresent = 8;
+    constexpr size_t kSwapChainResizeBuffers = 13;
+    constexpr UINT kSwapChainFlagAllowTearing = 0x800;   // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+    constexpr UINT kPresentAllowTearing = 0x200;         // DXGI_PRESENT_ALLOW_TEARING
+    SafetyHookInline SwapChain_ResizeBuffers_hook {};
+    std::atomic<bool> g_TearingChain { false };          // the chain was created with the flag
+    std::atomic<uint32_t> g_TearingPresents { 0 };
 
     // One hook set per context class (immediate, deferred). The context methods are hooked by
     // replacing the entries of the class vtable in d3d11.dll (every context of that class goes
@@ -143,14 +157,577 @@ namespace
         std::atomic<uint32_t> textures { 0 }, texturesLarge { 0 }, buffers { 0 }, maps { 0 }, mapWaits { 0 }, logLines { 0 };
         std::atomic<uint64_t> textureTicks { 0 }, mapTicks { 0 }, bufferTicks { 0 };
         std::string lastTexture;   // under g_Mutex
-        void Reset() { textures = 0; texturesLarge = 0; buffers = 0; maps = 0; mapWaits = 0; logLines = 0; textureTicks = 0; mapTicks = 0; bufferTicks = 0; }
+        // Frame pacing: time the game spends in Sleep and WaitForSingleObject(Ex) this frame,
+        // with the last caller of each (IAT hooks on the game's own imports, Lab only).
+        std::atomic<uint32_t> sleeps { 0 }, waits { 0 };
+        std::atomic<uint64_t> sleepTicks { 0 }, waitTicks { 0 };
+        std::atomic<uintptr_t> sleepCaller { 0 }, waitCaller { 0 };
+        void Reset() { textures = 0; texturesLarge = 0; buffers = 0; maps = 0; mapWaits = 0; logLines = 0; textureTicks = 0; mapTicks = 0; bufferTicks = 0; sleeps = 0; waits = 0; sleepTicks = 0; waitTicks = 0; }
     };
     FrameWork g_Work;
+    // Pacing summary: totals over a window of frames, printed every few seconds.
+    struct PacingWindow { uint32_t frames = 0; int64_t start = 0, sleep = 0, wait = 0, present = 0; double maxFrame = 0; uint32_t over25 = 0; } g_Pacing;
+    std::atomic<uint32_t> g_PresentKinds { 0 };
+    std::atomic<DWORD> g_PresentThread { 0 };
+    struct CallerStat { uint32_t calls = 0; int64_t ticks = 0; uint32_t maxArg = 0; };
+    std::map<uintptr_t, CallerStat> g_MainSleepers, g_MainWaiters;   // under g_PacingMutex
+    std::mutex g_PacingMutex;
+    std::atomic<uint64_t> g_OtherThreadWaits { 0 };
+    int64_t Ticks();
+    double TicksToMs(int64_t t);
+    void* PatchImport(const char* dll, const char* name, void* replacement);
+    // ---- the game's 60 Hz ticker ------------------------------------------------------------
+    // Thread +75FD0 (started at +775B9): QPC start; loop { elapsed = (QPC - start) / freq; while
+    // period > elapsed: timeBeginPeriod(1), Sleep((period - elapsed) * 1000), timeEndPeriod(1);
+    // tick (the callback at [+17D20]); start += freq * period }. The period is the constant 1/60
+    // loaded into xmm7 once before the loop, so the game ticks at exactly 60.000 Hz by the CPU
+    // clock while the display runs at its own rate: the beat is one duplicated frame each time
+    // the two drift a whole frame apart (about once a second on a 59 Hz panel, every 16 s at
+    // 59.94). Frame Pacing = Display sets xmm7 each iteration to k / refresh, k = round(refresh
+    // / 60), so the ticker and the display run at the same rate.
+    constexpr uintptr_t kTickerCompare = 0x7604B;   // comisd xmm7, xmm6 (period vs elapsed)
+    constexpr uintptr_t kTickerTick = 0x76080;      // call +17D20 (once per tick)
+    SafetyHookMid g_TickerCompare {}, g_TickerTick {};
+    std::atomic<uint64_t> g_Ticks { 0 };
+    double g_TickPeriod = 1.0 / 60.0;
+    double g_DisplayRefresh = 0;
+    // Frame Pacing = VBlank: the ticker thread waits for the display's vertical blank (k of them
+    // on a k x 60 Hz display) instead of sleeping to the CPU clock, so the game thread's tick
+    // and the display never drift apart in phase. The output comes from the swap chain once it
+    // exists; until then the game's own wait runs.
+    IDXGIOutput* g_VBlankOutput = nullptr;   // referenced
+    std::atomic<int> g_VBlankPerTick { 0 };
+    std::atomic<uint64_t> g_VBlankWaits { 0 };
+    std::atomic<uint64_t> g_VBlankLong { 0 }, g_VBlankShort { 0 }, g_VBlankWaitTicks { 0 }, g_VBlankWaitMax { 0 };
+    int64_t g_LastVBlankTick = 0;   // ticker thread only
+    // The primary display's exact vertical sync frequency from the display configuration (the
+    // target's video signal, a ratio such as 60000/1001), when the path can be read.
+    double PrimaryVSyncFrequency()
+    {
+        UINT32 nPaths = 0, nModes = 0;
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &nPaths, &nModes) != ERROR_SUCCESS || !nPaths) { return 0; }
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(nPaths);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(nModes);
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &nPaths, paths.data(), &nModes, modes.data(), nullptr) != ERROR_SUCCESS) { return 0; }
+        double first = 0;
+        for (UINT32 i = 0; i < nPaths; i++)
+        {
+            const auto& path = paths[i];
+            const UINT32 t = path.targetInfo.modeInfoIdx, src = path.sourceInfo.modeInfoIdx;
+            if (t >= nModes || modes[t].infoType != DISPLAYCONFIG_MODE_INFO_TYPE_TARGET) { continue; }
+            const auto& v = modes[t].targetMode.targetVideoSignalInfo.vSyncFreq;
+            if (!v.Numerator || !v.Denominator) { continue; }
+            const double hz = static_cast<double>(v.Numerator) / v.Denominator;
+            if (!first) { first = hz; }
+            if (src < nModes && modes[src].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE && modes[src].sourceMode.position.x == 0 && modes[src].sourceMode.position.y == 0) { return hz; }
+        }
+        return first;
+    }
+    double MeasureDisplayRefresh()
+    {
+        if (const double hz = PrimaryVSyncFrequency(); hz > 1) { return hz; }
+        // The compositor's refresh rate (the primary display's real rate as a ratio).
+        using Fn = HRESULT(WINAPI*)(HWND, DWM_TIMING_INFO*);
+        if (const HMODULE dwm = LoadLibraryW(L"dwmapi.dll"))
+        {
+            if (const auto fn = reinterpret_cast<Fn>(GetProcAddress(dwm, "DwmGetCompositionTimingInfo")))
+            {
+                DWM_TIMING_INFO info {};
+                info.cbSize = sizeof(info);
+                if (SUCCEEDED(fn(nullptr, &info)) && info.rateRefresh.uiDenominator > 0 && info.rateRefresh.uiNumerator > 0)
+                {
+                    return static_cast<double>(info.rateRefresh.uiNumerator) / info.rateRefresh.uiDenominator;
+                }
+            }
+        }
+        DEVMODEW dm {};
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1) { return dm.dmDisplayFrequency; }
+        return 0;
+    }
+    void InstallTickerHooks()
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uint8_t* c = reinterpret_cast<const uint8_t*>(base + kTickerCompare);
+        const uint8_t* k = reinterpret_cast<const uint8_t*>(base + kTickerTick);
+        if (!(c[0] == 0x66 && c[1] == 0x0F && c[2] == 0x2F && c[3] == 0xFE && k[0] == 0xE8))
+        {
+            spdlog::warn("PW pacing: ticker sites +{:X}/+{:X} do not look as expected; not hooked.", kTickerCompare, kTickerTick);
+            return;
+        }
+        g_DisplayRefresh = MeasureDisplayRefresh();
+        if (DrawCensus::bPacingLog) { g_TickerTick = safetyhook::create_mid(base + kTickerTick, [](SafetyHookContext&) { g_Ticks.fetch_add(1); }); }
+        if (DrawCensus::iFramePacing == 2 && g_DisplayRefresh > 1)
+        {
+            const int k = std::max(1, static_cast<int>(std::lround(g_DisplayRefresh / 60.0)));
+            const bool multiple = std::abs(g_DisplayRefresh - 60.0 * k) < 1.5;
+            if (multiple)
+            {
+                g_VBlankPerTick.store(k);
+                g_TickerCompare = safetyhook::create_mid(base + kTickerCompare, [](SafetyHookContext& ctx)
+                {
+                    IDXGIOutput* out = g_VBlankOutput;
+                    const int k = g_VBlankPerTick.load();
+                    if (!out || k <= 0) { return; }   // no chain yet: the game's own wait
+                    const int64_t t0 = Ticks();
+                    for (int i = 0; i < k; i++) { if (FAILED(out->WaitForVBlank())) { return; } }
+                    const int64_t t1 = Ticks();
+                    g_VBlankWaits.fetch_add(1);
+                    g_VBlankWaitTicks.fetch_add(t1 - t0);
+                    { uint64_t m = g_VBlankWaitMax.load(); while (static_cast<uint64_t>(t1 - t0) > m && !g_VBlankWaitMax.compare_exchange_weak(m, static_cast<uint64_t>(t1 - t0))) {} }
+                    if (g_LastVBlankTick)
+                    {
+                        const double ms = TicksToMs(t1 - g_LastVBlankTick);
+                        if (ms > 25.0 * k) { g_VBlankLong.fetch_add(1); } else if (ms < 8.0 * k) { g_VBlankShort.fetch_add(1); }
+                    }
+                    g_LastVBlankTick = t1;
+                    ctx.xmm7.f64[0] = 0.0;   // period 0: no sleep, tick now
+                });
+                spdlog::info("PW pacing: ticker locked to the display's vblank: {:.4f} Hz, {} vblank(s) a tick ({}).", g_DisplayRefresh, k, g_TickerCompare ? "hooked" : "hook FAILED");
+            }
+            else { spdlog::info("PW pacing: display at {:.4f} Hz is not a multiple of 60; the ticker stays the game's.", g_DisplayRefresh); }
+        }
+        else if (DrawCensus::iFramePacing == 1 && g_DisplayRefresh > 1)
+        {
+            const int k = std::max(1, static_cast<int>(std::lround(g_DisplayRefresh / 60.0)));
+            g_TickPeriod = k / g_DisplayRefresh;
+            g_TickerCompare = safetyhook::create_mid(base + kTickerCompare, [](SafetyHookContext& ctx) { ctx.xmm7.f64[0] = g_TickPeriod; });
+            spdlog::info("PW pacing: ticker paced to the display: {:.4f} Hz / {} = {:.4f} ms a tick ({}).", g_DisplayRefresh, k, g_TickPeriod * 1000.0, g_TickerCompare ? "hooked" : "hook FAILED");
+        }
+        else
+        {
+            spdlog::info("PW pacing: ticker left at the game's 60.000 Hz; the display reports {:.4f} Hz (tick counter {}).", g_DisplayRefresh, g_TickerTick ? "hooked" : "hook FAILED");
+        }
+    }
+    UINT g_PresentSync = 0xFFFF, g_PresentFlags = 0xFFFF;
     int64_t g_LastPresentEnd = 0, g_LastPresentTicks = 0;
     double g_AvgFrameMs = 0;
     uint32_t g_Hitches = 0;
     int64_t Ticks() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
     double TicksToMs(int64_t t) { static const double f = [] { LARGE_INTEGER q; QueryPerformanceFrequency(&q); return 1000.0 / static_cast<double>(q.QuadPart); }(); return static_cast<double>(t) * f; }
+    // ---- frame pacing: the game's waits -----------------------------------------------------
+    using SleepFn = void(WINAPI*)(DWORD);
+    using WaitFn = DWORD(WINAPI*)(HANDLE, DWORD);
+    using WaitExFn = DWORD(WINAPI*)(HANDLE, DWORD, BOOL);
+    SleepFn g_RealSleep = nullptr; WaitFn g_RealWait = nullptr; WaitExFn g_RealWaitEx = nullptr;
+    uintptr_t CallerRva(void* ret)
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const auto r = reinterpret_cast<uintptr_t>(ret);
+        return (r > base && r - base < 0x2000000) ? r - base : 0;
+    }
+    bool OnPresentThread() { const DWORD t = g_PresentThread.load(); return t != 0 && t == GetCurrentThreadId(); }
+
+    // ---- hitch sampler --------------------------------------------------------------------------
+    // Every thread that enters a real wait (Sleep >= 1 ms, WaitForSingleObject) records what it
+    // waits in; when the render thread has spun 20 ms for the game thread's frame, every other
+    // thread is suspended, its instruction pointer and the game-code return addresses on its
+    // stack read, and resumed; one log block per hitch, a few per run.
+    struct ThreadWait { DWORD tid = 0; std::atomic<uintptr_t> caller { 0 }; std::atomic<int64_t> since { 0 }; std::atomic<uint32_t> ms { 0 }; };
+    thread_local ThreadWait* t_Wait = nullptr;
+    std::mutex g_WaitTableMutex;
+    std::vector<ThreadWait*> g_WaitTable;
+    ThreadWait& MyWait()
+    {
+        if (!t_Wait)
+        {
+            t_Wait = new ThreadWait;
+            t_Wait->tid = GetCurrentThreadId();
+            std::lock_guard lock(g_WaitTableMutex);
+            g_WaitTable.push_back(t_Wait);
+        }
+        return *t_Wait;
+    }
+    struct ModuleRange { uintptr_t base, end; std::string name; };
+    std::vector<ModuleRange> g_Modules;   // snapshot taken before the first sample, no API calls while threads are suspended
+    void SnapshotModules()
+    {
+        g_Modules.clear();
+        HMODULE mods[512];
+        DWORD needed = 0;
+        if (!K32EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) { return; }
+        for (DWORD i = 0; i < needed / sizeof(HMODULE) && i < 512; i++)
+        {
+            MODULEINFO mi {};
+            if (!K32GetModuleInformation(GetCurrentProcess(), mods[i], &mi, sizeof(mi))) { continue; }
+            wchar_t path[MAX_PATH] {};
+            GetModuleFileNameW(mods[i], path, MAX_PATH);
+            std::string name;
+            for (const wchar_t* c = path; *c; c++) { name += static_cast<char>(*c); }
+            if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos) { name = name.substr(slash + 1); }
+            g_Modules.push_back({ reinterpret_cast<uintptr_t>(mi.lpBaseOfDll), reinterpret_cast<uintptr_t>(mi.lpBaseOfDll) + mi.SizeOfImage, name });
+        }
+    }
+    std::string Where(uintptr_t a)
+    {
+        for (const auto& m : g_Modules) { if (a >= m.base && a < m.end) { return fmt::format("{}+{:X}", m.name, a - m.base); } }
+        return fmt::format("{:#x}", a);
+    }
+    std::atomic<int> g_SampleBudget { 0 };   // armed by the live command "sample N" (start-up and loading waits would spend a fixed budget)
+    std::atomic<uint32_t> g_SpinHitches { 0 };
+    void SampleThreads(double spunMs)
+    {
+        if (g_SampleBudget.load() <= 0) { return; }
+        g_SampleBudget.fetch_sub(1);
+        if (g_Modules.empty()) { SnapshotModules(); }
+        struct Row { DWORD tid; uintptr_t rip; std::vector<uintptr_t> stack; };
+        auto inModule = [](uintptr_t a) { for (const auto& m : g_Modules) { if (a >= m.base && a < m.end) { return true; } } return false; };
+        std::vector<Row> rows;
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) { return; }
+        THREADENTRY32 te {};
+        te.dwSize = sizeof(te);
+        const DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te))
+        {
+            if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) { continue; }
+            const HANDLE h = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+            if (!h) { continue; }
+            Row row { te.th32ThreadID, 0, {} };
+            if (SuspendThread(h) != static_cast<DWORD>(-1))
+            {
+                CONTEXT ctx {};
+                ctx.ContextFlags = CONTEXT_CONTROL;
+                if (GetThreadContext(h, &ctx))
+                {
+                    row.rip = ctx.Rip;
+                    // The first 256 stack slots that point into the game's code: the call chain, roughly.
+                    const auto* sp = reinterpret_cast<const uintptr_t*>(ctx.Rsp);
+                    // The first 512 stack slots that point into any loaded module: the call chain, roughly
+                    // (return addresses and stale frames alike).
+                    for (int i = 0; i < 512 && row.stack.size() < 12; i++)
+                    {
+                        if (!mgs4e::mem::Readable(sp + i, sizeof(uintptr_t))) { break; }
+                        const uintptr_t v = sp[i];
+                        if (inModule(v)) { row.stack.push_back(v); }
+                    }
+                }
+                ResumeThread(h);
+            }
+            CloseHandle(h);
+            rows.push_back(std::move(row));
+        }
+        CloseHandle(snap);
+        const int64_t now = Ticks();
+        spdlog::warn("PW sampler: render thread has waited {:.1f} ms for a frame (frame {}); {} other threads:", spunMs, g_Frame.load(), rows.size());
+        std::lock_guard lock(g_WaitTableMutex);
+        for (const Row& r : rows)
+        {
+            std::string wait;
+            for (const ThreadWait* w : g_WaitTable)
+            {
+                if (w->tid == r.tid && w->since.load()) { wait = fmt::format(" | in wait from +{:X} for {:.1f} ms (asked {})", w->caller.load(), TicksToMs(now - w->since.load()), w->ms.load() == INFINITE ? std::string("inf") : std::to_string(w->ms.load())); }
+            }
+            std::string chain;
+            for (uintptr_t a : r.stack) { chain += " " + Where(a); }
+            spdlog::warn("PW sampler:   tid {:5}: at {}{}{}", r.tid, Where(r.rip), chain.empty() ? "" : " | stack:" + chain, wait);
+        }
+    }
+    // ---- the vblank wait ----------------------------------------------------------------------
+    // The game's vblank handshake: the ticker callback (+78A10) increments a counter (+1084498)
+    // and sets a manual-reset event (handle at +1083E90); a waiter (+78250, and a second loop at
+    // +78350 on the same event) reads the counter, waits on the event with no timeout through
+    // the wrapper +14AD0, resets the event, and re-checks the counter. Two threads reset one
+    // event: when one wakes and resets it between the other's counter read and its wait, the
+    // other sleeps through the tick it wanted, a whole frame (sampled 2026-09-14: at every hitch
+    // every thread was in a wait). A short timeout on that one wait bounds the loss to the
+    // timeout; the loop's counter check does the rest.
+    constexpr uintptr_t kWaitEventWrapper = 0x14AD0;   // bool WaitEvent(HANDLE* slot, DWORD ms /* 0 = INFINITE */)
+    constexpr uintptr_t kVBlankEventSlot = 0x1083E90;
+    SafetyHookInline g_WaitEvent {};
+    std::atomic<uint64_t> g_VBlankTimeouts { 0 }, g_VBlankWaits2 { 0 };
+    // The vblank wait log: per thread, the counter value and time when its last vblank wait
+    // returned; at the next wait the work time in between and the ticks passed are known.
+    constexpr uintptr_t kVBlankCounter = 0x1084498;
+    struct VBlankTrack { uintptr_t lastCaller = 0; uint32_t lastCounter = 0; int64_t lastReturn = 0; uint32_t waits = 0, skipped = 0; double workMax = 0, workSum = 0; int64_t windowStart = 0; double csWindowSum = 0, csWindowMax = 0; };
+    thread_local VBlankTrack t_VBlank;
+    // Critical sections entered by this thread since its last vblank wait returned: total time
+    // blocked, the longest single entry and which section it was (the IAT hook below).
+    struct CsTrack { int64_t ticks = 0, maxTicks = 0; uintptr_t maxCs = 0, maxCaller = 0; uint32_t entries = 0; };
+    thread_local CsTrack t_Cs;
+    struct D3DAcc { int64_t ticks = 0, maxTicks = 0; const char* maxWhat = ""; uint32_t calls = 0; };
+    thread_local D3DAcc t_D3D;   // time inside the hooked D3D calls on this thread since its last vblank wait returned
+    void AccountD3D(int64_t dt, const char* what) { t_D3D.ticks += dt; t_D3D.calls++; if (dt > t_D3D.maxTicks) { t_D3D.maxTicks = dt; t_D3D.maxWhat = what; } }
+    struct WaitAcc { int64_t ticks = 0, maxTicks = 0; uintptr_t maxCaller = 0; uint32_t maxMs = 0, count = 0; };
+    thread_local WaitAcc t_WaitAcc;   // Sleep(>=1) and WaitForSingleObject(Ex) on this thread since its last vblank wait returned
+    void AccountWait(int64_t dt, uintptr_t caller, DWORD ms) { t_WaitAcc.ticks += dt; t_WaitAcc.count++; if (dt > t_WaitAcc.maxTicks) { t_WaitAcc.maxTicks = dt; t_WaitAcc.maxCaller = caller; t_WaitAcc.maxMs = ms; } }
+    using EnterCsFn = void(WINAPI*)(LPCRITICAL_SECTION);
+    EnterCsFn g_RealEnterCs = nullptr;
+    void WINAPI Hooked_EnterCriticalSection(LPCRITICAL_SECTION cs)
+    {
+        if (!TryEnterCriticalSection(cs))
+        {
+            const int64_t t0 = Ticks();
+            g_RealEnterCs(cs);
+            const int64_t dt = Ticks() - t0;
+            t_Cs.ticks += dt; t_Cs.entries++;
+            if (dt > t_Cs.maxTicks) { t_Cs.maxTicks = dt; t_Cs.maxCs = reinterpret_cast<uintptr_t>(cs); t_Cs.maxCaller = CallerRva(_ReturnAddress()); }
+        }
+    }
+    std::atomic<int> g_VBlankSkipBudget { 0 };   // per-skip lines, armed by the live command "skips N" (the intro's 30 fps would spend a fixed budget)
+    uint8_t WINAPI Hooked_WaitEvent(HANDLE* slot, DWORD ms)
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        DWORD timeout = ms ? ms : INFINITE;
+        const bool vblank = reinterpret_cast<uintptr_t>(slot) == base + kVBlankEventSlot;
+        if (vblank && ms == 0 && DrawCensus::iVBlankWaitTimeout > 0) { timeout = static_cast<DWORD>(DrawCensus::iVBlankWaitTimeout); g_VBlankWaits2.fetch_add(1); }
+        const bool logging = vblank && DrawCensus::bVBlankWaitLog;
+        const uintptr_t caller = logging ? CallerRva(_ReturnAddress()) : 0;
+        int64_t enter = 0;
+        double work = 0;
+        if (logging)
+        {
+            enter = Ticks();
+            if (t_VBlank.lastReturn) { work = TicksToMs(enter - t_VBlank.lastReturn); }
+        }
+        const DWORD r = WaitForSingleObject(*slot, timeout);
+        if (vblank && r == WAIT_TIMEOUT) { g_VBlankTimeouts.fetch_add(1); }
+        if (logging)
+        {
+            const int64_t now = Ticks();
+            // The value is the vblanks since the game thread last consumed one: 1 on a normal tick,
+            // 2 or more when the thread was late for a tick (the game then runs the logic twice).
+            const uint32_t counter = *reinterpret_cast<volatile uint32_t*>(base + kVBlankCounter);
+            const uint32_t passed = counter;
+            if (t_VBlank.lastReturn)
+            {
+                t_VBlank.waits++; t_VBlank.workSum += work; t_VBlank.workMax = std::max(t_VBlank.workMax, work);
+                const double csMs = TicksToMs(t_Cs.ticks);
+                t_VBlank.csWindowSum += csMs; t_VBlank.csWindowMax = std::max(t_VBlank.csWindowMax, csMs);
+                if (passed >= 2)
+                {
+                    t_VBlank.skipped++;
+                    if (g_VBlankSkipBudget.load() > 0 && g_VBlankSkipBudget.fetch_sub(1) > 0)
+                    {
+                        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+                        spdlog::warn("PW vblank: tid {} missed {} tick(s): work since the last wait returned {:.2f} ms, of it {:.2f} ms in {} wait(s) (longest {:.2f} ms from +{:X}, asked {}) and {:.2f} ms in critical sections, {:.2f} ms in {} D3D call(s) (longest {:.2f} ms in {}); this vblank wait {:.2f} ms from +{:X} (previous wait from +{:X}), vblanks consumed {}, wait count {} / frame count {}.",
+                            GetCurrentThreadId(), passed - 1, work, TicksToMs(t_WaitAcc.ticks), t_WaitAcc.count, TicksToMs(t_WaitAcc.maxTicks), t_WaitAcc.maxCaller, t_WaitAcc.maxMs == INFINITE ? std::string("inf") : std::to_string(t_WaitAcc.maxMs), csMs,
+                            TicksToMs(t_D3D.ticks), t_D3D.calls, TicksToMs(t_D3D.maxTicks), t_D3D.maxWhat, TicksToMs(now - enter), caller, t_VBlank.lastCaller, counter,
+                            *reinterpret_cast<volatile int32_t*>(base + 0x1084484), *reinterpret_cast<volatile int32_t*>(base + 0x1084490));
+                    }
+                }
+                t_Cs = CsTrack {};
+                t_WaitAcc = WaitAcc {};
+                t_D3D = D3DAcc {};
+            }
+            if (!t_VBlank.windowStart) { t_VBlank.windowStart = now; }
+            if (TicksToMs(now - t_VBlank.windowStart) >= 5000.0 && t_VBlank.waits)
+            {
+                spdlog::info("PW vblank: tid {}: {} waits in 5 s, {} missed tick(s); work between waits mean {:.2f} ms, max {:.2f} ms; blocked in critical sections mean {:.2f} ms, max {:.2f} ms.", GetCurrentThreadId(), t_VBlank.waits, t_VBlank.skipped, t_VBlank.workSum / t_VBlank.waits, t_VBlank.workMax, t_VBlank.csWindowSum / t_VBlank.waits, t_VBlank.csWindowMax);
+                t_VBlank.waits = 0; t_VBlank.skipped = 0; t_VBlank.workSum = 0; t_VBlank.workMax = 0; t_VBlank.csWindowSum = 0; t_VBlank.csWindowMax = 0; t_VBlank.windowStart = now;
+            }
+            t_VBlank.lastCounter = counter;
+            t_VBlank.lastReturn = now;
+            t_VBlank.lastCaller = caller;
+        }
+        return r == WAIT_OBJECT_0 ? 1 : 0;
+    }
+    void InstallVBlankWaitHook()
+    {
+        if (DrawCensus::iVBlankWaitTimeout <= 0 && !DrawCensus::bVBlankWaitLog) { return; }
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kWaitEventWrapper);
+        if (p[0] == 0x48 && p[1] == 0x83 && p[2] == 0xEC && p[3] == 0x28 && p[4] == 0x48 && p[5] == 0x8B && p[6] == 0x09 && p[7] == 0x85 && p[8] == 0xD2)
+        {
+            g_WaitEvent = safetyhook::create_inline(reinterpret_cast<void*>(base + kWaitEventWrapper), reinterpret_cast<void*>(&Hooked_WaitEvent));
+            spdlog::info("PW pacing: vblank wait hook ({}): timeout {} ms, log {}.", g_WaitEvent ? "ok" : "FAILED", DrawCensus::iVBlankWaitTimeout, DrawCensus::bVBlankWaitLog ? "on" : "off");
+            if (DrawCensus::bVBlankWaitLog)
+            {
+                g_RealEnterCs = reinterpret_cast<EnterCsFn>(PatchImport("KERNEL32.dll", "EnterCriticalSection", reinterpret_cast<void*>(&Hooked_EnterCriticalSection)));
+                spdlog::info("PW pacing: EnterCriticalSection import hook {} (blocked time per tick in the vblank log).", g_RealEnterCs ? "ok" : "FAILED");
+            }
+        }
+        else { spdlog::warn("PW pacing: wait wrapper +{:X} does not look as expected; vblank wait timeout not installed.", kWaitEventWrapper); }
+    }
+    // ---- the frame handoff ----------------------------------------------------------------------
+    // +175B0 hands the game thread's finished frame to the render thread: it sets the flag at
+    // display+0x32c0 that the render loop (+17BD0) polls, then Presents and clears. Its first
+    // check (+175DF): if the flag is still set, the render thread has not taken the previous
+    // frame yet (it is inside a vsync-blocked Present), and the function returns: this frame is
+    // dropped and the display repeats the last one. Under composition Present returns at once
+    // and the render thread is nearly always free; in direct flip (Borderless covering the
+    // monitor, exclusive Fullscreen) it blocks to the vblank, and the drop lands every second
+    // or so at 60 Hz. Waiting here for the flag to clear, briefly, keeps the frame.
+    constexpr uintptr_t kHandoffCheck = 0x175DF;   // cmp byte ptr [rcx+0x32c0], 0
+    SafetyHookMid g_HandoffCheck {};
+    std::atomic<uint64_t> g_HandoffWaits { 0 }, g_HandoffWaitTicks { 0 }, g_HandoffDrops { 0 };
+    void InstallHandoffWait()
+    {
+        if (DrawCensus::iFrameHandoffWait <= 0) { return; }
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kHandoffCheck);
+        if (!(p[0] == 0x80 && p[1] == 0xB9 && p[2] == 0xC0 && p[3] == 0x32 && p[4] == 0x00 && p[5] == 0x00 && p[6] == 0x00))
+        {
+            spdlog::warn("PW pacing: handoff site +{:X} does not look as expected; frame handoff wait not installed.", kHandoffCheck);
+            return;
+        }
+        g_HandoffCheck = safetyhook::create_mid(base + kHandoffCheck, [](SafetyHookContext& ctx)
+        {
+            volatile uint8_t* flag = reinterpret_cast<volatile uint8_t*>(ctx.rcx + 0x32c0);
+            if (*flag == 0) { return; }
+            const int64_t t0 = Ticks();
+            const double limit = static_cast<double>(DrawCensus::iFrameHandoffWait);
+            while (*flag != 0 && TicksToMs(Ticks() - t0) < limit) { SwitchToThread(); }
+            g_HandoffWaits.fetch_add(1);
+            g_HandoffWaitTicks.fetch_add(Ticks() - t0);
+            if (*flag != 0) { g_HandoffDrops.fetch_add(1); }
+        });
+        spdlog::info("PW pacing: frame handoff waits up to {} ms for the render thread instead of dropping the frame ({}).", DrawCensus::iFrameHandoffWait, g_HandoffCheck ? "hooked" : "hook FAILED");
+    }
+    // ---- the frame-skip governor ------------------------------------------------------------------
+    // The game's frame end (+78250..+78480) measures each frame in vblanks by wall clock and,
+    // when a frame measures longer than the current vblank wait count (+1084484), raises the
+    // count (+78462, capped at 3): the next frame waits two vblanks, a doubled frame; a few
+    // frames later it lowers the count again (+7843C). Under direct flip (Borderless covering
+    // the monitor, exclusive Fullscreen) the render thread's Present returns at the vblank, so
+    // a frame end lands just past it about once a second and measures as 17 ms: the stutter
+    // (2026-09-14, vblank wait log: every missed tick was a second wait with 0 ms of work).
+    // Skipping that one store leaves the game's explicit count (30 fps movies and menus, set at
+    // +78070) and the lowering path intact.
+    constexpr uintptr_t kGovernorRaise = 0x78462;   // mov [wait count], edi (6 bytes)
+    SafetyHookMid g_GovernorRaise {};
+    std::atomic<uint64_t> g_GovernorRaisesSkipped { 0 };
+    void InstallGovernor()
+    {
+        if (DrawCensus::bFrameSkipGovernor) { return; }
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kGovernorRaise);
+        if (!(p[0] == 0x89 && p[1] == 0x3D))
+        {
+            spdlog::warn("PW pacing: governor site +{:X} does not look as expected; the frame-skip governor stays.", kGovernorRaise);
+            return;
+        }
+        g_GovernorRaise = safetyhook::create_mid(base + kGovernorRaise, [](SafetyHookContext& ctx)
+        {
+            g_GovernorRaisesSkipped.fetch_add(1);
+            ctx.rip += 6;   // skip the store: the wait count keeps its value
+        });
+        spdlog::info("PW pacing: frame-skip governor off: a long-measured frame no longer raises the vblank wait count ({}).", g_GovernorRaise ? "hooked" : "hook FAILED");
+    }
+    // The render thread's spin: counted in the Sleep hook, the clock read once per 1024 calls.
+    thread_local uint32_t t_SpinCalls = 0;
+    thread_local int64_t t_SpinStart = 0;
+    thread_local bool t_Sampled = false;
+    void ResetSpin() { t_SpinCalls = 0; t_SpinStart = 0; t_Sampled = false; }
+    void WatchSpin()
+    {
+        if ((++t_SpinCalls & 1023) != 0) { return; }
+        const int64_t now = Ticks();
+        if (!t_SpinStart) { t_SpinStart = now; return; }
+        if (!t_Sampled && TicksToMs(now - t_SpinStart) > 20.0)
+        {
+            t_Sampled = true;
+            g_SpinHitches.fetch_add(1);
+            SampleThreads(TicksToMs(now - t_SpinStart));
+        }
+    }
+    void Account(std::map<uintptr_t, CallerStat>& table, uintptr_t caller, int64_t ticks, DWORD arg)
+    {
+        std::lock_guard lock(g_PacingMutex);
+        CallerStat& c = table[caller];
+        c.calls++; c.ticks += ticks; c.maxArg = std::max(c.maxArg, static_cast<uint32_t>(arg));
+    }
+    void WINAPI Hooked_Sleep(DWORD ms)
+    {
+        const bool present = OnPresentThread();
+        if (ms == 0)
+        {
+            // The render thread's handoff spin (~170k calls a frame): no clock reads here.
+            if (present && DrawCensus::bHitchSampler) { WatchSpin(); }
+            if (!present) { g_OtherThreadWaits.fetch_add(1); }
+            g_RealSleep(0);
+            return;
+        }
+        const uintptr_t caller = CallerRva(_ReturnAddress());
+        ThreadWait& w = MyWait();
+        const int64_t t0 = Ticks();
+        w.caller.store(caller); w.ms.store(ms); w.since.store(t0);
+        g_RealSleep(ms);
+        w.since.store(0);
+        AccountWait(Ticks() - t0, caller, ms);
+        if (!present) { g_OtherThreadWaits.fetch_add(1); return; }
+        const int64_t dt = Ticks() - t0;
+        g_Work.sleeps.fetch_add(1); g_Work.sleepTicks.fetch_add(dt); g_Work.sleepCaller.store(caller);
+        if (DrawCensus::bPacingLog) { Account(g_MainSleepers, caller, dt, ms); }
+    }
+    DWORD WINAPI Hooked_Wait(HANDLE h, DWORD ms)
+    {
+        const bool present = OnPresentThread();
+        const uintptr_t caller = CallerRva(_ReturnAddress());
+        ThreadWait& w = MyWait();
+        const int64_t t0 = Ticks();
+        w.caller.store(caller); w.ms.store(ms); w.since.store(t0);
+        const DWORD r = g_RealWait(h, ms);
+        w.since.store(0);
+        AccountWait(Ticks() - t0, caller, ms);
+        if (!present) { g_OtherThreadWaits.fetch_add(1); return r; }
+        const int64_t dt = Ticks() - t0;
+        g_Work.waits.fetch_add(1); g_Work.waitTicks.fetch_add(dt); g_Work.waitCaller.store(caller);
+        if (DrawCensus::bPacingLog) { Account(g_MainWaiters, caller, dt, ms); }
+        return r;
+    }
+    DWORD WINAPI Hooked_WaitEx(HANDLE h, DWORD ms, BOOL alertable)
+    {
+        const bool present = OnPresentThread();
+        const uintptr_t caller = CallerRva(_ReturnAddress());
+        ThreadWait& w = MyWait();
+        const int64_t t0 = Ticks();
+        w.caller.store(caller); w.ms.store(ms); w.since.store(t0);
+        const DWORD r = g_RealWaitEx(h, ms, alertable);
+        w.since.store(0);
+        AccountWait(Ticks() - t0, caller, ms);
+        if (!present) { g_OtherThreadWaits.fetch_add(1); return r; }
+        const int64_t dt = Ticks() - t0;
+        g_Work.waits.fetch_add(1); g_Work.waitTicks.fetch_add(dt); g_Work.waitCaller.store(caller);
+        if (DrawCensus::bPacingLog) { Account(g_MainWaiters, caller, dt, ms); }
+        return r;
+    }
+    std::string CallerTable(std::map<uintptr_t, CallerStat>& table, uint32_t frames)
+    {
+        std::string out;
+        std::lock_guard lock(g_PacingMutex);
+        for (const auto& [rva, c] : table)
+        {
+            out += fmt::format(" +{:X}: {:.1f} calls {:.2f} ms/frame (arg<={});", rva, static_cast<double>(c.calls) / frames, TicksToMs(c.ticks) / frames, c.maxArg);
+        }
+        table.clear();
+        return out.empty() ? " none" : out;
+    }
+    // Replaces one import in the game's IAT; returns the original pointer or nullptr.
+    void* PatchImport(const char* dll, const char* name, void* replacement)
+    {
+        const auto base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (!dir.VirtualAddress) { return nullptr; }
+        for (auto* imp = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); imp->Name; imp++)
+        {
+            if (_stricmp(reinterpret_cast<const char*>(base + imp->Name), dll) != 0) { continue; }
+            auto* thunk = reinterpret_cast<const IMAGE_THUNK_DATA64*>(base + imp->OriginalFirstThunk);
+            auto* iat = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + imp->FirstThunk);
+            for (; thunk->u1.AddressOfData; thunk++, iat++)
+            {
+                if (IMAGE_SNAP_BY_ORDINAL64(thunk->u1.Ordinal)) { continue; }
+                const auto* byName = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + thunk->u1.AddressOfData);
+                if (strcmp(byName->Name, name) != 0) { continue; }
+                void* original = reinterpret_cast<void*>(iat->u1.Function);
+                DWORD old = 0;
+                if (!VirtualProtect(&iat->u1.Function, sizeof(void*), PAGE_READWRITE, &old)) { return nullptr; }
+                iat->u1.Function = reinterpret_cast<ULONGLONG>(replacement);
+                VirtualProtect(&iat->u1.Function, sizeof(void*), old, &old);
+                return original;
+            }
+        }
+        return nullptr;
+    }
+    void InstallPacingHooks()
+    {
+        g_RealSleep = reinterpret_cast<SleepFn>(PatchImport("KERNEL32.dll", "Sleep", reinterpret_cast<void*>(&Hooked_Sleep)));
+        g_RealWait = reinterpret_cast<WaitFn>(PatchImport("KERNEL32.dll", "WaitForSingleObject", reinterpret_cast<void*>(&Hooked_Wait)));
+        g_RealWaitEx = reinterpret_cast<WaitExFn>(PatchImport("KERNEL32.dll", "WaitForSingleObjectEx", reinterpret_cast<void*>(&Hooked_WaitEx)));
+        spdlog::info("PW pacing: import hooks Sleep {}, WaitForSingleObject {}, WaitForSingleObjectEx {}.", g_RealSleep ? "ok" : "FAILED", g_RealWait ? "ok" : "FAILED", g_RealWaitEx ? "ok" : "FAILED");
+    }
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
     std::atomic<uint64_t> g_GpuLocalStripped { 0 };
@@ -680,6 +1257,7 @@ namespace
         const int64_t t0 = Ticks();
         const HRESULT r = Original<decltype(&Hooked_Map)>(self, kCtxMap)(self, res, sub, type, flags, mapped);
         const int64_t dt = Ticks() - t0;
+        AccountD3D(dt, "Map");
         g_Work.mapTicks.fetch_add(dt);
         g_Work.maps.fetch_add(1);
         if (TicksToMs(dt) > 1.0) { g_Work.mapWaits.fetch_add(1); }
@@ -803,7 +1381,7 @@ namespace
             }
             else if (size) { std::lock_guard lock(g_Mutex); Trace(self, std::format("UpdateSub vb {}B", size)); }
         }
-        Original<decltype(&Hooked_UpdateSubresource)>(self, kCtxUpdateSubresource)(self, res, sub, box, data, rowPitch, depthPitch);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_UpdateSubresource)>(self, kCtxUpdateSubresource)(self, res, sub, box, data, rowPitch, depthPitch); AccountD3D(Ticks() - t0, "UpdateSubresource"); }
     }
 
     void STDMETHODCALLTYPE Hooked_CSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
@@ -880,13 +1458,26 @@ namespace
         Original<decltype(&Hooked_ResolveSubresource)>(self, kCtxResolveSubresource)(self, dst, dstSub, src, srcSub, fmt);
     }
 
+    void STDMETHODCALLTYPE Hooked_Flush(ID3D11DeviceContext* self)
+    {
+        const int64_t t0 = Ticks();
+        Original<decltype(&Hooked_Flush)>(self, kCtxFlush)(self);
+        AccountD3D(Ticks() - t0, "Flush");
+    }
+    HRESULT STDMETHODCALLTYPE Hooked_FinishCommandList(ID3D11DeviceContext* self, BOOL restore, ID3D11CommandList** list)
+    {
+        const int64_t t0 = Ticks();
+        const HRESULT r = Original<decltype(&Hooked_FinishCommandList)>(self, kCtxFinishCommandList)(self, restore, list);
+        AccountD3D(Ticks() - t0, "FinishCommandList");
+        return r;
+    }
     void STDMETHODCALLTYPE Hooked_ExecuteCommandList(ID3D11DeviceContext* self, ID3D11CommandList* list, BOOL restore)
     {
         g_ListsSeen.fetch_add(1);
         const bool timing = g_TimingState.load() == 2;
         if (timing) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("list {:#x} begins", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
         if (g_FramesToLog.load() > 0) { spdlog::info("PW census: f{} ExecuteCommandList {:#x} | {}", g_Frame.load(), reinterpret_cast<uintptr_t>(list) & 0xffffff, GameCallers(4)); }
-        Original<decltype(&Hooked_ExecuteCommandList)>(self, kCtxExecuteCommandList)(self, list, restore);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_ExecuteCommandList)>(self, kCtxExecuteCommandList)(self, list, restore); AccountD3D(Ticks() - t0, "ExecuteCommandList"); }
         if (timing) { std::lock_guard lock(g_Mutex); StampBefore(self, std::format("list {:#x} ended", reinterpret_cast<uintptr_t>(list) & 0xffffff)); }
     }
 
@@ -911,6 +1502,8 @@ namespace
             { kCtxUpdateSubresource, reinterpret_cast<void*>(Hooked_UpdateSubresource) },
             { kCtxIASetPrimitiveTopology, reinterpret_cast<void*>(Hooked_IASetPrimitiveTopology) },
             { kCtxExecuteCommandList, reinterpret_cast<void*>(Hooked_ExecuteCommandList) },
+            { kCtxFlush, reinterpret_cast<void*>(Hooked_Flush) },
+            { kCtxFinishCommandList, reinterpret_cast<void*>(Hooked_FinishCommandList) },
             { kCtxDispatch, reinterpret_cast<void*>(Hooked_Dispatch) },
             { kCtxDispatchIndirect, reinterpret_cast<void*>(Hooked_DispatchIndirect) },
             { kCtxCopySubresourceRegion, reinterpret_cast<void*>(Hooked_CopySubresourceRegion) },
@@ -1099,22 +1692,60 @@ namespace
                 g_DrawsThisFrame = 0;
                 for (auto& [ctx, st] : g_State) { st.draws = 0; }
             }
+            g_PresentThread.store(GetCurrentThreadId());
+            ResetSpin();
+            if (DrawCensus::iPresentSync >= 0 && DrawCensus::iPresentSync <= 4) { sync = static_cast<UINT>(DrawCensus::iPresentSync); }
+            if (g_TearingChain.load())
+            {
+                BOOL fullscreen = FALSE;
+                if (SUCCEEDED(self->GetFullscreenState(&fullscreen, nullptr)) && !fullscreen)
+                {
+                    sync = 0; flags |= kPresentAllowTearing;
+                    if (g_TearingPresents.fetch_add(1) == 0) { spdlog::info("PW pacing: presenting with sync 0 and ALLOW_TEARING from frame {}.", g_Frame.load()); }
+                }
+            }
+            if (DrawCensus::bPacingLog && (sync != g_PresentSync || flags != g_PresentFlags))
+            {
+                if (g_PresentKinds.fetch_add(1) < 6) { spdlog::info("PW pacing: Present(sync {}, flags {:#x}) from frame {} (was sync {}, flags {:#x}).", sync, flags, g_Frame.load(), g_PresentSync, g_PresentFlags); }
+                g_PresentSync = sync; g_PresentFlags = flags;
+            }
             // The hitch log: this frame's interval is the time since the previous present returned.
             const int64_t now = Ticks();
             if (g_LastPresentEnd)
             {
                 const double ms = TicksToMs(now - g_LastPresentEnd);
                 if (g_AvgFrameMs <= 0) { g_AvgFrameMs = ms; }
-                if (ms > 25.0 && ms > 2.0 * g_AvgFrameMs && g_Hitches < 400)
+                if (ms > 25.0 && ms > 1.5 * g_AvgFrameMs && g_Hitches < 400)
                 {
                     g_Hitches++;
                     std::string last;
                     { std::lock_guard lock(g_Mutex); last = g_Work.lastTexture; }
-                    spdlog::warn("PW hitch: frame {} took {:.1f} ms (running average {:.1f}): previous Present {:.1f} ms; textures created {} ({} large, {:.1f} ms in CreateTexture2D{}{}); buffers {} ({:.1f} ms); maps {} ({} waited >1 ms, {:.1f} ms total); census log lines {}.",
+                    spdlog::warn("PW hitch: frame {} took {:.1f} ms (running average {:.1f}): previous Present {:.1f} ms; textures created {} ({} large, {:.1f} ms in CreateTexture2D{}{}); buffers {} ({:.1f} ms); maps {} ({} waited >1 ms, {:.1f} ms total); census log lines {}; Sleep {} calls {:.1f} ms (last from +{:X}), waits {} calls {:.1f} ms (last from +{:X}).",
                         g_Frame.load(), ms, g_AvgFrameMs, TicksToMs(g_LastPresentTicks), g_Work.textures.load(), g_Work.texturesLarge.load(), TicksToMs(g_Work.textureTicks.load()),
-                        last.empty() ? "" : ", last ", last, g_Work.buffers.load(), TicksToMs(g_Work.bufferTicks.load()), g_Work.maps.load(), g_Work.mapWaits.load(), TicksToMs(g_Work.mapTicks.load()), g_Work.logLines.load());
+                        last.empty() ? "" : ", last ", last, g_Work.buffers.load(), TicksToMs(g_Work.bufferTicks.load()), g_Work.maps.load(), g_Work.mapWaits.load(), TicksToMs(g_Work.mapTicks.load()), g_Work.logLines.load(),
+                        g_Work.sleeps.load(), TicksToMs(g_Work.sleepTicks.load()), g_Work.sleepCaller.load(), g_Work.waits.load(), TicksToMs(g_Work.waitTicks.load()), g_Work.waitCaller.load());
                 }
                 g_AvgFrameMs = g_AvgFrameMs * 0.95 + ms * 0.05;
+                // Pacing window: every 5 s, where the frames' time went.
+                if (!g_Pacing.start) { g_Pacing.start = g_LastPresentEnd; }
+                g_Pacing.frames++; g_Pacing.sleep += g_Work.sleepTicks.load(); g_Pacing.wait += g_Work.waitTicks.load(); g_Pacing.present += g_LastPresentTicks;
+                g_Pacing.maxFrame = std::max(g_Pacing.maxFrame, ms); if (ms > 25.0) { g_Pacing.over25++; }
+                const double windowMs = TicksToMs(now - g_Pacing.start);
+                if (DrawCensus::bPacingLog && windowMs >= 5000.0)
+                {
+                    const uint64_t ticks = g_Ticks.exchange(0);
+                    spdlog::info("PW pacing: {} frames in {:.1f} s ({:.2f} fps): present thread per frame: Sleep {:.2f} ms, waits {:.2f} ms, Present {:.2f} ms; longest frame {:.1f} ms, {} over 25 ms; other threads' waits {}; game ticks {} ({:.3f} Hz), vblank-locked ticks {}.",
+                        g_Pacing.frames, windowMs / 1000.0, g_Pacing.frames * 1000.0 / windowMs, TicksToMs(g_Pacing.sleep) / g_Pacing.frames, TicksToMs(g_Pacing.wait) / g_Pacing.frames,
+                        TicksToMs(g_Pacing.present) / g_Pacing.frames, g_Pacing.maxFrame, g_Pacing.over25, g_OtherThreadWaits.exchange(0), ticks, ticks * 1000.0 / windowMs, g_VBlankWaits.exchange(0));
+                    if (g_VBlankPerTick.load() > 0)
+                    {
+                        const uint64_t w = g_VBlankWaits.load();
+                        spdlog::info("PW pacing:   vblank ticker: intervals long (>1.5 vblank) {}, short (<0.5) {}; wait per tick mean {:.2f} ms, max {:.2f} ms.", g_VBlankLong.exchange(0), g_VBlankShort.exchange(0), w ? TicksToMs(g_VBlankWaitTicks.exchange(0)) / w : 0.0, TicksToMs(g_VBlankWaitMax.exchange(0)));
+                    }
+                    spdlog::info("PW pacing:   sleeps:{}", CallerTable(g_MainSleepers, g_Pacing.frames));
+                    spdlog::info("PW pacing:   waits:{}", CallerTable(g_MainWaiters, g_Pacing.frames));
+                    g_Pacing = PacingWindow {}; g_Pacing.start = now;
+                }
             }
             g_Work.Reset();
             { std::lock_guard lock(g_Mutex); g_Work.lastTexture.clear(); }
@@ -1126,6 +1757,11 @@ namespace
         return SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags);
     }
 
+    HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(IDXGISwapChain* self, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
+    {
+        if (g_TearingChain.load()) { flags |= kSwapChainFlagAllowTearing; }
+        return SwapChain_ResizeBuffers_hook.stdcall<HRESULT>(self, count, width, height, format, flags);
+    }
     void HookSwapChain(IUnknown* chain)
     {
         static bool hooked = false;
@@ -1134,6 +1770,28 @@ namespace
         void** vtable = *reinterpret_cast<void***>(chain);
         SwapChain_Present_hook = safetyhook::create_inline(vtable[kSwapChainPresent], reinterpret_cast<void*>(Hooked_Present));
         spdlog::info("PW census: swap chain Present hook {}.", SwapChain_Present_hook ? "ok" : "FAILED");
+        if (g_TearingChain.load())
+        {
+            SwapChain_ResizeBuffers_hook = safetyhook::create_inline(vtable[kSwapChainResizeBuffers], reinterpret_cast<void*>(Hooked_ResizeBuffers));
+            spdlog::info("PW pacing: swap chain ResizeBuffers hook {} (keeps ALLOW_TEARING on resizes).", SwapChain_ResizeBuffers_hook ? "ok" : "FAILED");
+        }
+        if (DrawCensus::iFramePacing == 2)
+        {
+            IDXGISwapChain* forOutput = nullptr;
+            if (SUCCEEDED(chain->QueryInterface(__uuidof(IDXGISwapChain), reinterpret_cast<void**>(&forOutput))) && forOutput)
+            {
+                IDXGIOutput* out = nullptr;
+                if (SUCCEEDED(forOutput->GetContainingOutput(&out)) && out)
+                {
+                    DXGI_OUTPUT_DESC od {};
+                    out->GetDesc(&od);
+                    g_VBlankOutput = out;   // kept referenced for the ticker thread
+                    spdlog::info("PW pacing: vblank source is output {} ({}x{}).", [&] { std::string n; for (const wchar_t* c = od.DeviceName; *c; c++) { n += static_cast<char>(*c); } return n; }(), od.DesktopCoordinates.right - od.DesktopCoordinates.left, od.DesktopCoordinates.bottom - od.DesktopCoordinates.top);
+                }
+                else { spdlog::warn("PW pacing: the swap chain has no containing output; the ticker stays the game's."); }
+                forOutput->Release();
+            }
+        }
         // The mode the chain actually runs at: in exclusive fullscreen the refresh rate decides
         // whether a game paced at 60 Hz drops a frame every second (59 Hz) or every 16 s (59.94).
         IDXGISwapChain* sc = nullptr;
@@ -1166,6 +1824,17 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(IDXGIFactory* self, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain)
     {
         if (desc) { RenderPolicy::SwapChainDesc(*desc); }
+        if (desc && DrawCensus::bAllowTearing)
+        {
+            const bool flip = desc->SwapEffect == 3 || desc->SwapEffect == 4;   // FLIP_SEQUENTIAL / FLIP_DISCARD
+            if (flip && desc->Windowed)
+            {
+                desc->Flags |= kSwapChainFlagAllowTearing;
+                g_TearingChain.store(true);
+                spdlog::info("PW pacing: swap chain created with ALLOW_TEARING (flags {:#x}): windowed Present will not wait for the display.", desc->Flags);
+            }
+            else { spdlog::warn("PW pacing: Allow Tearing needs a windowed flip-model chain (effect {}, windowed {}); left alone.", static_cast<int>(desc->SwapEffect), desc->Windowed); }
+        }
         if (desc && InternalSize::BackBufferWidth() > 0)
         {
             desc->BufferDesc.Width = InternalSize::BackBufferWidth();
@@ -1262,11 +1931,26 @@ namespace
         std::thread([]
         {
             uint64_t lastDraws = 0, lastLists = 0, lastFrames = 0;
-            for (int i = 0; i < 30; i++)
+            // Thirty seconds normally; the whole session while a pacing log is on.
+            for (int i = 0; i < 30 || DrawCensus::bVBlankWaitLog || DrawCensus::bPacingLog; i++)
             {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const uint64_t d = g_DrawsSeen.load(), l = g_ListsSeen.load(), f = g_Frame.load();
                 spdlog::info("PW census: rate: {} draw(s), {} command list(s), {} frame(s) in the last second; large-texture maps so far {} ({} failed), CPU access stripped on {} textures.", d - lastDraws, l - lastLists, f - lastFrames, g_TextureMaps.load(), g_TextureMapFails.load(), g_GpuLocalStripped.load());
+                if (g_GovernorRaise)
+                {
+                    static uint64_t lastSkipped = 0;
+                    const uint64_t sk = g_GovernorRaisesSkipped.load();
+                    if (sk != lastSkipped) { spdlog::info("PW pacing: governor: {} raise(s) of the vblank wait count prevented this second.", sk - lastSkipped); }
+                    lastSkipped = sk;
+                }
+                if (g_HandoffCheck)
+                {
+                    static uint64_t lastWaits = 0, lastDrops = 0, lastTicks = 0;
+                    const uint64_t w = g_HandoffWaits.load(), dr = g_HandoffDrops.load(), tk = g_HandoffWaitTicks.load();
+                    if (w != lastWaits) { spdlog::info("PW pacing: handoff: {} frame(s) waited for the render thread this second ({:.2f} ms each), {} still dropped.", w - lastWaits, w > lastWaits ? TicksToMs(tk - lastTicks) / (w - lastWaits) : 0.0, dr - lastDrops); }
+                    lastWaits = w; lastDrops = dr; lastTicks = tk;
+                }
                 lastDraws = d; lastLists = l; lastFrames = f;
             }
         }).detach();
@@ -1312,6 +1996,20 @@ namespace
             g_FramesToLog.store(std::max(1, frames));
             spdlog::info("PW census: logging the next {} frame(s) (command).", std::max(1, frames));
         }
+        else if (cmd == "skips")
+        {
+            int n = 20;
+            in >> n;
+            g_VBlankSkipBudget.store(std::max(1, n));
+            spdlog::info("PW vblank: the next {} skipped tick(s) will be logged with their work and lock times (command).", std::max(1, n));
+        }
+        else if (cmd == "sample")
+        {
+            int n = 6;
+            in >> n;
+            g_SampleBudget.store(std::max(1, n));
+            spdlog::info("PW sampler: the next {} hitch(es) will be sampled (command).", std::max(1, n));
+        }
         else if (UiBias::Command(line)) {}
         else if (!cmd.empty())
         {
@@ -1333,6 +2031,13 @@ namespace
                 RunCommand(std::format("census {}", std::max(1, DrawCensus::iCensusFrames)));
             }
             f11Down = down;
+            // F10: the next twenty skipped ticks with their work and lock times; F9: the thread
+            // sampler for the next six hitches.
+            static bool f10Down = false, f9Down = false;
+            const bool f10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0, f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+            if (f10 && !f10Down) { spdlog::info("PW live: F10 pressed (frame {}).", g_Frame.load()); RunCommand("skips 20"); }
+            if (f9 && !f9Down) { spdlog::info("PW live: F9 pressed (frame {}).", g_Frame.load()); RunCommand("sample 6"); }
+            f10Down = f10; f9Down = f9;
             static int tick = 0;
             if (++tick % 5) { continue; }   // the command file every 250 ms
             HANDLE file = CreateFileA(LiveFile().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -1360,6 +2065,13 @@ namespace DrawCensus
 {
     void Install()
     {
+        if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler) { InstallPacingHooks(); }
+        InstallVBlankWaitHook();
+        InstallHandoffWait();
+        InstallGovernor();
+        if (DrawCensus::bHitchSampler) { spdlog::info("PW sampler: armed by the live command \"sample N\": the next N times the render thread waits 20 ms for a frame, the other threads are sampled."); }
+        if (DrawCensus::bPacingLog || DrawCensus::iFramePacing != 0) { InstallTickerHooks(); }
+        else { spdlog::info("PW pacing: off (no import hooks, no ticker hooks; the game's own pacing)."); }
         if (const HMODULE d3d11 = LoadLibraryW(L"d3d11.dll"))
         {
             if (void* fn = reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDevice")))

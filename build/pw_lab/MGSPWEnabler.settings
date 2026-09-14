@@ -23,6 +23,11 @@ Window Mode = "Use Game Setting"
 MSAA = "4x"
 Anisotropic Filtering = true
 GPU Local Textures = true
+; The two exclusive-fullscreen fixes (both builds read these): the display's current refresh rate
+; instead of the game's 60/1 request, and the selected Screen Resolution instead of the monitor's
+; largest mode. Off restores the game's own behaviour for comparison runs.
+Fullscreen Refresh Rate Fix = true
+Fullscreen Resolution Fix = true
 
 ; ---- research keys (the Lab build only) ----
 ; Draw census: F11 logs the next N frames (every draw: target, shaders, textures, constants,
@@ -43,6 +48,40 @@ Dump Shaders = false
 ; Light Hooks: only the resolve is hooked (no per-draw hooks): the frame rate of a Release-like
 ; build with the settings still applied. No census or timing while on.
 Light Hooks = false
+; Pacing Log: the frame pacing instrumentation (import hooks on the game's Sleep and wait calls, a
+; tick counter, a 5 s summary in the log). The Sleep hook runs on every one of the render thread's
+; ~170,000 Sleep(0) calls a frame: keep it off for runs you judge by eye.
+Pacing Log = false
+; Hitch Sampler: after 20 ms of the render thread waiting for a frame, every other thread is
+; sampled once (module+offset, game return addresses, current wait): "PW sampler:" in the log.
+Hitch Sampler = false
+; VBlank Wait Timeout (ms): 0 the game's infinite wait on its vblank event (two threads reset one
+; event; a wakeup lost in that race costs a whole frame); 1 bounds the loss to a millisecond.
+VBlank Wait Timeout = 0
+; Frame Handoff Wait (ms): the game drops a finished frame when the render thread still holds
+; the previous one (a vsync-blocked Present) and the display repeats a frame; N waits up to
+; N ms for the render thread instead. 0 the game's.
+Frame Handoff Wait = 0
+; VBlank Wait Log: the game thread's vblank waits (ticks passed, work time between waits); every
+; skipped tick logged, a 5 s summary per thread.
+VBlank Wait Log = false
+; Frame Skip Governor: true the game's own (a frame that measures long raises the vblank wait
+; count: a doubled frame, about once a second in direct-flip modes at 60 Hz); false prevents it.
+Frame Skip Governor = true
+; Frame Pacing: "Game" (the game's own 60.000 Hz ticker), "Display" (the ticker paced to the
+; display's real refresh rate) or "VBlank" (the ticker waits for the display's vertical blank, one
+; per tick at 60 Hz, two at 120 Hz: the game thread and the display never drift apart in phase,
+; which is what doubles a frame every second or so on a 60 Hz desktop).
+Frame Pacing = "Game"
+; Present Sync: -1 leaves the game's sync interval (1, a vsync wait in Present); 0 presents
+; without waiting (borderless stays tear-free through the compositor; exclusive fullscreen tears).
+Present Sync = -1
+; Allow Tearing: the flip chain is created tearing-capable and windowed Presents never wait for
+; the display (sync 0 + ALLOW_TEARING). Borderless stays whole through the compositor; the
+; game's render thread is never held on vsync, so the game thread never misses a tick.
+Allow Tearing = false
+; Swap Chain Buffers: 0 the game's (2), else the flip chain's buffer count.
+Swap Chain Buffers = 0
 ; One-off log lines at start-up.
 Log Loaded Modules = false
 Log Decrypt Timing = false

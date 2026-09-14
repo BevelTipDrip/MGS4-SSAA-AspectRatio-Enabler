@@ -47,8 +47,8 @@ The Graphics tab of the tool's Peace Walker window, all read by the Release ASI:
   in system memory, so its three per-frame copies into them cross PCIe (5 ms each at 8K). On,
   they stay in video memory: 60 fps at 8K instead of 27.
 
-The Lab build adds the draw census, GPU timing, a hitch log and the size experiments
-([lab.md](lab.md)); the engine facts are in [engine-research.md](engine-research.md), the plan
+The Lab build adds the draw census, GPU timing, a hitch log, the frame-pacing instrumentation
+([frame-pacing.md](frame-pacing.md)) and the size experiments ([lab.md](lab.md)); the engine facts are in [engine-research.md](engine-research.md), the plan
 in [NEXT-SESSION.md](NEXT-SESSION.md).
 
 ## For the code

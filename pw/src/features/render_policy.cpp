@@ -48,6 +48,15 @@ namespace RenderPolicy
 
     void SwapChainDesc(DXGI_SWAP_CHAIN_DESC& desc)
     {
+        // The game's chain is flip model (FLIP_DISCARD) with two buffers: one frame in flight,
+        // so Present blocks until the display has taken the previous frame and a millisecond's
+        // overrun doubles a frame (the once-a-second stutter on a 60 Hz desktop, 2026-09-14).
+        // A third buffer gives Present a frame of slack, at one frame more latency.
+        if (InternalSize::iSwapChainBuffers >= 2 && InternalSize::iSwapChainBuffers <= 8 && desc.BufferCount != static_cast<UINT>(InternalSize::iSwapChainBuffers))
+        {
+            spdlog::info("PW render: swap chain buffers {} -> {} (effect {}).", desc.BufferCount, InternalSize::iSwapChainBuffers, static_cast<int>(desc.SwapEffect));
+            desc.BufferCount = static_cast<UINT>(InternalSize::iSwapChainBuffers);
+        }
         // Exclusive fullscreen: the game asks for 60/1 whatever the display runs at, and on a
         // 120 Hz desktop the mode it lands on drops one frame a second (measured 2026-09-13).
         // The display's current refresh rate is requested instead.
@@ -55,13 +64,14 @@ namespace RenderPolicy
         // The mode-loop hook (internal_size.cpp) has already sized the window to the selected
         // screen resolution; should the buffers still come out at another size (the monitor's
         // largest mode, say), the chain is asked for the selected size.
-        if (InternalSize::iOutputWidth > 0 && InternalSize::iOutputHeight > 0
+        if (InternalSize::bFullscreenResolutionFix && InternalSize::iOutputWidth > 0 && InternalSize::iOutputHeight > 0
             && (desc.BufferDesc.Width != static_cast<UINT>(InternalSize::iOutputWidth) || desc.BufferDesc.Height != static_cast<UINT>(InternalSize::iOutputHeight)))
         {
             spdlog::info("PW render: exclusive fullscreen buffers {}x{} requested at the screen resolution {}x{}.", desc.BufferDesc.Width, desc.BufferDesc.Height, InternalSize::iOutputWidth, InternalSize::iOutputHeight);
             desc.BufferDesc.Width = static_cast<UINT>(InternalSize::iOutputWidth);
             desc.BufferDesc.Height = static_cast<UINT>(InternalSize::iOutputHeight);
         }
+        if (!InternalSize::bFullscreenRefreshFix) { return; }
         DEVMODEW dm {};
         dm.dmSize = sizeof(dm);
         if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)

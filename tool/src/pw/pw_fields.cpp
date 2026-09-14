@@ -70,6 +70,49 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_LightHooks =
             "Leaves the game's draws unhooked (only the resolve is hooked): the frame rate of a Release-like\n"
             "build with the rendering knobs still applied. No census or timing in this mode.";
+        constexpr const char* kHelp_FullscreenRefreshFix =
+            "On (the normal state): exclusive Fullscreen asks for the display's current refresh rate. The game asks\n"
+            "for 60 Hz whatever the display runs, which on a 120 Hz desktop dropped one frame a second. Off: the\n"
+            "game's request stands, for comparison runs.";
+        constexpr const char* kHelp_FullscreenResolutionFix =
+            "On (the normal state): exclusive Fullscreen runs at the selected Screen Resolution. The game picks the\n"
+            "largest mode the monitor advertises (4096x2160 on some 4K panels). Off: the game's pick stands.";
+        constexpr const char* kHelp_PacingLog =
+            "Frame pacing instrumentation: hooks the game's Sleep and wait imports (every one of the render thread's\n"
+            "~170,000 Sleep(0) calls a frame passes through the hook, a measurable cost), counts the 60 Hz ticker, and\n"
+            "logs a 5 s pacing summary (frames, ticks, Present time). Off for judging runs.";
+        constexpr const char* kHelp_HitchSampler =
+            "When the render thread has waited 20 ms for the game thread's frame, every other thread is sampled once:\n"
+            "module and offset, the game return addresses on its stack, and the wait it sits in. Up to 12 samples a run,\n"
+            "as 'PW sampler:' blocks in the log. A light hook on Sleep; fine for judging runs.";
+        constexpr const char* kHelp_VBlankWaitTimeout =
+            "The game thread waits for the 60 Hz tick on a shared event that two threads reset; a wakeup lost in that\n"
+            "race costs a whole frame (the doubled frame every second or so at 60 Hz). 0 leaves the game's infinite\n"
+            "wait; 1 gives the wait a 1 ms timeout so a lost wakeup costs a millisecond.";
+        constexpr const char* kHelp_FrameHandoffWait =
+            "The game drops a finished frame when its render thread still holds the previous one (inside a vsync-blocked\n"
+            "Present), and the display repeats the last frame: the doubled frame every second or so at 60 Hz in Borderless\n"
+            "and Fullscreen. N waits up to N ms for the render thread instead. 0 leaves the game's drop.";
+        constexpr const char* kHelp_VBlankWaitLog =
+            "Logs the game thread's vblank waits: how many 60 Hz ticks passed between two waits and how long its work\n"
+            "took in between. Every skipped tick (a doubled frame) is logged with both, plus a 5 s summary per thread.";
+        constexpr const char* kHelp_FrameSkipGovernor =
+            "On: the game's own behaviour. It measures each frame in vblanks and, when one measures even slightly long,\n"
+            "waits two vblanks for the next frame (a doubled frame), then recovers. In Borderless and Fullscreen at 60 Hz\n"
+            "the render thread's Present lands frame ends right on the vblank, so this trips about once a second: the\n"
+            "frame-time spike. Off: the count is never raised by the governor; the game's explicit 30 fps setting for\n"
+            "movies and menus is untouched.";
+        constexpr const char* kHelp_FramePacing =
+            "The game's 60 Hz ticker thread. Game: as shipped, 60.000 Hz by the CPU clock. Display: the same clock at\n"
+            "the display's exact refresh rate. VBlank: the thread waits for the display's vertical blank (one per tick at\n"
+            "60 Hz, two at 120 Hz) so tick and display never drift apart. Displays that are not a multiple of 60 Hz keep Game.";
+        constexpr const char* kHelp_PresentSync =
+            "-1 leaves the game's Present sync interval (1, a vsync wait). 0..4 forces the interval.";
+        constexpr const char* kHelp_SwapChainBuffers =
+            "0 leaves the game's flip-model swap chain (2 buffers). 3 gives Present a frame of slack, at a frame of latency.";
+        constexpr const char* kHelp_AllowTearing =
+            "Creates the swap chain tearing-capable and presents windowed frames with sync 0 and the tearing flag, so Present\n"
+            "never waits for the display. Borderless stays whole through the compositor; exclusive Fullscreen would tear.";
         constexpr const char* kHelp_Probe =
             "One-off log lines at start-up: the loaded modules, the code decryption timing, the command line.";
 
@@ -165,6 +208,22 @@ namespace mgs4e::tool::pw
                     }},
                 }},
                 { "Lab", {
+                    { "Fullscreen fixes (both builds)", {
+                        F::Bool(G, K::FullscreenRefreshFix, kHelp_FullscreenRefreshFix, true),
+                        F::Bool(G, K::FullscreenResolutionFix, kHelp_FullscreenResolutionFix, true),
+                    }},
+                    { "Frame pacing experiments", {
+                        F::Bool(G, K::PacingLog, kHelp_PacingLog, false),
+                        F::Bool(G, K::HitchSampler, kHelp_HitchSampler, false),
+                        F::Int(G, K::VBlankWaitTimeout, kHelp_VBlankWaitTimeout, 0, 0, 16),
+                        F::Int(G, K::FrameHandoffWait, kHelp_FrameHandoffWait, 0, 0, 16),
+                        F::Bool(G, K::VBlankWaitLog, kHelp_VBlankWaitLog, false),
+                        F::Bool(G, K::FrameSkipGovernor, kHelp_FrameSkipGovernor, true),
+                        F::Choice(G, K::FramePacing, kHelp_FramePacing, K::FramePacing_Game, { K::FramePacing_Game, K::FramePacing_Display, K::FramePacing_VBlank }),
+                        F::Int(G, K::PresentSync, kHelp_PresentSync, -1, -1, 4),
+                        F::Int(G, K::SwapChainBuffers, kHelp_SwapChainBuffers, 0, 0, 8),
+                        F::Bool(G, K::AllowTearing, kHelp_AllowTearing, false),
+                    }},
                     { "Draw census", {
                         F::Int(G, K::DrawCensusAtSeconds, kHelp_Census, 0, 0, 3600),
                         F::Int(G, K::DrawCensusFrames, kHelp_Census, 2, 1, 10),
