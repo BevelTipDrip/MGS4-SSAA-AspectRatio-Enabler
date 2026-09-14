@@ -43,6 +43,15 @@ namespace
     // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
     constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
     SafetyHookMid g_AfterFit {};
+    // Just after the Fullscreen (mode 2) display-mode loop (+1A220..+1A259): the game has
+    // walked EnumDisplaySettingsA and kept the largest width (r15d) and height (r14d) of any
+    // mode the monitor advertises, and is about to SetWindowPos the window to that size and
+    // create the exclusive chain from it. A 3840x2160 panel that advertises a 4096x2160 mode
+    // gets the game at 4096x2160, whatever the desktop runs at (a user's report, 2026-09-13).
+    // The selected screen resolution replaces the pair, or the desktop's current mode when
+    // none is set.
+    constexpr uintptr_t kAfterModeLoop = 0x1A25B;   // mov r9d, [rbp-0x58]
+    SafetyHookMid g_AfterModeLoop {};
     // The two sites that turn the integer scale into a float: the game scaler (+596E5,
     // `cvtsi2ss xmm1, rcx` after the getter; replaced by our value, the instruction skipped) and
     // the render-scale store (+5B015, `addss xmm0, 0.5` then truncation; xmm0 replaced first).
@@ -292,6 +301,30 @@ namespace InternalSize
                 if (bBackBufferAtInternal) { spdlog::info("PW internal size: picture fit overridden to the whole {}x{} back buffer ({}).", g_PostW, g_PostH, g_AfterFit ? "hooked" : "hook FAILED"); }
             }
             else { spdlog::warn("PW internal size: fit site +{:X} does not look as expected; not hooked.", kAfterFit); }
+        }
+        {
+            const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterModeLoop;
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);
+            if (bytes[0] == 0x44 && bytes[1] == 0x8B && bytes[2] == 0x4D && bytes[3] == 0xA8 && bytes[4] == 0x33 && bytes[5] == 0xD2)
+            {
+                g_AfterModeLoop = safetyhook::create_mid(site, [](SafetyHookContext& ctx)
+                {
+                    const int largestW = static_cast<int32_t>(ctx.r15), largestH = static_cast<int32_t>(ctx.r14);
+                    int w = iOutputWidth, h = iOutputHeight;
+                    if (w <= 0 || h <= 0)
+                    {
+                        DEVMODEW dm {};
+                        dm.dmSize = sizeof(dm);
+                        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm)) { w = static_cast<int>(dm.dmPelsWidth); h = static_cast<int>(dm.dmPelsHeight); }
+                    }
+                    if (w <= 0 || h <= 0) { return; }
+                    ctx.r15 = static_cast<uint32_t>(w);
+                    ctx.r14 = static_cast<uint32_t>(h);
+                    spdlog::info("PW window: fullscreen mode {}x{} ({}) replaces the monitor's largest mode {}x{}.", w, h, iOutputWidth > 0 ? "the screen resolution" : "the desktop mode", largestW, largestH);
+                });
+                if (!g_AfterModeLoop) { spdlog::warn("PW window: fullscreen mode hook FAILED; the game keeps the monitor's largest mode."); }
+            }
+            else { spdlog::warn("PW window: fullscreen mode site +{:X} does not look as expected; not hooked.", kAfterModeLoop); }
         }
         if (iOutputWidth > 0 && iOutputHeight > 0)
         {

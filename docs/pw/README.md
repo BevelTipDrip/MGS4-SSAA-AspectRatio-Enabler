@@ -35,8 +35,10 @@ The Graphics tab of the tool's Peace Walker window, all read by the Release ASI:
 - **Window Mode** (Use Game Setting, Fullscreen, Borderless, Windowed): written into the game's
   saved display mode every launch; the in-game Options show it and can change it for the run.
   Fullscreen runs at the display's current refresh rate (the game asks for 60 Hz whatever the
-  display runs, which drops a frame a second on a 120 Hz desktop). Windowed sizes the window to
-  the selected screen resolution.
+  display runs, which drops a frame a second on a 120 Hz desktop), at the selected screen
+  resolution rather than the largest mode the monitor advertises (a 3840x2160 panel that lists
+  a 4096x2160 mode otherwise gets the game at 4096x2160; with Use Display the desktop's current
+  mode is used). Windowed sizes the window to the selected screen resolution.
 - **MSAA** (4x, the game's own, or Off): about 2 ms a frame at 8K.
 - **Anisotropic Filtering**: 16x on every texture the game samples linearly (its own samplers
   use none; little visible change at high render scales, since the PSP-sized textures are
