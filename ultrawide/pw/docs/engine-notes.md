@@ -190,6 +190,9 @@ monitor, position or the swap chain. Consequences he did not handle:
   `+84D50` for ids 3, 4, 5, 7, 8, 17, 19 (the MGS4 `+65D880` loader wrap equivalent), or the
   fields of the display object before `+18A46` runs. No byte pattern on a table is needed for
   a Window Resolution or Window Mode feature.
+- **The 60 Hz stutter in direct-flip modes is the game's frame-skip governor** (`+78462`): the
+  whole frame machinery (ticker `+75FD0`, vblank event, frame end `+78250`, handoff `+175B0`,
+  render loop `+17BD0`) is written up in the public `docs/pw/frame-pacing.md` (2026-09-14).
 - **Refresh rate is fixed at 60/1** in the desc; the mode-2 path picks the largest mode by size
   only (`+1A220` loop keeps max width/height in r15d/r14d, no refresh comparison), then
   `SetWindowPos` to that size at `+1A27B`. A panel whose EDID lists 4096x2160 (a user's
