@@ -191,7 +191,13 @@ monitor, position or the swap chain. Consequences he did not handle:
   fields of the display object before `+18A46` runs. No byte pattern on a table is needed for
   a Window Resolution or Window Mode feature.
 - **Refresh rate is fixed at 60/1** in the desc; the mode-2 path picks the largest mode by size
-  only (`+1A220` loop keeps max width/height, no refresh comparison).
+  only (`+1A220` loop keeps max width/height in r15d/r14d, no refresh comparison), then
+  `SetWindowPos` to that size at `+1A27B`. A panel whose EDID lists 4096x2160 (a user's
+  3840x2160 TV, 2026-09-13) therefore ran at 4096x2160 whatever the desktop mode. The seam is
+  `+1A25B` (`mov r9d,[rbp-0x58]`, right after the loop): a mid hook replaces r15d/r14d with the
+  selected screen resolution (or the desktop's current mode); the fit and the exclusive chain
+  follow. Note: a desktop mode that is not in the monitor's mode list (a custom or DSR mode)
+  is invisible to this loop, so the case cannot be reproduced on such a desktop.
 - The 16-bit `movsx` at the half-glare site is unrelated to window size (that is the HUD).
 
 Strings that looked relevant and are not: `"invalid window size"` is zlib's inflate error;
