@@ -63,15 +63,11 @@ research keys remain Lab-only.
   Unmap, so the texture stays in video memory and the game keeps its CPU write. Writes only;
   persistent scratch per texture if the game expects to see previous contents.
 
-- **PW-HUD-001 lens flare at high resolution** (user report 2026-09-12, at 6880x2880 through
-  Afevis's ini; Afevis warned that bloom and lens flare break under his patch, 2026-09-13; not
-  yet checked under our integer scale, where the flare's anchors come from the game's own
-  path, so it may be his-patch-only: verify in a scene with the sun in view at scale 16): the flare appears at random and its anchor lands off screen, as if a value
-  overflows. Lead: the half-glare site Afevis patches begins with a sign-extended 16-bit move,
-  so the anchor is int16 somewhere before it becomes a float; a pixel-space step at render
-  scale 10.59 could pass 32767. Plan: census on a hotkey (press when it misbehaves), probes on
-  the glare and half-glare sites logging the registers and the 16-bit anchor, compare
-  3440x1440 against 6880x2880.
+- ~~**PW-HUD-001 lens flare at high resolution**~~ **closed 2026-09-14 (user): his patch only.**
+  The random flare with its anchor off screen (reported 2026-09-12 at 6880x2880 through Afevis's
+  ini) does not happen under our patch at any scale: every full-screen effect keeps working, as
+  the elimination runs of 2026-09-13 predicted (his canvas widening and its per-effect fixups
+  are the cause; ours never widens the canvas at 16:9 and widens it consistently above it).
 - Record the title-to-menu route; census that menu; then the (texture, rectangle) bias
   command for live editing.
 - A title census with Afevis's ASI removed from `mgspw\scripts` (what of the picture is his).
@@ -87,10 +83,11 @@ research keys remain Lab-only.
   (`InternalSize::Apply`) compares the display aspect (3840x2160 = 1.7778) with the 480x272 canvas
   (1.7647), calls it wider, and makes a 484-unit canvas with a 2-unit UI offset: gaps beside the
   menu elements. Selecting "16:9" explicitly gives the game's own 480x272 (the stock 0.7 %
-  vertical squeeze into a 16:9 picture). Decision deferred by the user (2026-09-14): a display
-  within about half a percent of 16:9 should probably resolve to 480x272; how Use Display treats
-  near-16:9 shapes is to be re-assessed. Until then, test with an explicit shape, never Use
-  Display on a 16:9 desktop.
+  vertical squeeze into a 16:9 picture). **Decision (user, 2026-09-14): leave the code alone for
+  now; later Use Display will scale the same way the explicit shapes do**, i.e. resolve the
+  measured display shape to the same canvas the matching list entry would give (a 16:9 display to
+  480x272 and its stock squeeze), rather than building a bespoke canvas per measured aspect. Until
+  that is done, test with an explicit shape and never Use Display on a 16:9 desktop.
 - **The harness's lab settings file must mirror the user's settings.** `boot.ps1 -LabConfig`
   makes the ASI read `MGSPWEnabler.lab.settings`; a stale copy of that file (old Internal Size
   3840x2160 keys, Use Display, Render Scale 16 with 8x resolutions) produced a run with no
@@ -126,9 +123,13 @@ desktop: world at 21:9, HUD and menus at the 16:9 scale and centred, HUD groups 
 (the register's biases), full-screen effects across the frame, no flicker. The method and the
 sites are in the private module (external/ultrawide/pw: wide_canvas.cpp, engine-notes.md).
 
+**Closed 2026-09-14 (user):** the "slightly darker" impression at 21:9 was wrong; A/B
+screenshots against 16:9 show the same picture. **16:10 is tested and working** (the tall-canvas
+path, 480x300 units, 14 units of vertical move per side), alongside the 21:9 and 4:3 runs already
+confirmed. So every shape the Aspect Ratio list offers has now been seen working except 32:9,
+which no display here can show.
+
 Next:
-- The user saw the picture "slightly darker" than 16:9: compare against a clean 16:9 run
-  (Wide Canvas Units 0) in the same spot before assuming anything.
 - Bake the thirteen HUD moves into the shipped fix (private aspect_ratio.cpp) instead of the
   live `tbias` commands; table the pause menu, Codec and overlays.
 - The Window Mode knob and the saved-display-mode log belong in the Release feature set.

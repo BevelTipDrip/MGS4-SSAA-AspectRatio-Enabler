@@ -25,8 +25,11 @@ The Graphics tab of the tool's Peace Walker window, all read by the Release ASI:
   Any other shape widens or heightens the PSP canvas to it: the world fills the display at
   correct proportions, the HUD and menus keep the 16:9 scale and stay centred, the full-screen
   effects follow, and the in-mission HUD groups move to the display edges with the 16:9 margin.
-  Use Display takes the primary display's shape at start-up. (The aspect work itself is the
-  private module; without it the setting only sizes the picture.)
+  Use Display takes the primary display's shape at start-up; on a display that is not one of the
+  listed shapes it builds a canvas for the measured aspect, which on an exactly 16:9 display is
+  484x272 rather than the game's own 480x272 (to be changed: see NEXT-SESSION.md). 21:9, 4:3 and
+  16:10 are user-verified, full-screen effects included. (The aspect work itself is the private
+  module; without it the setting only sizes the picture.)
 - **Screen Resolution**, one list per shape: the picture on screen (the window's client, or the
   display mode in Fullscreen).
 - **Render Resolution**, one list per shape: the scene at an integer multiple of the canvas

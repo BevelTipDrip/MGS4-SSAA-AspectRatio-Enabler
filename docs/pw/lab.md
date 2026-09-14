@@ -128,6 +128,7 @@ confirmed in one session.
 ## 7. What is not here
 
 No screen detectors (MGS4's colour-probe detectors have no Peace Walker equivalent yet; the
-census table is the detector when one is needed), no stage automation, no in-game hotkey (a
-census on a key press is the planned tool for the lens-flare bug), and no PIX: the census gives
-the game-side numbers a GPU capture would not.
+census table is the detector when one is needed), no stage automation, and no PIX: the census
+gives the game-side numbers a GPU capture would not. In-game hotkeys do exist now, for the
+frame-pacing work: F11 a census, F10 the missed-tick detail, F9 the thread sampler
+(`frame-pacing.md`).
