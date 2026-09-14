@@ -416,8 +416,9 @@ So neither the fractional scale nor a non-multiple target size is the cause; it 
 canvas widening and the per-effect fixups around it (the 240-unit half width the glare
 sites assume, the camera inverse aspect and canvas size rewrite, the CreateRT2 literal
 replacement), which his code applies even at 16:9 because 480x272 is 1.7647, not 1.7778.
-Our path never widens the canvas, so bloom and flare keep the game's own geometry. When our
-aspect module widens the canvas at 21:9, these effects are the ones to re-check first.
+Our path never widens the canvas, so bloom and flare keep the game's own geometry. Re-checked
+once our module widens it: **every full-screen effect works at every shape we widen to** (user,
+2026-09-14; 21:9, 4:3 and 16:10 runs). PW-HUD-001 is closed as his-patch-only.
 
 ## The wide canvas that works (Measured, 2026-09-12 late evening, user-confirmed)
 
@@ -425,8 +426,9 @@ Result on the 3440x1440 desktop with Render Scale 10, Wide Canvas Units 650, Out
 Window Mode 0: the world fills 21:9 at correct proportions, the HUD and menus are at the 16:9
 scale and centred, the thirteen HUD groups sit at the 21:9 edges with the register's +-85
 translation biases, and the full-screen effects (bloom, glare, colour filter) cover the whole
-frame with no flicker. Open: the picture looked "slightly darker" to the user than 16:9; to be
-compared against a clean 16:9 run.
+frame with no flicker. The "slightly darker" impression the user had that evening was wrong:
+A/B screenshots against 16:9 on 2026-09-14 show the same picture. Confirmed since on the tall
+canvas too (4:3 2026-09-13, 16:10 2026-09-14).
 
 **How (private `src/lab/wide_canvas.cpp`, `pw/tools/afevis_sites.py`):** the engine's own
 canvas fields, exactly Afevis's hook set on our integer scale (every one of his 24 patterns hits
