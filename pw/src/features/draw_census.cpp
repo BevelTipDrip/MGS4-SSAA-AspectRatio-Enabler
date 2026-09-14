@@ -261,7 +261,7 @@ namespace
     }
     int g_DrawsThisFrame = 0;   // all contexts, for the frame line
 
-    struct Snapshot { float f[64]; size_t count; bool valid; };
+    struct Snapshot { float f[64]; size_t count; bool valid; float uiScale[8]; bool hasUiScale; };   // uiScale: rows 132-133 of a 2640-byte UI constant buffer (the layout scale and offset)
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
     std::unordered_map<ID3D11Resource*, bool> g_UiBuffer;          // constant buffer -> its last upload carried the UI ortho (private module)
     std::unordered_map<ID3D11Resource*, float> g_UiShift;          // constant buffer -> the wide-scene move (canvas units) of its last upload
@@ -430,6 +430,7 @@ namespace
         std::memcpy(s.f, data, n * sizeof(float));
         s.count = n;
         s.valid = true;
+        if (size >= 536 * sizeof(float)) { std::memcpy(s.uiScale, static_cast<const float*>(data) + 528, sizeof(s.uiScale)); s.hasUiScale = true; }
         g_LatestUpload[res] = s;
     }
 
@@ -487,6 +488,11 @@ namespace
             if (it == g_LatestUpload.end() || !it->second.valid) { cb += " -"; continue; }
             const size_t n = std::min<size_t>(it->second.count, slot == 0 ? 64 : 16);
             for (size_t i = 0; i < n; i++) { cb += std::format("{}{:.4g}", (i % 4 == 0) ? " |" : " ", it->second.f[i]); }
+            if (slot == 0 && it->second.hasUiScale)
+            {
+                cb += " |r132";
+                for (float v : it->second.uiScale) { cb += std::format(" {:.4g}", v); }
+            }
         }
         if (cb.empty()) { cb = "cb -"; }
         const auto vs = g_ShaderHash.find(st.vs);
