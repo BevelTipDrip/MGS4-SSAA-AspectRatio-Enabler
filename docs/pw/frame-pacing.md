@@ -401,6 +401,25 @@ outcome: per 5 s the render thread performs ~2530 waits of which **exactly 300 a
 event**, which is 60 a second, one per frame. The rest are the 2 ms safety timeout expiring
 harmlessly. With the ticker included it sleeps 300 times per 5 s at 15.93 ms each.
 
+### Isolated: the busy wait fix is the whole fix
+
+Run with the **frame skip governor back at the game's own default**, the **state object cache off**,
+frame pacing and present sync the game's own, and the handoff event as the only change to the frame
+loop. Render scale 16 and 4x MSAA as usual.
+
+Result: a **flat 16.6 ms frame time at a solid 60**, the first flat graph of either session, judged
+in gameplay by the user.
+
+Consequences:
+
+- The **frame skip governor override is not needed** and should not ship. Every measurement before
+  this had it disabled; it was never the fix and it is a behaviour change we no longer have to make.
+- The **state object cache is a performance feature, not a stutter fix**. It removes 350 redundant
+  device state creations a frame and about 8% of the game thread's executed CPU, which is worth
+  having on slower processors, but it is not load-bearing for the pacing.
+- The remaining work is promotion: this fix currently lives in `draw_census.cpp`, which is **Lab
+  only**. It has to be reachable from the Release build.
+
 ### How it is done
 
 `Busy Wait Fix`: 0 off, 1 the render thread, 2 also the ticker, 3 also the message pump (**level 3
