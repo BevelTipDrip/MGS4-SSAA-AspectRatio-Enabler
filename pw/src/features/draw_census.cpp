@@ -1,5 +1,6 @@
 #include "pch.hpp"
 #include <set>
+#include <algorithm>
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <vector>
@@ -88,6 +89,8 @@ namespace
     constexpr size_t kSwapChainResizeBuffers = 13;
     constexpr UINT kSwapChainFlagAllowTearing = 0x800;   // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
     constexpr UINT kPresentAllowTearing = 0x200;         // DXGI_PRESENT_ALLOW_TEARING
+    constexpr UINT kPresentDoNotWait = 0x8;              // DXGI_PRESENT_DO_NOT_WAIT
+    std::atomic<uint64_t> g_PresentRetries { 0 }, g_PresentGaveUp { 0 };
     SafetyHookInline SwapChain_ResizeBuffers_hook {};
     std::atomic<bool> g_TearingChain { false };          // the chain was created with the flag
     std::atomic<uint32_t> g_TearingPresents { 0 };
@@ -176,6 +179,8 @@ namespace
     int64_t Ticks();
     double TicksToMs(int64_t t);
     void* PatchImport(const char* dll, const char* name, void* replacement);
+    void LogThreadCpu();
+    void InstallAlertHooks();
     // ---- the game's 60 Hz ticker ------------------------------------------------------------
     // Thread +75FD0 (started at +775B9): QPC start; loop { elapsed = (QPC - start) / freq; while
     // period > elapsed: timeBeginPeriod(1), Sleep((period - elapsed) * 1000), timeEndPeriod(1);
@@ -309,7 +314,9 @@ namespace
     using SleepFn = void(WINAPI*)(DWORD);
     using WaitFn = DWORD(WINAPI*)(HANDLE, DWORD);
     using WaitExFn = DWORD(WINAPI*)(HANDLE, DWORD, BOOL);
+    using SignalWaitFn = DWORD(WINAPI*)(HANDLE, HANDLE, DWORD, BOOL);
     SleepFn g_RealSleep = nullptr; WaitFn g_RealWait = nullptr; WaitExFn g_RealWaitEx = nullptr;
+    SignalWaitFn g_RealSignalWait = nullptr;
     uintptr_t CallerRva(void* ret)
     {
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
@@ -387,7 +394,7 @@ namespace
             if (SuspendThread(h) != static_cast<DWORD>(-1))
             {
                 CONTEXT ctx {};
-                ctx.ContextFlags = CONTEXT_CONTROL;
+                ctx.ContextFlags = CONTEXT_FULL;
                 if (GetThreadContext(h, &ctx))
                 {
                     row.rip = ctx.Rip;
@@ -438,13 +445,50 @@ namespace
     std::atomic<uint64_t> g_VBlankTimeouts { 0 }, g_VBlankWaits2 { 0 };
     // The vblank wait log: per thread, the counter value and time when its last vblank wait
     // returned; at the next wait the work time in between and the ticks passed are known.
+    uint32_t g_CpuMhz = 0;   // the processor's nominal clock, for turning executed cycles into milliseconds
+    void ReadCpuMhz()
+    {
+        HKEY key {};
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &key) != ERROR_SUCCESS) { return; }
+        DWORD value = 0, size = sizeof(value), type = 0;
+        if (RegQueryValueExW(key, L"~MHz", nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS && type == REG_DWORD) { g_CpuMhz = value; }
+        RegCloseKey(key);
+    }
     constexpr uintptr_t kVBlankCounter = 0x1084498;
-    struct VBlankTrack { uintptr_t lastCaller = 0; uint32_t lastCounter = 0; int64_t lastReturn = 0; uint32_t waits = 0, skipped = 0; double workMax = 0, workSum = 0; int64_t windowStart = 0; double csWindowSum = 0, csWindowMax = 0; };
+    struct VBlankTrack
+    {
+        uintptr_t lastCaller = 0; uint32_t lastCounter = 0; int64_t lastReturn = 0;
+        uint32_t waits = 0, skipped = 0; double workMax = 0, workSum = 0;
+        int64_t windowStart = 0;
+        double csWindowSum = 0, csWindowMax = 0;
+        // Where each tick's work went, summed over the window: Direct3D calls, the game's own
+        // sleeps and event waits (the tick wait itself excluded), and the remainder, which is
+        // plain CPU work. The three plus the remainder are the whole of the work figure.
+        double d3dSum = 0, d3dMax = 0, waitSum = 0, waitMax = 0;
+        double yieldSum = 0, yieldMax = 0;
+        double alertSum = 0, alertMax = 0;
+        uint32_t alertCount = 0;
+        uintptr_t alertSite = 0;
+        const char* alertWhat = "";
+        uint32_t d3dCalls = 0, yieldCount = 0;
+        uintptr_t yieldSite = 0;
+        uint64_t lastCycles = 0, cycleSum = 0, cycleMax = 0;   // QueryThreadCycleTime: cycles actually executed per tick, against the wall clock of the same tick
+        double workEma = 0;   // this thread's own running mean, so a long tick is judged against its own run (menus and movies legitimately run at 30)
+    };
     thread_local VBlankTrack t_VBlank;
     // Critical sections entered by this thread since its last vblank wait returned: total time
     // blocked, the longest single entry and which section it was (the IAT hook below).
     struct CsTrack { int64_t ticks = 0, maxTicks = 0; uintptr_t maxCs = 0, maxCaller = 0; uint32_t entries = 0; };
     thread_local CsTrack t_Cs;
+    // The slim-lock and condition-variable waits. These reach the kernel as
+    // NtWaitForAlertByThreadId, which the profiler found the game thread sitting in for a third
+    // of every frame. Nothing in this path is an import, so no IAT hook could see it; these are
+    // inline hooks on ntdll's own entry points, and they only time the game thread.
+    struct AlertAcc { int64_t ticks = 0, maxTicks = 0; uintptr_t maxCaller = 0; const char* maxWhat = ""; uint32_t count = 0; };
+    thread_local AlertAcc t_Alert;
+    std::atomic<DWORD> g_VBlankTid { 0 };
+    struct YieldAcc { int64_t ticks = 0, maxTicks = 0; uintptr_t maxCaller = 0; uint32_t count = 0; };
+    thread_local YieldAcc t_Yield;   // Sleep(0) on this thread since its last vblank wait returned
     struct D3DAcc { int64_t ticks = 0, maxTicks = 0; const char* maxWhat = ""; uint32_t calls = 0; };
     thread_local D3DAcc t_D3D;   // time inside the hooked D3D calls on this thread since its last vblank wait returned
     void AccountD3D(int64_t dt, const char* what) { t_D3D.ticks += dt; t_D3D.calls++; if (dt > t_D3D.maxTicks) { t_D3D.maxTicks = dt; t_D3D.maxWhat = what; } }
@@ -474,14 +518,19 @@ namespace
         const bool logging = vblank && DrawCensus::bVBlankWaitLog;
         const uintptr_t caller = logging ? CallerRva(_ReturnAddress()) : 0;
         int64_t enter = 0;
+        uint64_t enterCycles = 0;
         double work = 0;
         if (logging)
         {
             enter = Ticks();
             if (t_VBlank.lastReturn) { work = TicksToMs(enter - t_VBlank.lastReturn); }
+            QueryThreadCycleTime(GetCurrentThread(), &enterCycles);
         }
+        const int64_t waitStart = logging || !vblank ? Ticks() : 0;
         const DWORD r = WaitForSingleObject(*slot, timeout);
         if (vblank && r == WAIT_TIMEOUT) { g_VBlankTimeouts.fetch_add(1); }
+        // A wait on any other event through this wrapper is part of the tick's work.
+        if (!vblank) { AccountWait(Ticks() - waitStart, CallerRva(_ReturnAddress()), ms); }
         if (logging)
         {
             const int64_t now = Ticks();
@@ -493,37 +542,82 @@ namespace
             {
                 t_VBlank.waits++; t_VBlank.workSum += work; t_VBlank.workMax = std::max(t_VBlank.workMax, work);
                 const double csMs = TicksToMs(t_Cs.ticks);
+                const double d3dMs = TicksToMs(t_D3D.ticks);
+                const double waitMs = TicksToMs(t_WaitAcc.ticks);
+                const double yieldMs = TicksToMs(t_Yield.ticks);
+                const double alertMs = TicksToMs(t_Alert.ticks);
                 t_VBlank.csWindowSum += csMs; t_VBlank.csWindowMax = std::max(t_VBlank.csWindowMax, csMs);
-                if (passed >= 2)
+                t_VBlank.d3dSum += d3dMs; t_VBlank.d3dMax = std::max(t_VBlank.d3dMax, d3dMs); t_VBlank.d3dCalls += t_D3D.calls;
+                t_VBlank.waitSum += waitMs; t_VBlank.waitMax = std::max(t_VBlank.waitMax, waitMs);
+                t_VBlank.alertSum += alertMs; t_VBlank.alertCount += t_Alert.count;
+                if (alertMs > t_VBlank.alertMax) { t_VBlank.alertMax = alertMs; t_VBlank.alertSite = t_Alert.maxCaller; t_VBlank.alertWhat = t_Alert.maxWhat; }
+                t_VBlank.yieldSum += yieldMs; t_VBlank.yieldCount += t_Yield.count;
+                if (yieldMs > t_VBlank.yieldMax) { t_VBlank.yieldMax = yieldMs; t_VBlank.yieldSite = t_Yield.maxCaller; }
+                if (t_VBlank.lastCycles && enterCycles > t_VBlank.lastCycles)
                 {
-                    t_VBlank.skipped++;
-                    if (g_VBlankSkipBudget.load() > 0 && g_VBlankSkipBudget.fetch_sub(1) > 0)
+                    const uint64_t c = enterCycles - t_VBlank.lastCycles;
+                    t_VBlank.cycleSum += c; t_VBlank.cycleMax = std::max(t_VBlank.cycleMax, c);
+                }
+                if (passed >= 2) { t_VBlank.skipped++; }
+                // A long tick is one well above this thread's own running mean, so the 30 fps
+                // menus and movies do not qualify; the budget is armed by F10 or "skips N".
+                if (t_VBlank.workEma <= 0) { t_VBlank.workEma = work; }
+                const bool longTick = work > 3.0 && work > 1.5 * t_VBlank.workEma;
+                t_VBlank.workEma = t_VBlank.workEma * 0.95 + work * 0.05;
+                {
+                    if (longTick && g_VBlankSkipBudget.load() > 0 && g_VBlankSkipBudget.fetch_sub(1) > 0)
                     {
                         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-                        spdlog::warn("PW vblank: tid {} missed {} tick(s): work since the last wait returned {:.2f} ms, of it {:.2f} ms in {} wait(s) (longest {:.2f} ms from +{:X}, asked {}) and {:.2f} ms in critical sections, {:.2f} ms in {} D3D call(s) (longest {:.2f} ms in {}); this vblank wait {:.2f} ms from +{:X} (previous wait from +{:X}), vblanks consumed {}, wait count {} / frame count {}.",
-                            GetCurrentThreadId(), passed - 1, work, TicksToMs(t_WaitAcc.ticks), t_WaitAcc.count, TicksToMs(t_WaitAcc.maxTicks), t_WaitAcc.maxCaller, t_WaitAcc.maxMs == INFINITE ? std::string("inf") : std::to_string(t_WaitAcc.maxMs), csMs,
-                            TicksToMs(t_D3D.ticks), t_D3D.calls, TicksToMs(t_D3D.maxTicks), t_D3D.maxWhat, TicksToMs(now - enter), caller, t_VBlank.lastCaller, counter,
-                            *reinterpret_cast<volatile int32_t*>(base + 0x1084484), *reinterpret_cast<volatile int32_t*>(base + 0x1084490));
+                        spdlog::warn("PW vblank: tid {} long tick: {:.2f} ms of work (this thread's mean {:.2f}), of it {:.2f} ms in {} wait(s) (longest {:.2f} ms from +{:X}, asked {}), {:.2f} ms in {} critical section entr{}, {:.2f} ms in {} D3D call(s) (longest {:.2f} ms in {}), {:.2f} ms yielded in {} Sleep(0) (longest from +{:X}), leaving {:.2f} ms of plain work; the tick wait that followed {:.2f} ms from +{:X}, vblanks consumed {}, wait count {}.",
+                            GetCurrentThreadId(), work, t_VBlank.workEma, waitMs, t_WaitAcc.count, TicksToMs(t_WaitAcc.maxTicks), t_WaitAcc.maxCaller, t_WaitAcc.maxMs == INFINITE ? std::string("inf") : std::to_string(t_WaitAcc.maxMs),
+                            csMs, t_Cs.entries, t_Cs.entries == 1 ? "y" : "ies",
+                            d3dMs, t_D3D.calls, TicksToMs(t_D3D.maxTicks), t_D3D.maxWhat,
+                            yieldMs, t_Yield.count, t_Yield.maxCaller, std::max(0.0, work - waitMs - csMs - d3dMs - yieldMs),
+                            TicksToMs(now - enter), caller, counter,
+                            *reinterpret_cast<volatile int32_t*>(base + 0x1084484));
                     }
                 }
                 t_Cs = CsTrack {};
                 t_WaitAcc = WaitAcc {};
                 t_D3D = D3DAcc {};
+                t_Yield = YieldAcc {};
+                t_Alert = AlertAcc {};
             }
+            g_VBlankTid.store(GetCurrentThreadId());
             if (!t_VBlank.windowStart) { t_VBlank.windowStart = now; }
             if (TicksToMs(now - t_VBlank.windowStart) >= 5000.0 && t_VBlank.waits)
             {
-                spdlog::info("PW vblank: tid {}: {} waits in 5 s, {} missed tick(s); work between waits mean {:.2f} ms, max {:.2f} ms; blocked in critical sections mean {:.2f} ms, max {:.2f} ms.", GetCurrentThreadId(), t_VBlank.waits, t_VBlank.skipped, t_VBlank.workSum / t_VBlank.waits, t_VBlank.workMax, t_VBlank.csWindowSum / t_VBlank.waits, t_VBlank.csWindowMax);
-                t_VBlank.waits = 0; t_VBlank.skipped = 0; t_VBlank.workSum = 0; t_VBlank.workMax = 0; t_VBlank.csWindowSum = 0; t_VBlank.csWindowMax = 0; t_VBlank.windowStart = now;
+                const double n = static_cast<double>(t_VBlank.waits);
+                const double rest = std::max(0.0, t_VBlank.workSum - t_VBlank.d3dSum - t_VBlank.waitSum - t_VBlank.csWindowSum - t_VBlank.yieldSum - t_VBlank.alertSum);
+                const double mhz = static_cast<double>(g_CpuMhz ? g_CpuMhz : 1);
+                spdlog::info("PW vblank: tid {}: {} ticks in 5 s, {} of them consuming 2+ vblanks; work per tick mean {:.2f} ms max {:.2f}; EXECUTED {:.2f} ms mean, {:.2f} max (at {} MHz nominal), so {:.2f} ms mean not executing; of it D3D mean {:.2f} max {:.2f} ({:.1f} calls a tick), sleeps and waits mean {:.2f} max {:.2f}, YIELDS mean {:.2f} max {:.2f} ({:.0f} Sleep(0) a tick, longest from +{:X}), SLIM LOCKS mean {:.2f} max {:.2f} ({:.0f} a tick, longest {} from +{:X}), locks mean {:.2f} max {:.2f}, plain work mean {:.2f}.",
+                    GetCurrentThreadId(), t_VBlank.waits, t_VBlank.skipped,
+                    t_VBlank.workSum / n, t_VBlank.workMax,
+                    (t_VBlank.cycleSum / n) / (mhz * 1000.0), t_VBlank.cycleMax / (mhz * 1000.0), g_CpuMhz,
+                    std::max(0.0, t_VBlank.workSum / n - (t_VBlank.cycleSum / n) / (mhz * 1000.0)),
+                    t_VBlank.d3dSum / n, t_VBlank.d3dMax, t_VBlank.d3dCalls / n,
+                    t_VBlank.waitSum / n, t_VBlank.waitMax,
+                    t_VBlank.yieldSum / n, t_VBlank.yieldMax, t_VBlank.yieldCount / n, t_VBlank.yieldSite,
+                    t_VBlank.alertSum / n, t_VBlank.alertMax, t_VBlank.alertCount / n, t_VBlank.alertWhat, t_VBlank.alertSite,
+                    t_VBlank.csWindowSum / n, t_VBlank.csWindowMax,
+                    rest / n);
+                t_VBlank.waits = 0; t_VBlank.skipped = 0; t_VBlank.workSum = 0; t_VBlank.workMax = 0; t_VBlank.csWindowSum = 0; t_VBlank.csWindowMax = 0;
+                t_VBlank.d3dSum = 0; t_VBlank.d3dMax = 0; t_VBlank.waitSum = 0; t_VBlank.waitMax = 0; t_VBlank.d3dCalls = 0;
+                t_VBlank.cycleSum = 0; t_VBlank.cycleMax = 0;
+                t_VBlank.yieldSum = 0; t_VBlank.yieldMax = 0; t_VBlank.yieldCount = 0; t_VBlank.yieldSite = 0;
+                t_VBlank.alertSum = 0; t_VBlank.alertMax = 0; t_VBlank.alertCount = 0; t_VBlank.alertSite = 0; t_VBlank.alertWhat = "";
+                t_VBlank.windowStart = now;
             }
             t_VBlank.lastCounter = counter;
             t_VBlank.lastReturn = now;
             t_VBlank.lastCaller = caller;
+            QueryThreadCycleTime(GetCurrentThread(), &t_VBlank.lastCycles);
         }
         return r == WAIT_OBJECT_0 ? 1 : 0;
     }
     void InstallVBlankWaitHook()
     {
+        if (DrawCensus::bVBlankWaitLog) { ReadCpuMhz(); spdlog::info("PW pacing: executed cycles will be reported against a nominal {} MHz.", g_CpuMhz); InstallAlertHooks(); }
         if (DrawCensus::iVBlankWaitTimeout <= 0 && !DrawCensus::bVBlankWaitLog) { return; }
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
         const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kWaitEventWrapper);
@@ -632,10 +726,20 @@ namespace
         const bool present = OnPresentThread();
         if (ms == 0)
         {
-            // The render thread's handoff spin (~170k calls a frame): no clock reads here.
-            if (present && DrawCensus::bHitchSampler) { WatchSpin(); }
-            if (!present) { g_OtherThreadWaits.fetch_add(1); }
+            if (present)
+            {
+                // The render thread's handoff spin (~170k calls a frame): no clock reads here.
+                if (DrawCensus::bHitchSampler) { WatchSpin(); }
+                g_RealSleep(0);
+                return;
+            }
+            g_OtherThreadWaits.fetch_add(1);
+            if (!DrawCensus::bVBlankWaitLog) { g_RealSleep(0); return; }
+            const int64_t t0 = Ticks();
             g_RealSleep(0);
+            const int64_t dt = Ticks() - t0;
+            t_Yield.ticks += dt; t_Yield.count++;
+            if (dt > t_Yield.maxTicks) { t_Yield.maxTicks = dt; t_Yield.maxCaller = CallerRva(_ReturnAddress()); }
             return;
         }
         const uintptr_t caller = CallerRva(_ReturnAddress());
@@ -693,6 +797,19 @@ namespace
         table.clear();
         return out.empty() ? " none" : out;
     }
+    // The last synchronisation primitive the game imports: a handoff that signals one object and
+    // blocks on another in one call, which no other bucket can see.
+    DWORD WINAPI Hooked_SignalObjectAndWait(HANDLE toSignal, HANDLE toWaitOn, DWORD ms, BOOL alertable)
+    {
+        const uintptr_t caller = CallerRva(_ReturnAddress());
+        const int64_t t0 = Ticks();
+        const DWORD r = g_RealSignalWait(toSignal, toWaitOn, ms, alertable);
+        const int64_t dt = Ticks() - t0;
+        AccountWait(dt, caller, ms);
+        if (OnPresentThread()) { g_Work.waits.fetch_add(1); g_Work.waitTicks.fetch_add(dt); g_Work.waitCaller.store(caller); }
+        else { g_OtherThreadWaits.fetch_add(1); }
+        return r;
+    }
     // Replaces one import in the game's IAT; returns the original pointer or nullptr.
     void* PatchImport(const char* dll, const char* name, void* replacement)
     {
@@ -721,12 +838,91 @@ namespace
         }
         return nullptr;
     }
+    // ---- ntdll's slim-lock and condition-variable waits ------------------------------------------
+    using SrwFn = void(NTAPI*)(PVOID);
+    using CondSrwFn = LONG(NTAPI*)(PVOID, PVOID, PLARGE_INTEGER, ULONG);
+    using CondCsFn = LONG(NTAPI*)(PVOID, PVOID, PLARGE_INTEGER);
+    using WaitAddrFn = LONG(NTAPI*)(volatile VOID*, PVOID, SIZE_T, PLARGE_INTEGER);
+    SafetyHookInline g_SrwEx {}, g_SrwSh {}, g_CondSrw {}, g_CondCs {}, g_WaitAddr {};
+    bool OnGameThread() { const DWORD t = g_VBlankTid.load(); return t != 0 && t == GetCurrentThreadId(); }
+    void AccountAlert(int64_t dt, uintptr_t caller, const char* what)
+    {
+        t_Alert.ticks += dt; t_Alert.count++;
+        if (dt > t_Alert.maxTicks) { t_Alert.maxTicks = dt; t_Alert.maxCaller = caller; t_Alert.maxWhat = what; }
+    }
+    void NTAPI Hooked_SrwEx(PVOID lock)
+    {
+        if (!OnGameThread()) { g_SrwEx.stdcall<void>(lock); return; }
+        const int64_t t0 = Ticks();
+        g_SrwEx.stdcall<void>(lock);
+        AccountAlert(Ticks() - t0, CallerRva(_ReturnAddress()), "SRW exclusive");
+    }
+    void NTAPI Hooked_SrwSh(PVOID lock)
+    {
+        if (!OnGameThread()) { g_SrwSh.stdcall<void>(lock); return; }
+        const int64_t t0 = Ticks();
+        g_SrwSh.stdcall<void>(lock);
+        AccountAlert(Ticks() - t0, CallerRva(_ReturnAddress()), "SRW shared");
+    }
+    LONG NTAPI Hooked_CondSrw(PVOID cond, PVOID lock, PLARGE_INTEGER timeout, ULONG flags)
+    {
+        if (!OnGameThread()) { return g_CondSrw.stdcall<LONG>(cond, lock, timeout, flags); }
+        const int64_t t0 = Ticks();
+        const LONG r = g_CondSrw.stdcall<LONG>(cond, lock, timeout, flags);
+        AccountAlert(Ticks() - t0, CallerRva(_ReturnAddress()), "condition variable (SRW)");
+        return r;
+    }
+    LONG NTAPI Hooked_CondCs(PVOID cond, PVOID cs, PLARGE_INTEGER timeout)
+    {
+        if (!OnGameThread()) { return g_CondCs.stdcall<LONG>(cond, cs, timeout); }
+        const int64_t t0 = Ticks();
+        const LONG r = g_CondCs.stdcall<LONG>(cond, cs, timeout);
+        AccountAlert(Ticks() - t0, CallerRva(_ReturnAddress()), "condition variable (CS)");
+        return r;
+    }
+    LONG NTAPI Hooked_WaitAddr(volatile VOID* address, PVOID compare, SIZE_T size, PLARGE_INTEGER timeout)
+    {
+        if (!OnGameThread()) { return g_WaitAddr.stdcall<LONG>(address, compare, size, timeout); }
+        const int64_t t0 = Ticks();
+        const LONG r = g_WaitAddr.stdcall<LONG>(address, compare, size, timeout);
+        AccountAlert(Ticks() - t0, CallerRva(_ReturnAddress()), "WaitOnAddress");
+        return r;
+    }
+    void InstallAlertHooks()
+    {
+        const HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        if (!nt) { return; }
+        // The two SRW acquire entries are deliberately left alone: the hooking library, the
+        // loader and our own logging all take slim locks, so hooking them is reentrant and it
+        // killed the process on the first attempt (2026-09-14). The three below are only
+        // reached when a thread actually blocks.
+        struct { const char* name; void* replacement; SafetyHookInline* slot; } wanted[] = {
+            { "RtlSleepConditionVariableSRW", reinterpret_cast<void*>(&Hooked_CondSrw), &g_CondSrw },
+            { "RtlSleepConditionVariableCS", reinterpret_cast<void*>(&Hooked_CondCs), &g_CondCs },
+            { "RtlWaitOnAddress", reinterpret_cast<void*>(&Hooked_WaitAddr), &g_WaitAddr },
+        };
+        std::string report;
+        for (const auto& w : wanted)
+        {
+            if (void* fn = reinterpret_cast<void*>(GetProcAddress(nt, w.name)))
+            {
+                spdlog::info("PW pacing: hooking ntdll!{}...", w.name);
+                spdlog::default_logger()->flush();
+                *w.slot = safetyhook::create_inline(fn, w.replacement);
+                report += fmt::format(" {} {};", w.name, *w.slot ? "ok" : "FAILED");
+            }
+            else { report += fmt::format(" {} absent;", w.name); }
+        }
+        spdlog::info("PW pacing: slim-lock and condition-variable hooks:{}", report);
+    }
+
     void InstallPacingHooks()
     {
         g_RealSleep = reinterpret_cast<SleepFn>(PatchImport("KERNEL32.dll", "Sleep", reinterpret_cast<void*>(&Hooked_Sleep)));
         g_RealWait = reinterpret_cast<WaitFn>(PatchImport("KERNEL32.dll", "WaitForSingleObject", reinterpret_cast<void*>(&Hooked_Wait)));
         g_RealWaitEx = reinterpret_cast<WaitExFn>(PatchImport("KERNEL32.dll", "WaitForSingleObjectEx", reinterpret_cast<void*>(&Hooked_WaitEx)));
-        spdlog::info("PW pacing: import hooks Sleep {}, WaitForSingleObject {}, WaitForSingleObjectEx {}.", g_RealSleep ? "ok" : "FAILED", g_RealWait ? "ok" : "FAILED", g_RealWaitEx ? "ok" : "FAILED");
+        g_RealSignalWait = reinterpret_cast<SignalWaitFn>(PatchImport("KERNEL32.dll", "SignalObjectAndWait", reinterpret_cast<void*>(&Hooked_SignalObjectAndWait)));
+        spdlog::info("PW pacing: import hooks Sleep {}, WaitForSingleObject {}, WaitForSingleObjectEx {}, SignalObjectAndWait {}.", g_RealSleep ? "ok" : "FAILED", g_RealWait ? "ok" : "FAILED", g_RealWaitEx ? "ok" : "FAILED", g_RealSignalWait ? "ok" : "FAILED");
     }
     std::atomic<uint64_t> g_DrawsSeen { 0 };
     std::atomic<uint64_t> g_ListsSeen { 0 };
@@ -1119,7 +1315,7 @@ namespace
             if (it != g_ShaderHash.end()) { ps = it->second; }
         }
         UiBias::BeforeDraw(self, ui, ps, shift);
-        Original<decltype(&Hooked_Draw)>(self, kCtxDraw)(self, vertexCount, startVertex);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_Draw)>(self, kCtxDraw)(self, vertexCount, startVertex); AccountD3D(Ticks() - t0, "Draw"); }
         UiBias::AfterDraw(self, ui);
     }
 
@@ -1141,20 +1337,20 @@ namespace
             if (it != g_ShaderHash.end()) { ps = it->second; }
         }
         UiBias::BeforeDraw(self, ui, ps, shift);
-        Original<decltype(&Hooked_DrawIndexed)>(self, kCtxDrawIndexed)(self, indexCount, startIndex, baseVertex);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_DrawIndexed)>(self, kCtxDrawIndexed)(self, indexCount, startIndex, baseVertex); AccountD3D(Ticks() - t0, "DrawIndexed"); }
         UiBias::AfterDraw(self, ui);
     }
 
     void STDMETHODCALLTYPE Hooked_DrawIndexedInstanced(ID3D11DeviceContext* self, UINT indexCount, UINT instances, UINT startIndex, INT baseVertex, UINT startInstance)
     {
         LogDraw(self, "DrawIndexedInstanced", indexCount, startIndex, static_cast<UINT>(baseVertex));
-        Original<decltype(&Hooked_DrawIndexedInstanced)>(self, kCtxDrawIndexedInstanced)(self, indexCount, instances, startIndex, baseVertex, startInstance);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_DrawIndexedInstanced)>(self, kCtxDrawIndexedInstanced)(self, indexCount, instances, startIndex, baseVertex, startInstance); AccountD3D(Ticks() - t0, "DrawIndexedInstanced"); }
     }
 
     void STDMETHODCALLTYPE Hooked_DrawInstanced(ID3D11DeviceContext* self, UINT vertexCount, UINT instances, UINT startVertex, UINT startInstance)
     {
         LogDraw(self, "DrawInstanced", vertexCount, startVertex, 0);
-        Original<decltype(&Hooked_DrawInstanced)>(self, kCtxDrawInstanced)(self, vertexCount, instances, startVertex, startInstance);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_DrawInstanced)>(self, kCtxDrawInstanced)(self, vertexCount, instances, startVertex, startInstance); AccountD3D(Ticks() - t0, "DrawInstanced"); }
     }
 
     void STDMETHODCALLTYPE Hooked_RSSetViewports(ID3D11DeviceContext* self, UINT count, const D3D11_VIEWPORT* viewports)
@@ -1364,7 +1560,7 @@ namespace
                 g_Mapped.erase(it);
             }
         }
-        Original<decltype(&Hooked_Unmap)>(self, kCtxUnmap)(self, res, sub);
+        { const int64_t t0 = Ticks(); Original<decltype(&Hooked_Unmap)>(self, kCtxUnmap)(self, res, sub); AccountD3D(Ticks() - t0, "Unmap"); }
     }
 
     void STDMETHODCALLTYPE Hooked_UpdateSubresource(ID3D11DeviceContext* self, ID3D11Resource* res, UINT sub, const D3D11_BOX* box, const void* data, UINT rowPitch, UINT depthPitch)
@@ -1749,7 +1945,25 @@ namespace
             }
             g_Work.Reset();
             { std::lock_guard lock(g_Mutex); g_Work.lastTexture.clear(); }
-            const HRESULT pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags);
+            HRESULT pr;
+            if (DrawCensus::bPresentNoWait)
+            {
+                // The driver implements the vsync wait as a sleep loop inside Present, and holds
+                // the Direct3D device lock for its whole duration, so the game thread blocks on
+                // every draw it records meanwhile (measured 2026-09-14: seven milliseconds a
+                // frame). Asking Present not to block turns that one long hold into a series of
+                // short ones; the frame still lands on the vsync boundary, so nothing tears.
+                int tries = 0;
+                for (;; tries++)
+                {
+                    pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags | kPresentDoNotWait);
+                    if (pr != DXGI_ERROR_WAS_STILL_DRAWING) { break; }
+                    g_PresentRetries.fetch_add(1);
+                    if (tries >= 400) { g_PresentGaveUp.fetch_add(1); pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags); break; }
+                    if (tries < 2) { SwitchToThread(); } else { Sleep(1); }
+                }
+            }
+            else { pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags); }
             g_LastPresentEnd = Ticks();
             g_LastPresentTicks = g_LastPresentEnd - now;
             return pr;
@@ -1937,6 +2151,14 @@ namespace
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const uint64_t d = g_DrawsSeen.load(), l = g_ListsSeen.load(), f = g_Frame.load();
                 spdlog::info("PW census: rate: {} draw(s), {} command list(s), {} frame(s) in the last second; large-texture maps so far {} ({} failed), CPU access stripped on {} textures.", d - lastDraws, l - lastLists, f - lastFrames, g_TextureMaps.load(), g_TextureMapFails.load(), g_GpuLocalStripped.load());
+                if (DrawCensus::bVBlankWaitLog && (i % 5) == 4) { LogThreadCpu(); }
+                if (DrawCensus::bPresentNoWait)
+                {
+                    static uint64_t lastRetries = 0, lastGaveUp = 0;
+                    const uint64_t rt = g_PresentRetries.load(), gu = g_PresentGaveUp.load();
+                    spdlog::info("PW pacing: present without blocking: {} retries this second ({:.1f} a frame), {} fell back to a blocking present.", rt - lastRetries, f > lastFrames ? static_cast<double>(rt - lastRetries) / (f - lastFrames) : 0.0, gu - lastGaveUp);
+                    lastRetries = rt; lastGaveUp = gu;
+                }
                 if (g_GovernorRaise)
                 {
                     static uint64_t lastSkipped = 0;
@@ -1979,6 +2201,198 @@ namespace
         return r;
     }
 
+    // ---- per-thread CPU time -------------------------------------------------------------------
+    // Each window, every thread's kernel plus user time as a percentage of one core, so a thread
+    // that burns a core (the render thread's Sleep(0) handoff spin, say) is visible outright
+    // rather than inferred. Threads are named where we know them, and otherwise carry the game
+    // code site of their last real wait, which is usually enough to tell them apart.
+    struct CpuSample { DWORD tid; uint64_t time; int priority; };
+    std::vector<CpuSample> g_CpuLast;
+    int64_t g_CpuLastAt = 0;
+    void LogThreadCpu()
+    {
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) { return; }
+        THREADENTRY32 te {};
+        te.dwSize = sizeof(te);
+        const DWORD pid = GetCurrentProcessId();
+        std::vector<CpuSample> now;
+        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te))
+        {
+            if (te.th32OwnerProcessID != pid) { continue; }
+            const HANDLE h = OpenThread(THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+            if (!h) { continue; }
+            FILETIME created {}, exited {}, kernel {}, user {};
+            if (GetThreadTimes(h, &created, &exited, &kernel, &user))
+            {
+                const uint64_t t = ((static_cast<uint64_t>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime)
+                                 + ((static_cast<uint64_t>(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+                now.push_back({ te.th32ThreadID, t, GetThreadPriority(h) });
+            }
+            CloseHandle(h);
+        }
+        CloseHandle(snap);
+        const int64_t at = Ticks();
+        if (!g_CpuLast.empty() && g_CpuLastAt)
+        {
+            const double windowMs = TicksToMs(at - g_CpuLastAt);
+            struct Row { DWORD tid; double pct; int priority; };
+            std::vector<Row> rows;
+            double total = 0;
+            for (const CpuSample& s : now)
+            {
+                for (const CpuSample& prev : g_CpuLast)
+                {
+                    if (prev.tid != s.tid) { continue; }
+                    if (s.time > prev.time)
+                    {
+                        const double pct = (static_cast<double>(s.time - prev.time) / 10000.0) * 100.0 / windowMs;
+                        total += pct;
+                        if (pct >= 1.0) { rows.push_back({ s.tid, pct, s.priority }); }
+                    }
+                    break;
+                }
+            }
+            std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.pct > b.pct; });
+            const DWORD present = g_PresentThread.load();
+            std::string out;
+            for (size_t i = 0; i < rows.size() && i < 8; i++)
+            {
+                std::string label;
+                if (rows[i].tid == present) { label = " (present/render)"; }
+                {
+                    std::lock_guard lock(g_WaitTableMutex);
+                    for (const ThreadWait* w : g_WaitTable)
+                    {
+                        if (w->tid == rows[i].tid && w->caller.load()) { label += fmt::format(" last wait +{:X}", w->caller.load()); break; }
+                    }
+                }
+                out += fmt::format(" tid {} {:.0f}% prio {}{};", rows[i].tid, rows[i].pct, rows[i].priority, label);
+            }
+            spdlog::info("PW cpu: {:.0f}% of one core in {:.1f} s across {} thread(s); busiest:{}", total, windowMs / 1000.0, now.size(), out.empty() ? std::string(" none over 1%") : out);
+        }
+        g_CpuLast = std::move(now);
+        g_CpuLastAt = at;
+    }
+
+    // ---- sampling profiler -----------------------------------------------------------------------
+    // Suspends one thread about a thousand times a second, reads where it is, and resumes it. The
+    // histogram says where the thread actually sits: a kernel wait stub, the display driver, or
+    // the game's own code. This is the general answer when the per-call accounting says a thread
+    // is neither executing nor in anything we hook.
+    std::atomic<bool> g_Profiling { false };
+    // Walks the suspended thread's stack with RtlLookupFunctionEntry and RtlVirtualUnwind, the
+    // same pair the operating system's own exception dispatch uses, so a leaf frame in ntdll is
+    // followed back through the lock code into the game function that asked for the lock. The
+    // scan-the-stack-for-something-plausible approach this replaces could not tell a live frame
+    // from a leftover.
+    // RtlVirtualUnwind reads the stack without validating it, and a thread suspended part way
+    // through a prologue can present a frame it cannot follow, which faults. A structured
+    // handler contains that: a sample we cannot walk is simply shorter (2026-09-14, the first
+    // attempt took the process down).
+    int UnwindThread(const CONTEXT& start, uintptr_t* out, int max)
+    {
+        CONTEXT ctx = start;
+        int n = 0;
+        __try
+        {
+        for (; n < max; n++)
+        {
+            out[n] = ctx.Rip;
+            DWORD64 imageBase = 0;
+            PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &imageBase, nullptr);
+            if (!fn)
+            {
+                // A leaf function with no unwind data: the return address is at the stack pointer.
+                if (!mgs4e::mem::Readable(reinterpret_cast<const void*>(ctx.Rsp), sizeof(DWORD64))) { return n + 1; }
+                ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+                ctx.Rsp += sizeof(DWORD64);
+                if (!ctx.Rip) { return n + 1; }
+                continue;
+            }
+            PVOID handlerData = nullptr;
+            DWORD64 establisher = 0;
+            const DWORD64 rsp = ctx.Rsp;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, ctx.Rip, fn, &ctx, &handlerData, &establisher, nullptr);
+            if (!ctx.Rip || ctx.Rsp <= rsp) { return n + 1; }   // no progress: stop rather than loop
+        }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return n; }
+        return n;
+    }
+    void ProfileThread(DWORD tid, int seconds)
+    {
+        if (g_Profiling.exchange(true)) { return; }
+        std::thread([tid, seconds]
+        {
+            if (g_Modules.empty()) { SnapshotModules(); }
+            const HANDLE target = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, tid);
+            if (!target) { spdlog::warn("PW profile: cannot open thread {}.", tid); g_Profiling.store(false); return; }
+            const HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+            std::map<uintptr_t, uint32_t> hits;        // instruction pointer -> samples
+            std::map<std::string, uint32_t> chains;    // the unwound call chain -> samples
+            uint32_t samples = 0, failed = 0;
+            const auto game = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+            const int64_t until = Ticks() + static_cast<int64_t>(seconds * 1000.0 / TicksToMs(1));
+            while (Ticks() < until)
+            {
+                if (timer)
+                {
+                    LARGE_INTEGER due {};
+                    due.QuadPart = -20000;   // 2 ms
+                    SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+                    WaitForSingleObject(timer, 3);
+                }
+                else { Sleep(1); }
+                if (SuspendThread(target) == static_cast<DWORD>(-1)) { failed++; continue; }
+                CONTEXT ctx {};
+                ctx.ContextFlags = CONTEXT_CONTROL;
+                uintptr_t rip = 0;
+                uintptr_t frames[24] {};
+                int depth = 0;
+                if (GetThreadContext(target, &ctx))
+                {
+                    rip = ctx.Rip;
+                    depth = UnwindThread(ctx, frames, 24);
+                }
+                ResumeThread(target);
+                if (!rip) { continue; }
+                hits[rip]++; samples++;
+                // The chain is recorded down to the first game frame plus a little beyond it,
+                // which is where the answer is: everything above is the operating system.
+                std::string chain;
+                int gameFrames = 0;
+                for (int i = 0; i < depth; i++)
+                {
+                    chain += (i ? " < " : "") + Where(frames[i]);
+                    if (frames[i] > game + 0x1000 && frames[i] < game + 0x98D000 && ++gameFrames >= 3) { break; }
+                }
+                chains[chain]++;
+            }
+            if (timer) { CloseHandle(timer); }
+            CloseHandle(target);
+            // Fold the instruction pointers into their functions for the report: exact addresses
+            // inside one routine are the same answer.
+            std::map<std::string, uint32_t> byPlace;
+            for (const auto& [ip, n] : hits) { byPlace[Where(ip)] += n; }
+            std::vector<std::pair<std::string, uint32_t>> top(byPlace.begin(), byPlace.end());
+            std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            spdlog::warn("PW profile: thread {} sampled {} times over {} s ({} failed); where it was:", tid, samples, seconds, failed);
+            for (size_t i = 0; i < top.size() && i < 12; i++)
+            {
+                spdlog::warn("PW profile:   {:5.1f}%  {}", samples ? top[i].second * 100.0 / samples : 0.0, top[i].first);
+            }
+            std::vector<std::pair<std::string, uint32_t>> cs(chains.begin(), chains.end());
+            std::sort(cs.begin(), cs.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            spdlog::warn("PW profile:   call chains, most common first:");
+            for (size_t i = 0; i < cs.size() && i < 6; i++)
+            {
+                spdlog::warn("PW profile:   {:5.1f}%  {}", samples ? cs[i].second * 100.0 / samples : 0.0, cs[i].first);
+            }
+            g_Profiling.store(false);
+        }).detach();
+    }
+
     // ---- triggers ----------------------------------------------------------------------------------
     // Live commands: <game root>\logs\MGSPWEnabler_live.txt, polled every 250 ms and truncated
     // once read. (The harness's live.txt is the same file through a junction or a copy.)
@@ -2001,7 +2415,25 @@ namespace
             int n = 20;
             in >> n;
             g_VBlankSkipBudget.store(std::max(1, n));
-            spdlog::info("PW vblank: the next {} skipped tick(s) will be logged with their work and lock times (command).", std::max(1, n));
+            spdlog::info("PW vblank: the next {} long tick(s) will be logged with their work split into waits, locks, D3D calls and plain work (command).", std::max(1, n));
+        }
+        else if (cmd == "profile")
+        {
+            // "profile [seconds]" follows the game thread; "profile render [seconds]" the thread
+            // that presents, which is the one suspected of holding the runtime's device lock.
+            std::string which;
+            int seconds = 2;
+            in >> which;
+            bool render = false;
+            if (which == "render") { render = true; in >> seconds; }
+            else if (!which.empty()) { seconds = std::atoi(which.c_str()); }
+            const DWORD tid = render ? g_PresentThread.load() : g_VBlankTid.load();
+            if (!tid) { spdlog::warn("PW profile: the {} thread is not identified yet.", render ? "render" : "game"); }
+            else
+            {
+                spdlog::info("PW profile: sampling the {} thread ({}) for {} s (command).", render ? "render" : "game", tid, std::max(1, seconds));
+                ProfileThread(tid, std::max(1, seconds));
+            }
         }
         else if (cmd == "sample")
         {
@@ -2037,6 +2469,14 @@ namespace
             const bool f10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0, f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
             if (f10 && !f10Down) { spdlog::info("PW live: F10 pressed (frame {}).", g_Frame.load()); RunCommand("skips 20"); }
             if (f9 && !f9Down) { spdlog::info("PW live: F9 pressed (frame {}).", g_Frame.load()); RunCommand("sample 6"); }
+            static bool f8Down = false;
+            const bool f8 = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+            if (f8 && !f8Down) { spdlog::info("PW live: F8 pressed (frame {}).", g_Frame.load()); RunCommand("profile 3"); }
+            f8Down = f8;
+            static bool f7Down = false;
+            const bool f7 = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+            if (f7 && !f7Down) { spdlog::info("PW live: F7 pressed (frame {}).", g_Frame.load()); RunCommand("profile render 3"); }
+            f7Down = f7;
             f10Down = f10; f9Down = f9;
             static int tick = 0;
             if (++tick % 5) { continue; }   // the command file every 250 ms
@@ -2065,7 +2505,7 @@ namespace DrawCensus
 {
     void Install()
     {
-        if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler) { InstallPacingHooks(); }
+        if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
         InstallVBlankWaitHook();
         InstallHandoffWait();
         InstallGovernor();

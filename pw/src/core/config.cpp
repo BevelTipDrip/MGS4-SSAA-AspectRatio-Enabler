@@ -213,6 +213,8 @@ namespace mgspwe::config
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
             Report(Graphics, AllowTearing, DrawCensus::bAllowTearing);
+            Read(ini, Graphics, PresentNoWait, DrawCensus::bPresentNoWait);
+            Report(Graphics, PresentNoWait, DrawCensus::bPresentNoWait);
             Read(ini, Graphics, SwapChainBuffers, InternalSize::iSwapChainBuffers);
             Report(Graphics, SwapChainBuffers, InternalSize::iSwapChainBuffers);
             Report(Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);

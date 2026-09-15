@@ -80,6 +80,10 @@ Present Sync = -1
 ; the display (sync 0 + ALLOW_TEARING). Borderless stays whole through the compositor; the
 ; game's render thread is never held on vsync, so the game thread never misses a tick.
 Allow Tearing = false
+; Present Without Blocking: Present is asked not to block and retried until it goes through, so
+; the Direct3D device lock is not held across the driver's vsync wait and the game thread can
+; keep recording. Same pacing, no tearing.
+Present Without Blocking = false
 ; Swap Chain Buffers: 0 the game's (2), else the flip chain's buffer count.
 Swap Chain Buffers = 0
 ; One-off log lines at start-up.

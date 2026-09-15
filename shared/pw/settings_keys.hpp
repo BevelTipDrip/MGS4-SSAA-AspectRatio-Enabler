@@ -79,7 +79,8 @@ namespace mgspwe::keys
     constexpr const char* FramePacing_VBlank = "VBlank";   // Lab: "Game" or "Display"
     constexpr const char* PresentSync = "Present Sync";
     constexpr const char* SwapChainBuffers = "Swap Chain Buffers";
-    constexpr const char* AllowTearing = "Allow Tearing";   // Lab: the flip chain's tearing-allowed mode: Present never waits for the display   // Lab: 0 the game's (2), else the flip chain's buffer count   // Lab: -1 the game's (1), else the sync interval passed to Present
+    constexpr const char* AllowTearing = "Allow Tearing";
+    constexpr const char* PresentNoWait = "Present Without Blocking";   // Lab: Present asks not to block and is retried, so the Direct3D device lock is not held across the vsync wait   // Lab: the flip chain's tearing-allowed mode: Present never waits for the display   // Lab: 0 the game's (2), else the flip chain's buffer count   // Lab: -1 the game's (1), else the sync interval passed to Present
     constexpr const char* LogLoadedModules = "Log Loaded Modules";
     constexpr const char* LogDecryptTiming = "Log Decrypt Timing";
     constexpr const char* LogCommandLine = "Log Command Line";

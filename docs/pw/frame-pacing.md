@@ -1,141 +1,272 @@
-# Peace Walker: the 60 Hz stutter (frame pacing investigation, 2026-09-14)
+# Peace Walker: the 60 Hz stutter (frame pacing, 2026-09-14)
 
-Status: root cause of the dominant stutter found and fixed in the Lab build (the game's
-frame-skip governor); a smaller residual remains and is characterised but not yet explained.
-Everything below was measured on the user's machine with the Lab build's pacing instrumentation
-(all of it in `pw/src/features/draw_census.cpp`, keys in `shared/pw/settings_keys.hpp`).
+**Root cause, established by measurement:** the render thread blocks inside `Present` for about
+eight milliseconds of every frame, in the display driver's own sleep loop, **while holding the
+Direct3D 11 device lock**. The game thread, recording the next frame on a deferred context,
+blocks on that lock for roughly seven milliseconds of every frame. Its frame therefore takes
+9.6 ms of wall clock to do 2.7 ms of work, and when that occasionally crosses the 16.7 ms tick
+the game's own frame-skip governor doubles a frame. That doubled frame is the stutter.
 
-## The symptom
+**Not yet fixed.** The governor switch removes the amplifier, not the cause. The candidate fix is
+a waitable swap chain; see section 5.
 
-A frame-time spike of one doubled frame (a 33 ms frame at 60 fps), about once a second, in
-gameplay. The user's observations, all confirmed in the logs:
+Everything below was measured on the user's machine with the Lab build. The instrumentation is in
+`pw/src/features/draw_census.cpp`, the keys in `shared/pw/settings_keys.hpp`.
 
-| condition | stutter |
+## 1. The symptom
+
+A frame-time rise at a set interval, plainly visible on a frame-time graph, in gameplay. From a
+twenty minute run on the user's own settings (16:9, render scale 16, Borderless):
+
+- The interval is strikingly regular: a **median of 50 frames** between the start of one hitch and
+  the next, about 0.83 s at 60 fps, with the commonest gaps between 48 and 54.
+- Most hitches are one frame, but they latch: a dozen runs of 7 to 16 consecutive frames, a
+  quarter of a second at half rate.
+- With the governor at the game's default a hitch frame measures 33 ms (140 of 400 land exactly
+  there). With the governor switched off the same beat shows as roughly 20 ms instead, which the
+  user describes as micro-stutter: "it still feels terrible, but it's not as obvious".
+
+Conditions, all user-confirmed:
+
+| Condition | Stutter |
 | --- | --- |
-| 60 Hz desktop, Borderless (window covering the monitor) | yes |
+| 60 Hz desktop, Borderless covering the monitor | yes |
 | 60 Hz desktop, exclusive Fullscreen | yes |
-| 60 Hz desktop, Windowed (title bar visible, window filling the screen) | no |
-| 60 Hz desktop, Borderless with another window in front, or the game unfocused | no |
-| 120 Hz desktop, any mode | no (the earlier "120 Hz fullscreen" stutter was a different thing, below) |
-| Afevis's MGSPWResolutionUnlocked instead of our ASI, 4K internal | yes |
+| 60 Hz desktop, Windowed with a title bar | no |
+| 60 Hz desktop, another window in front (game still rendering and taking input) | no |
+| 120 Hz desktop | no |
+| NVIDIA Fast Sync | no |
+| NVIDIA Fast Sync plus an RTSS 60 fps cap | no, and perfectly flat |
+| GPU clocks pinned at 2550 MHz via maximum performance | unchanged, still stutters |
+| Afevis's MGSPWResolutionUnlocked at 4K internal, our ASI off | yes |
 | Afevis's plugin at 1440p internal | yes, less often, lower amplitude |
-| stock game, nothing installed | yes, spaced out |
-| NVIDIA Fast Sync + RTSS 60 fps limit | no |
-| our ASI as of the 2026-09-13 evening commit (9dce3a1) | yes |
+| stock game, nothing installed | yes, more spaced out |
+| our ASI as of the 2026-09-13 evening commit | yes |
+| process affinity restricted to a core pair | unchanged |
+| process affinity restricted to one core | present but irregular, skipping beats |
 
-So: not our code (stock does it), not GPU load (GPU idle, 1440p and stock still do it, only
-less), not the render scale, not the display's exact rate (59.997 Hz measured by
-QueryDisplayConfig; the game's ticker is 60.000 Hz by QPC, a beat of one frame per five minutes).
-The dividing line is **composed versus direct presentation**: a flip-model swap chain in a window
-that exactly covers the monitor (Borderless) or in exclusive Fullscreen is scanned out directly
-and `Present` returns at the vblank; a titled, covered or unfocused window is composed by DWM and
-`Present` returns at once. The three smooth cases are the composed path.
+So: not our code, not GPU load, not GPU clocks, not the render scale, and not the display's exact
+rate (59.997 Hz measured against the game's 60.000 Hz ticker, a beat of one frame per five
+minutes, nothing like 0.83 s).
 
-## The game's frame machinery (all RVAs against the clean dump, `C:\mgspf_tools\pw\pw_text.bin`)
+## 2. The game's frame machinery
 
-- **Ticker thread** `+75FD0` (created at `+775B9`, callback installed at `+77F00` -> `+78A10`):
-  QPC-based, phase-carried, exactly 60.000 Hz: `loop { elapsed; while 1/60 > elapsed { timeBeginPeriod(1); Sleep((1/60 - elapsed) * 1000); timeEndPeriod(1) } tick; start += freq/60 }`.
-  The tick callback `+78A10` increments the **vblank count** at `+1084498` and sets a manual-reset
-  event (handle at `+1083E90`, created at `+77F00` through `+14A70`).
-- **The vblank wait** (`sceDisplayWaitVblankStart` emulation): three loops wait on that event
-  through the wrapper `+14AD0` (`bool WaitEvent(HANDLE*, DWORD ms /* 0 = INFINITE */)`) and
-  `ResetEvent` after waking: `+78289`/`+78369` (the frame end, below) and `+78B69`. The value at
-  `+1084498` after a wait is the vblanks since the game thread last consumed one: 1 on a normal
-  tick, 2 when a tick was missed.
-- **Frame end / frame-skip governor** `+78250..+78480`, on the game thread (tid changes per run;
-  "the vblank-waiting thread" in the logs): wait for a vblank (loop 1, `+78289`); measure the frame
-  in wall clock (QPC at `+782AF`/`+782BA`, converted to vblanks with a fractional threshold at
-  `+783F0`); wait until the vblank count reaches the **wait count** at `+1084484` (loop 2,
-  `+78369`); then adapt the wait count: a frame that measured longer than the current count
-  **raises** it (`+78462`, `mov [+1084484], edi`, capped at 3), a frame comfortably shorter lowers
-  it after a hold (`+7843C`). The wait count is also set explicitly at `+78070` (the 30 fps movies
-  and menus; the log shows 150 missed ticks per 5 s there by design).
-- **Render thread** `+17BD0`: spins on `Sleep(0)` (~170,000 calls a frame) for the handoff flag at
-  display`+0x32c0`, releases 32 per-frame resources, `Present(1, 0)` (`+17CAF`), clears the flag.
-  Holds the display critical section (`+0x3300`) across Present when display`+0x32f8` is set.
-- **Handoff** `+175B0` (game thread): if the render thread still holds the previous frame
-  (`+175DF`, flag set) the function returns and the frame is dropped; else it sets the flag. In
-  practice the flag was never found set in gameplay (Frame Handoff Wait measured zero waits).
-- **Swap chain**: DXGI flip model already, `FLIP_DISCARD`, 2 buffers, R8G8B8A8, `Present(1)`.
-  Windowed chains ignore the refresh-rate field; in exclusive Fullscreen our policy replaces the
-  game's 60/1 with the display's current rate (the separate 120 Hz fix, 2026-09-13).
+RVAs against the clean dump, `C:\mgspf_tools\pw\pw_text.bin`.
 
-## What the instrumentation showed, in order
+- **Ticker thread** `+75FD0`, created at `+775B9`, callback `+78A10`. QPC based, phase carried,
+  exactly 60.000 Hz. Its wait loop at `+76020` raises the timer resolution to 1 ms, sleeps the
+  whole remaining milliseconds, drops the resolution, and re-reads the clock, so the last
+  sub-millisecond of each tick degenerates into `Sleep(0)`. The callback increments the vblank
+  count at `+1084498` and sets a manual-reset event whose handle is at `+1083E90`.
+- **The vblank wait**, the emulation of `sceDisplayWaitVblankStart`: three loops wait on that
+  event through the wrapper `+14AD0`, at `+78289`, `+78369` and `+78B69`, resetting it after each
+  wake.
+- **Frame end and frame-skip governor** `+78250..+78480`, on the game thread. Waits for a vblank,
+  measures the frame in wall clock, waits until the vblank count reaches the wait count at
+  `+1084484`, then adapts that count: a frame measuring longer than the current count **raises**
+  it at `+78462` (capped at 3), a comfortably shorter one lowers it at `+7843C`. The count is also
+  set explicitly at `+78070`, which is how the 30 fps menus and movies are paced.
+- **Render thread** `+17BD0`: spins on `Sleep(0)` at `+17CD7` waiting for the handoff flag at
+  display`+0x32c0`, releases the frame's resources, calls `Present` at `+17CAF`, clears the flag.
+- **Handoff** `+175B0`, on the game thread: if the render thread still holds the previous frame it
+  returns and the frame is dropped. Measured at zero occurrences in gameplay.
+- **Message pump**, main thread, loop at `+77610`: `PeekMessageA`, and when nothing is queued,
+  `Sleep(1)`, repeat. The game imports no `MsgWaitForMultipleObjects`, no `WaitMessage`, no
+  `GetMessage` and no waitable timers.
+- **Swap chain**: DXGI flip model already, `FLIP_DISCARD`, two buffers, `Present(1, 0)`.
 
-1. **Present blocks in direct modes, not in composed ones.** Present ~8 ms a frame focused
-   (vsync wait), 0.1-0.4 ms unfocused or covered. 60 presents a second in both, so no frame is
-   lost overall; in the stutter case one frame is a tick late and the next comes right behind
-   it (the doubled frame followed by a catch-up).
-2. **Sync interval 0 changes nothing** in Borderless (the flip chain still waits for the
-   compositor's slot); a third buffer changes nothing; ALLOW_TEARING Present changes nothing the
-   user could see; a vblank-locked ticker changes nothing. All of those were judged with the
-   heavy first-generation Sleep-hook instrumentation running (~170k hooked calls a frame with
-   two clock reads and a lock each), which itself perturbed the frame-time picture. **Their
-   verdicts should be considered unreliable and retested if ever needed.**
-3. **The hitch sampler** (suspend and read every other thread when the render thread has spun
-   20 ms for a frame): at every hitch, *every* thread was in a kernel wait. The game thread was
-   in a vblank wait that had just begun; the ticker had ticked ~4 ms earlier. Nobody was late;
-   the game thread had consumed a tick without producing a frame.
-4. **Lost-wakeup theory** (two threads reset one manual-reset event): a 1 ms timeout on the
-   vblank wait (`VBlank Wait Timeout`) changed nothing. Not the cause.
-5. **Handoff-drop theory**: `Frame Handoff Wait` measured zero occurrences. Not the cause.
-6. **The vblank wait log** (per wait: ticks consumed, work since the previous wait, time in
-   Sleep/event waits, critical sections and D3D calls in that work): every governor-induced
-   missed tick was **a second vblank wait with 0.00 ms of work in between**, i.e. the frame end's
-   loop 2 waiting for the raised count. The game thread's per-frame work averages 9.5-10 ms at
-   16x with a 16.7 ms budget.
-7. **Governor off** (`Frame Skip Governor = false`: the store at `+78462` skipped, explicit
-   count and lowering intact): the log counts 2-4 prevented raises a second, exactly the old
-   stutter rate; the user: "significantly better".
+## 3. The measurements that found it
 
-Why direct presentation trips the governor: with Present returning at the vblank, the render
-thread's cycle and therefore the game thread's frame end land right on the vblank boundary, and
-the wall-clock frame measurement comes out a fraction over 16.67 ms often enough (2-4 times a
-second) to raise the count. Under composition frame ends land mid-period and never measure long.
-Higher internal resolution nudges the frame end later, so Afevis's 4K and our 16x trip it more
-than 1440p, and stock least of all. At 120 Hz the frame end lands on 8.3 ms boundaries and a raise
-costs half as much.
+### 3.1 The game thread is not working, it is waiting
 
-## The residual (open)
+Per tick, in the stuttering configuration, with every category timed:
 
-With the governor off the game thread still misses ~1.3 ticks a second (6-7 per 5 s) and the
-display gets 58-59 presents a second. These misses are different: the work between waits runs to
-**16.8-17.2 ms**, i.e. the game thread itself is just over budget, then recovers. Where those
-milliseconds go is unknown; the per-tick detail (F10 in the Lab: Sleep/event waits, critical
-sections, D3D calls with the longest single one) was built but never captured for these misses
-(the run ended first). Candidates, in order: a D3D call on the game thread waiting for the GPU
-(Map of a busy dynamic buffer, FinishCommandList), the display critical section (measured 0.00
-ms so far), plain CPU work at 16x. The user's note that the GPU clock quadruples when the game is
-unfocused (Present no longer blocking, GPU never idles) suggests the GPU runs at idle clocks while
-focused; a frame rendered at idle clocks may also run long. Untested: NVIDIA "Prefer maximum
-performance" for the exe.
+| | Stuttering | Fast Sync |
+| --- | --- | --- |
+| Wall clock per tick | 9.6 to 9.8 ms, max 17.0 to 17.3 | 3.4 to 5.2 ms, max 6.2 |
+| Cycles actually executed | 2.7 ms | not separately captured |
+| Not executing | 7.0 ms | |
+| Direct3D calls, all 8933 including draws and unmaps | 0.27 ms | |
+| Sleeps and event waits | 0.01 ms | |
+| `Sleep(0)` yields | 0.00 ms, zero calls | |
+| Critical sections | 0.00 ms | |
+| Missed ticks per 5 s | 6, in every window | 0 in nine of ten windows |
 
-## The Lab knobs and triggers (all `[Graphics]`, Lab build only unless noted)
+Both runs were the same spot in the same session with one variable changed, after an earlier
+cross-session comparison left room for scene differences. The executed figure comes from
+`QueryThreadCycleTime` against the processor's nominal 4192 MHz, and agrees with the
+`GetThreadTimes` reading, so neither is an accounting artifact.
 
-| key | meaning |
+### 3.2 Where the game thread actually sits
+
+Sampling profiler, 1360 samples over three seconds, in mission:
+
+| | |
 | --- | --- |
-| `Fullscreen Refresh Rate Fix` (both builds) | on: exclusive Fullscreen asks for the display's current refresh rate (the 2026-09-13 120 Hz fix); off: the game's 60/1 stands |
-| `Fullscreen Resolution Fix` (both builds) | on: exclusive Fullscreen runs at the selected Screen Resolution (the `+1A25B` hook and the buffer guard); off: the monitor's largest mode |
-| `Frame Skip Governor` | **the fix**: false skips the raise at `+78462` |
-| `VBlank Wait Log` | per-tick log on the vblank waits; `PW vblank:` 5 s summaries; F10 / live `skips N` arms N per-miss detail lines |
-| `Hitch Sampler` | light Sleep import hook; F9 / live `sample N` arms N thread samples on the next hitches (`PW sampler:`) |
-| `Pacing Log` | the heavy first-generation instrumentation (import hooks on every Sleep and wait, tick counter, 5 s `PW pacing:` summaries): perturbs timing, off for judging runs |
-| `Frame Pacing` | Game / Display (ticker period = 1/refresh) / VBlank (ticker waits on `IDXGIOutput::WaitForVBlank`) |
-| `Present Sync` | -1 the game's; 0..4 forced |
-| `Swap Chain Buffers` | 0 the game's (2); else the flip chain's count |
-| `Allow Tearing` | chain created with `ALLOW_TEARING`, windowed Presents `(0, ALLOW_TEARING)` |
-| `VBlank Wait Timeout` | ms; a timeout on the vblank event wait |
-| `Frame Handoff Wait` | ms the game thread waits for the render thread instead of dropping a frame |
+| `NtWaitForSingleObject` | 43.8% |
+| `NtWaitForAlertByThreadId` | 39.4% |
+| everything else, all game code included | under 3% |
 
-Triggers in the game: **F11** census, **F10** twenty missed-tick detail lines, **F9** six thread
-samples. Live file `logs\MGSPWEnabler_live.txt`: `census N`, `skips N`, `sample N`.
+The first is healthy: it is the tick wait. The second is the answer, and its call chain is:
 
-## Testing rules learned tonight
+```
+NtWaitForAlertByThreadId < ntdll lock code < d3d11.dll
+  < GAME+185E2 / +18538 < GAME+187E7 < GAME+5727D
+```
 
-- `boot.ps1 -LabConfig` reads `MGSPWEnabler.lab.settings`; regenerate it from the user's
-  `MGSPWEnabler.settings` before a launch and change one key. A stale lab file cost a run.
-- Check in with the user before launching and before closing while they are live testing.
-- `tasklist` truncates the game's image name: match on `METAL GEAR`, not `PEACE WALKER`.
-- Judge by the user's frame-time graph; my counters ran alongside instrumentation that itself
-  perturbed timing until it was gated (`Pacing Log`).
-- Use Display on a 16:9 desktop builds a 484x272 canvas (decision deferred); test with "16:9".
+The game thread blocks inside the Direct3D 11 runtime, on the runtime's own lock, in the draw
+submission and vertex upload path.
+
+### 3.3 Who holds the lock
+
+Sampling profiler on the render thread, same moment:
+
+| Where the render thread is | Share |
+| --- | --- |
+| `Sleep(0)` handoff spin at `GAME+17CD7` | 47% |
+| Blocked inside `Present` | 42% |
+| Everything else | 11% |
+
+```
+GAME+17CB2 (Present) < RTSS hook < our hook < Steam overlay
+  < dxgi.dll < d3d11.dll < nvwgf2umx.dll < SleepEx < NtDelayExecution
+```
+
+The driver implements the vsync wait as a sleep loop inside `Present`, and the device lock is held
+for its duration. That is the seven milliseconds the game thread loses.
+
+### 3.4 Thread CPU
+
+Per five seconds in gameplay, as a percentage of one core:
+
+| Thread | Share | Priority |
+| --- | --- | --- |
+| render | 65 to 71% | 0 |
+| game | 14 to 21% | 0 |
+| whole process, 63 threads | 88 to 98% | |
+
+Both threads are at normal priority, so the render thread's spin is not starving anything by rank.
+Its share is the `Sleep(0)` spin, which issues a syscall per call at roughly 170,000 calls a frame.
+
+## 4. What was ruled out, and how
+
+| Theory | Verdict |
+| --- | --- |
+| Our own code | Stock game and Afevis's plugin both stutter |
+| GPU load or GPU headroom | Persists at 1440p internal and on the stock game |
+| GPU clock ramp | Persists with clocks pinned at 2550 MHz |
+| Display refresh beating against the ticker | The beat would be one frame per five minutes, not 0.83 s |
+| The frame-skip governor as the cause | Removing it keeps the same beat at lower amplitude, so it is an amplifier |
+| A lost wakeup on the shared vblank event | A 1 ms timeout on that wait changed nothing |
+| The frame handoff dropping frames | Measured at zero occurrences |
+| A periodic task inside the game | Composed presentation is perfectly flat; a timer would still fire |
+| The MGS2 and MGS3 busy-wait regression | A different shape; see section 7 |
+| Lock contention in the game's own code | Critical sections measured 0.00 ms throughout |
+| The game thread yielding | Zero `Sleep(0)` calls on it |
+| Slim locks or condition variables in game code | Zero calls to either condition variable form or `WaitOnAddress` |
+| Involuntary preemption | Both threads at normal priority; the profiler shows a wait, not a ready state |
+| Swap chain buffer count | Three buffers changed nothing |
+| `DXGI_PRESENT_DO_NOT_WAIT` | Zero retries: the flag covers a previously queued frame, not the vsync wait |
+
+Judged by eye under the first-generation instrumentation and therefore **unreliable, to be
+retested if they become relevant**: sync interval 0, tearing-allowed Present, a third buffer, and
+a vblank-locked ticker. That instrumentation hooked every one of the render thread's 170,000
+`Sleep(0)` calls a frame with two clock reads and a lock, and perturbed the thing it measured.
+
+## 5. The fix that has not been built yet
+
+A **waitable swap chain**: create it with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
+wait on the handle from `GetFrameLatencyWaitableObject` before presenting, and let `Present`
+return straight away. The vsync wait then happens on the render thread outside any Direct3D call,
+so the device lock is free and the game thread keeps recording. Vsync pacing is preserved and
+nothing tears.
+
+The work, and the risk:
+
+- The game creates its chain through the legacy `IDXGIFactory::CreateSwapChain`, which cannot
+  carry the waitable flag. Creation has to be intercepted and rebuilt through
+  `CreateSwapChainForHwnd`, carrying the fullscreen description across.
+- Any `ResizeBuffers` must keep the flag.
+- The wait goes in the existing Present hook, before the original call.
+- Swap chain creation is the one place where a mistake shows as a black screen or a broken
+  fullscreen transition rather than as a number in a log.
+
+Interim workaround that works today, user-confirmed: **NVIDIA Fast Sync**. It removes the block
+from Present, and the game thread's work falls from 9.6 ms to about 5 ms with zero missed ticks.
+An RTSS 60 fps cap on top makes the graph perfectly flat but changes nothing the game thread can
+see, so it is stabilising presentation only.
+
+## 6. The Lab instrumentation
+
+All keys under `[Graphics]`, Lab build only unless noted, all off by default.
+
+| Key | What it does |
+| --- | --- |
+| `Fullscreen Refresh Rate Fix` (both builds) | exclusive Fullscreen asks for the display's current refresh rate; the separate 120 Hz fix of 2026-09-13 |
+| `Fullscreen Resolution Fix` (both builds) | exclusive Fullscreen runs at the selected Screen Resolution rather than the monitor's largest mode |
+| `Frame Skip Governor` | false skips the raise at `+78462`: the amplifier, not the cause |
+| `VBlank Wait Log` | the per-tick accounting: wall clock, executed cycles, and the split into Direct3D, waits, yields, slim locks and plain work; a five second summary per thread; also enables the per-thread CPU line and the ntdll wait hooks |
+| `Hitch Sampler` | the light `Sleep` hook and the F9 thread sampler |
+| `Pacing Log` | the first-generation instrumentation. Perturbs timing. Off for anything judged by eye |
+| `Frame Pacing` | Game, Display or VBlank: how the 60 Hz ticker paces itself |
+| `Present Sync` | -1 the game's, else a forced sync interval |
+| `Swap Chain Buffers` | 0 the game's two, else the flip chain's count |
+| `Allow Tearing` | tearing-capable chain and tearing-flagged presents |
+| `Present Without Blocking` | Present with do-not-wait and retry. Measured a no-op here |
+| `VBlank Wait Timeout` | a timeout on the game's vblank event wait |
+| `Frame Handoff Wait` | milliseconds to wait for the render thread instead of dropping a frame |
+
+In-game triggers, all needing `Live Commands`:
+
+| Key | Command | What |
+| --- | --- | --- |
+| F11 | `census N` | the draw census |
+| F10 | `skips N` | the next N long ticks, broken down by category |
+| F9 | `sample N` | every thread's state at the next N hitches |
+| F8 | `profile [N]` | sample the game thread for N seconds |
+| F7 | `profile render [N]` | sample the render thread |
+
+The profiler unwinds with `RtlLookupFunctionEntry` and `RtlVirtualUnwind`, so its chains are real
+frames rather than plausible-looking stack values.
+
+## 7. Comparison with the MGS2 and MGS3 busy wait
+
+MGSHDFix fixes an idle-wait regression Konami introduced in patch 1.4.0: window event handling
+moved to its own thread which polled continuously instead of sleeping, pegging a core at 80 to 100
+percent. The fix has two halves, shipped as Half and Full. Half hooks `PeekMessageW` and, on an
+empty queue, calls `MsgWaitForMultipleObjects` with a 1 ms timeout. Full adds a hook on the game's
+frame wait that blocks on a high-resolution waitable timer for the remaining time less a 1 ms
+margin, and holds 1 ms timer resolution for the session.
+
+Peace Walker is a different shape. Its message pump does sleep, one millisecond per pass. Its
+ticker is accurate. It does have a genuine spin, the render thread's handoff loop at 47 percent of
+a core, but that is not what stalls the game thread: the stall is a lock held across a driver wait.
+The lesson that does carry over is the second half of their fix, which is the same idea as the
+waitable swap chain: do not block inside something that holds a resource others need.
+
+## 8. Instrumentation that went wrong, so it is not repeated
+
+- **Hooking `RtlAcquireSRWLockExclusive` killed the process**, because the hooking library, the
+  loader and our own logging all take slim locks, so the hook is reentrant by construction. The
+  three blocking entry points (`RtlSleepConditionVariableSRW`, `RtlSleepConditionVariableCS`,
+  `RtlWaitOnAddress`) are safe: they are only entered when a thread actually blocks.
+- **`RtlVirtualUnwind` without a structured exception handler killed the process.** It reads the
+  stack without validating it, and a thread suspended part way through a prologue presents a frame
+  it cannot follow. The unwinder now contains faults and a bad sample is simply shorter.
+- **The first long-tick trigger fired on the wrong event.** Triggering on "consumed two vblanks"
+  catches the wait that follows an expensive tick, which by definition contains no work, so three
+  separate attempts printed nothing but zeroes. It now triggers on the tick's work exceeding that
+  thread's own running mean, which also keeps the 30 fps menus from qualifying.
+- **`GetThreadTimes` was doubted and turned out to be right.** `QueryThreadCycleTime` agreed with
+  it. The cycle counter is still the better instrument, because it cannot be dismissed.
+
+## 9. Testing rules
+
+- `boot.ps1 -LabConfig` reads `MGSPWEnabler.lab.settings`. Regenerate it from the user's
+  `MGSPWEnabler.settings` before every launch and change only the key under test. A stale lab file
+  once produced a run with no supersampling that the user had to diagnose from the picture.
+- Check in with the user before launching and before closing while they are testing.
+- `tasklist` truncates the game's image name: match on `METAL GEAR`.
+- Compare within one session and one spot in the game. Cross-session comparisons leave room for
+  scene differences, which is how the first Fast Sync comparison nearly went wrong.
+- The user's frame-time graph is the judge of the picture; the logs are the judge of the cause.

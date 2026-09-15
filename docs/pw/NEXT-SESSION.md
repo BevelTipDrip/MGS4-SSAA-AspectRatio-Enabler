@@ -95,26 +95,28 @@ research keys remain Lab-only.
   launch, regenerate the lab file from `MGSPWEnabler.settings` and change only the Lab keys under
   test. Check in with the user before launching and before closing while they are live testing.
 
-## 2026-09-14: the 60 Hz stutter (root cause found; residual open)
+## 2026-09-14: the 60 Hz stutter (root cause found, fix not built)
 
-Full write-up: [frame-pacing.md](frame-pacing.md). Short form: the doubled frame once a second
-in Borderless and exclusive Fullscreen at 60 Hz (composed windows are smooth, 120 Hz is smooth,
-the stock game does it too) is the game's own frame-skip governor at `+78462`: a frame that
-measures a fraction over a vblank by wall clock raises the vblank wait count, so the next frame
-waits two vblanks. Direct presentation lands frame ends on the vblank boundary, so it trips 2-4
-times a second. `Frame Skip Governor = false` (Lab) skips that store; the user judged it
-"significantly better". Not yet as smooth as 120 Hz: the game thread still misses ~1.3 ticks a
-second with its work at 16.8-17.2 ms, cause unknown (D3D stall on the game thread, or CPU work,
-or idle GPU clocks).
+Full write-up with every measurement, every dead end and the instrumentation: [frame-pacing.md](frame-pacing.md).
+
+**The cause.** The render thread blocks inside `Present` for about eight milliseconds a frame, in
+the display driver's sleep loop, holding the Direct3D 11 device lock. The game thread blocks on
+that lock for seven milliseconds of every frame while recording the next one, so a frame that is
+2.7 ms of real work takes 9.6 ms of wall clock. When that crosses the 16.7 ms tick the game's own
+frame-skip governor (`+78462`) doubles a frame, which is the visible spike. Confirmed by sampling
+both threads and unwinding their stacks.
 
 **Pick up here:**
-1. One run, governor off, user presses F10 in gameplay: the per-miss lines say where the 17 ms go
-   (D3D call, wait, lock, or plain work). Then fix that.
-2. Promote `Frame Skip Governor` into the Release ASI as a shipped setting (default: the fix on),
-   with the tool field on the Graphics tab; keep the Lab knobs as they are.
-3. Retest, without `Pacing Log`, anything judged under the heavy instrumentation if it becomes
-   relevant again (Swap Chain Buffers 3, Allow Tearing, VBlank ticker).
-4. Optional user-side check: NVIDIA "Prefer maximum performance" for the exe (idle GPU clocks).
+1. Build the waitable swap chain (section 5 of the write-up): intercept creation, rebuild it
+   through `CreateSwapChainForHwnd` with the frame-latency waitable flag, carry the flag through
+   `ResizeBuffers`, and wait on the handle in the Present hook before the original call. That
+   moves the vsync wait outside the device lock. Watch work per tick fall from 9.6 toward 5.
+2. If that is not viable, the fallback is telling users to enable NVIDIA Fast Sync, which is
+   user-confirmed to remove the stutter and measured to take work per tick from 9.6 ms to 5 ms.
+3. Promote `Frame Skip Governor` into the Release build as a shipped setting. It is not the cause
+   but it halves the damage, and it is measured and understood.
+4. The render thread's `Sleep(0)` handoff spin burns 47 percent of a core for nothing. Worth
+   replacing with an event once the main problem is solved, but it is not implicated in the stutter.
 
 ## 2026-09-12 late: the 21:9 canvas works (Lab)
 
