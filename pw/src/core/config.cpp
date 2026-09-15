@@ -209,6 +209,12 @@ namespace mgspwe::config
                 DrawCensus::iFramePacing = (_stricmp(pacing.c_str(), "Display") == 0) ? 1 : (_stricmp(pacing.c_str(), "VBlank") == 0) ? 2 : 0;
                 Report(Graphics, FramePacing, DrawCensus::iFramePacing == 1 ? "Display" : DrawCensus::iFramePacing == 2 ? "VBlank" : "Game");
             }
+            {
+                std::string kinds;
+                Read(ini, Graphics, StateObjectCache, kinds);
+                InternalSize::iStateObjectCache = (kinds == "true") ? 3 : (kinds.empty() || kinds == "false") ? 0 : std::atoi(kinds.c_str());
+                Report(Graphics, StateObjectCache, InternalSize::iStateObjectCache);
+            }
             Read(ini, Graphics, PresentSync, DrawCensus::iPresentSync);
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);

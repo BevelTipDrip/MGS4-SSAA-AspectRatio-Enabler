@@ -9,8 +9,13 @@ every frame** queued behind those creations, its frame takes 9.6 ms of wall cloc
 work, and when that crosses the 16.7 ms tick the game's own frame-skip governor doubles a frame.
 That doubled frame is the stutter.
 
-**Not yet fixed.** The governor switch removes the amplifier, not the cause. The candidate fix is
-a state object cache; see section 5.
+**Largely fixed, 2026-09-15.** A state object cache (Lab: `State Object Cache`) removes the state
+creations entirely, and with them the Direct3D stall. The game thread's lock wait vanished from the
+profiler, its work per tick fell, and the user reports the stutter gone bar occasional small jumps.
+What remains is one layer down and is the true root cause: **the render thread holds the game's own
+display critical section across `Present`**, entering it at `+17C1D`, presenting at `+17CAF` and
+leaving at `+17CC9`. The game thread then queues on that section for about six milliseconds a
+frame. Releasing it around the present is the remaining work; see section 5.2.
 
 Everything below was measured on the user's machine with the Lab build. The instrumentation is in
 `pw/src/features/draw_census.cpp`, the keys in `shared/pw/settings_keys.hpp`.
@@ -204,26 +209,63 @@ retested if they become relevant**: sync interval 0, tearing-allowed Present, a 
 a vblank-locked ticker. That instrumentation hooked every one of the render thread's 170,000
 `Sleep(0)` calls a frame with two clock reads and a lock, and perturbed the thing it measured.
 
-## 5. The fix that has not been built yet
+## 5. The fix
 
-**A state object cache.** Hash the description in the `CreateSamplerState` and
-`CreateDepthStencilState` hooks (we already hook the first, for anisotropic filtering), hand back
-the object the game asked for last time, and only call the runtime on a genuine miss. Eighteen
-entries cover an entire session, so after the first frames the game thread would stop touching the
-device lock and the 7.3 ms would go to roughly zero whatever Present is doing.
+### 5.1 The state object cache (built and measured, 2026-09-15)
 
-**A first attempt crashed and needs redoing carefully (2026-09-14).** The game quit through its own
-`abort()` at `GAME+9594BD` (`int 0x29`, fast-fail code 7) about half a second into start-up. The
-obvious reading is that it cannot cope with being handed a state object it already holds, but that
-is **not established**: the same build crashed identically with the cache switched off, so the
-fault was somewhere else in that build and was never isolated. Reverting to the previous commit
-ran normally. Rebuild it incrementally, testing after each step; if sharing really is the problem
-the evidence will be a crash that follows the first cache hit and stops when the cache is off.
+The game recreates **all four** Direct3D state object types every frame and only ever asks for a
+few dozen distinct ones:
 
-The experimental code is kept outside the tree as `pw_draw_census_statecache.cpp.bak` and
-`pw_render_policy_statecache.cpp.bak` in the user's TEMP directory.
+| Site | Device vtable | Method |
+| --- | --- | --- |
+| `GAME+184AB` | 0xA0, slot 20 | `CreateBlendState` |
+| `GAME+18532` | 0xA8, slot 21 | `CreateDepthStencilState` |
+| `GAME+18411` | 0xB0, slot 22 | `CreateRasterizerState` |
+| `GAME+185DC` | 0xB8, slot 23 | `CreateSamplerState` |
 
-**The alternative, if sharing turns out to be unsafe:** a waitable swap chain: create it with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
+The cache keys each description field by field, never on the raw struct bytes, because the
+descriptions sit on the game's stack and carry whatever padding was there before. It hands back the
+object the game asked for last time with a reference added, and keeps one of its own for the life
+of the process. 42 objects covered a whole session.
+
+Measured, same spot, same session:
+
+| | Before | After |
+| --- | --- | --- |
+| Device state creations | 350 a frame | 0 |
+| Direct3D time per tick | 7.29 ms | 0.18 ms |
+| Work per tick, mean | 9.6 ms | 8.7 ms |
+| Work per tick, worst | 17.0 to 17.5 ms | 16.7 to 16.9 ms |
+| Missed ticks per 5 s | 6, every window | ten seconds at a time with none, else 5 to 6 |
+| Game thread CPU executed per frame | 2.70 to 2.84 ms | 2.38 to 2.58 ms |
+
+It also saves about 0.2 ms of genuine CPU work a frame, roughly eight percent of everything the
+game thread executes, which matters more on a slower processor than it does here.
+
+**It lives in `draw_census.cpp` beside the hooks rather than in `render_policy.cpp`, deliberately.**
+Implementing it in `render_policy.cpp` and calling across made the game abort at start-up every
+time, even with the cache switched off, and even with the call reduced to reading a counter in a
+log line that never ran before the crash. The hooks provably completed and returned `S_OK`; the
+crash came after. Moving the code into the same translation unit made it go away. The cause is not
+understood, and it must be before this is promoted to Release, which needs the same logic reachable
+from `render_hooks.cpp`.
+
+### 5.2 The remaining stall: the display critical section
+
+The render loop enters the display object's critical section (display`+0x3300`) at `+17C1D`, calls
+`Present` at `+17CAF` **inside it**, and leaves at `+17CC9`. So one of the game's own locks is held
+across the whole vsync wait, and the game thread blocks on it when handing over the next frame:
+measured at 6.17 ms mean and 14.31 ms worst, in the `locks` bucket that had read 0.00 all night
+until the Direct3D stall was taken away.
+
+The fix is to leave that section immediately before `Present` and re-enter immediately after, in
+the Present hook we already own. The display object pointer is at `+15969D8`. Not built. It is a
+real behavioural change, since it opens exactly the window in which the game thread starts
+recording the next frame, so it needs a soak rather than a spot check.
+
+### 5.3 What was tried and did not help
+
+**A waitable swap chain:** create it with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
 wait on the handle from `GetFrameLatencyWaitableObject` before presenting, and let `Present`
 return straight away. The vsync wait then happens on the render thread outside any Direct3D call,
 so the device lock is free and the game thread keeps recording. Vsync pacing is preserved and

@@ -77,6 +77,7 @@ namespace mgspwe::keys
     constexpr const char* FramePacing_Game = "Game";
     constexpr const char* FramePacing_Display = "Display";
     constexpr const char* FramePacing_VBlank = "VBlank";   // Lab: "Game" or "Display"
+    constexpr const char* StateObjectCache = "State Object Cache";   // 0 none, 1 depth-stencil, 2 samplers, 3 both: hand back the state object the game already asked for instead of calling the device again
     constexpr const char* PresentSync = "Present Sync";
     constexpr const char* SwapChainBuffers = "Swap Chain Buffers";
     constexpr const char* AllowTearing = "Allow Tearing";
