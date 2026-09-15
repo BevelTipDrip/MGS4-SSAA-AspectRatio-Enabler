@@ -1,5 +1,10 @@
 # Peace Walker: the 60 Hz stutter (frame pacing, 2026-09-14)
 
+> **2026-09-15, superseded in part.** The cause of the *visible* stutter is section 5.6: the game
+> never blocks, and its three spin loops cost about a full core. The device-lock analysis below is
+> correct and its fix (the state object cache, 5.1) is worth keeping for its own sake, but removing
+> that stall alone did not fix the picture. Read 5.6 first.
+
 **Root cause, established by measurement:** the game asks the Direct3D 11 **device** to create a
 sampler or depth-stencil state about **350 times a frame**, and in a whole session it only ever
 asks for **18 distinct ones**. Every one of those calls takes the device-wide lock. The render
@@ -363,6 +368,67 @@ offered at the time, a beat loop of about 4.5 s, came from the same biased sourc
 
 **Rule taken from this: a periodic measurement must never be sampled on a schedule derived from the
 thing being measured.**
+
+## 5.6 The real fix: the game never blocks (built and confirmed 2026-09-15)
+
+**This is the cause.** Everything in 5.1 to 5.5 reduced work or moved waits around. This removes the
+reason the game was waiting at all, and the user's verdict on the first run was "it ran incredibly
+smoothly, that was it all along."
+
+Peace Walker spins in three places where it should block:
+
+| Loop | Site | What it does |
+| --- | --- | --- |
+| Render thread | `+17BD0`, sleep at `+17CCF` | reads the handoff byte at display`+0x32c0`; when no frame is ready calls `Sleep(0)` and reads it again |
+| Ticker | `+76020`, sleep at `+76051` | compares elapsed against the period; when the tick is not due raises the timer resolution, sleeps the **whole** milliseconds left, drops the resolution, loops |
+| Message pump | `+77610` | `PeekMessageA`, then `Sleep(1)` |
+
+The ticker is doubly wrong. Its remaining time is truncated to whole milliseconds, so the last
+sub-millisecond of every tick degenerates into `Sleep(0)`; and `timeBeginPeriod`/`timeEndPeriod`,
+which take a system-global lock, run on **every iteration** of that spin.
+
+### The measurement
+
+Switched live, in one spot, in one session, with nothing else changed:
+
+| Busy wait fix | Process CPU |
+| --- | --- |
+| Off (the game's own spin) | 136.3%, then 119.3% of one core |
+| Render thread waits on an event | 21.5%, then 27.7% of one core |
+
+About a full core given back, roughly an 80% cut. The counters show the mechanism, not just the
+outcome: per 5 s the render thread performs ~2530 waits of which **exactly 300 are satisfied by the
+event**, which is 60 a second, one per frame. The rest are the 2 ms safety timeout expiring
+harmlessly. With the ticker included it sleeps 300 times per 5 s at 15.93 ms each.
+
+### How it is done
+
+`Busy Wait Fix`: 0 off, 1 the render thread, 2 also the ticker, 3 also the message pump (**level 3
+is not written yet**; it currently behaves as 2). Every hook is installed at start-up and reads an
+atomic level, so `busywait N` switches behaviour live and the two can be compared in one session.
+
+For the ticker we follow MGSHDFix's approach for MGS2 and MGS3: compute the time left, sleep it on a
+`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` timer less a **1 ms margin** left for the game's own loop to
+spin out, capped at **50 ms** so a bad clock read cannot park the game.
+
+For the render thread we deliberately **do not**. It is not waiting on a clock, it is waiting on the
+game thread, and Peace Walker publishes the frame with a single store at `+17683`
+(`mov byte [rbx+0x32c0], 1`). So there is an exact point to signal from, and a blind sleep would only
+delay the frame. We create one auto-reset event, set it just after that store, and wait on it at
+`+17CCF` with a **2 ms timeout**, so a signal somehow missed costs one timeout and the loop then
+behaves exactly as it does today. It cannot hang. MGSHDFix creates no synchronisation objects for
+its games because they offered no such publication point; we have one, so we use it.
+
+**Neither hook redirects execution**, which avoids depending on safetyhook's `rip` semantics. The
+render thread's `Sleep(0)` is left to run after our wait, where it is a cheap yield. The ticker's own
+sleep is neutralised by setting its elapsed register equal to its period register, so the length it
+computes comes out zero; that register is recomputed from the clock at the top of every iteration,
+so clobbering it is safe.
+
+### Signature note
+
+The site check initially failed because the `xor ecx, ecx` at `+17CCF` is encoded **`33 C9`**, not
+`31 C9`. Read the bytes, do not assume the encoding.
 
 ## 6. The Lab instrumentation
 

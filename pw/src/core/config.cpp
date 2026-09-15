@@ -219,6 +219,8 @@ namespace mgspwe::config
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
             Report(Graphics, AllowTearing, DrawCensus::bAllowTearing);
+            Read(ini, Graphics, BusyWaitFix, DrawCensus::iBusyWaitFix);
+            Report(Graphics, BusyWaitFix, DrawCensus::iBusyWaitFix);
             Read(ini, Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
             Report(Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
             Read(ini, Graphics, VBlankOutsideLock, DrawCensus::bVBlankOutsideLock);
