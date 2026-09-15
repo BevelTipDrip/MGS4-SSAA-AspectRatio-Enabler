@@ -444,6 +444,28 @@ sleep is neutralised by setting its elapsed register equal to its period registe
 computes comes out zero; that register is recomputed from the clock at the top of every iteration,
 so clobbering it is safe.
 
+### The message pump (level 3, built 2026-09-15)
+
+`PeekMessageA` is inline-hooked in user32 itself, and when it returns false and the level is 3 we
+call `MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT)`. That is MGSHDFix's fix for MGS2
+and MGS3 verbatim, including the 1 ms timeout. A `Sleep(1)` cannot be woken by an arriving message;
+this can, and costs the same millisecond when nothing arrives. Measured at ~1820 parks per 5 s.
+
+Hooking in user32 rather than on the import means every message pump in the process goes through it,
+overlays included. The level gate is the only thing that decides who waits.
+
+### All four levels measured
+
+| Level | What is on | Process CPU |
+| --- | --- | --- |
+| 0 | the game's own spins | 122.1% of one core |
+| 1 | render thread event | 26.8% |
+| 2 | + ticker timer | 36.9% (menu noise) |
+| 3 | + message pump | 23.6% |
+
+At level 3 the render thread's harmless 2 ms timeouts fall from about 2200 to about 150 per 5 s,
+while the 300 event-satisfied waits per 5 s are unchanged.
+
 ### Signature note
 
 The site check initially failed because the `xor ecx, ecx` at `+17CCF` is encoded **`33 C9`**, not

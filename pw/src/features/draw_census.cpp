@@ -539,6 +539,25 @@ namespace
     safetyhook::MidHook g_HandoffSignal, g_RenderSpin, g_TickerSpin;
     std::atomic<uint64_t> g_FrameWaits { 0 }, g_FrameWaitTimeouts { 0 }, g_FrameWaitTicks { 0 };
     std::atomic<uint64_t> g_TickSleeps { 0 }, g_TickTicks { 0 };
+    std::atomic<uint64_t> g_PumpWaits { 0 };
+    safetyhook::InlineHook g_PeekMessage;
+    using PeekMessageFn = BOOL(WINAPI*)(LPMSG, HWND, UINT, UINT, UINT);
+
+    // The pump calls PeekMessageA and, with nothing queued, Sleep(1). A Sleep cannot be woken by
+    // input, so the window stays unresponsive for the rest of the millisecond and the thread wakes
+    // whether or not anything arrived. MsgWaitForMultipleObjects with QS_ALLINPUT returns the
+    // moment a message lands and otherwise costs the same millisecond. This is MGSHDFix's fix for
+    // MGS2 and MGS3 verbatim, including the 1 ms timeout.
+    BOOL WINAPI Hooked_PeekMessageA(LPMSG msg, HWND wnd, UINT first, UINT last, UINT remove)
+    {
+        const BOOL got = g_PeekMessage.call<BOOL>(msg, wnd, first, last, remove);
+        if (!got && g_BusyWait.load(std::memory_order_relaxed) >= 3)
+        {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
+            g_PumpWaits.fetch_add(1);
+        }
+        return got;
+    }
     std::atomic<int64_t> g_BusyReport { 0 };
 
     void BusyWaitSleep(double ms)
@@ -561,8 +580,8 @@ namespace
         if (!g_BusyReport.compare_exchange_strong(last, now)) { return; }
         const uint64_t w = g_FrameWaits.exchange(0), to = g_FrameWaitTimeouts.exchange(0), wt = g_FrameWaitTicks.exchange(0);
         const uint64_t s = g_TickSleeps.exchange(0), st = g_TickTicks.exchange(0);
-        spdlog::info("PW busy wait: level {}; handoff waits {} ({:.2f} ms each, {} timed out), ticker sleeps {} ({:.2f} ms each).",
-            g_BusyWait.load(), w, w ? TicksToMs(wt) / w : 0.0, to, s, s ? TicksToMs(st) / s : 0.0);
+        spdlog::info("PW busy wait: level {}; handoff waits {} ({:.2f} ms each, {} timed out), ticker sleeps {} ({:.2f} ms each), pump waits {}.",
+            g_BusyWait.load(), w, w ? TicksToMs(wt) / w : 0.0, to, s, s ? TicksToMs(st) / s : 0.0, g_PumpWaits.exchange(0));
     }
 
     void InstallBusyWaitHooks()
@@ -620,11 +639,23 @@ namespace
             ctx.xmm6.f64[0] = ctx.xmm7.f64[0];   // its own Sleep now computes zero
         });
 
+        // The pump lives in user32, so the hook goes there rather than on an import: the game
+        // imports PeekMessageA, but so do the overlays, and only the level gate decides who waits.
+        if (const HMODULE user32 = GetModuleHandleW(L"user32.dll"))
+        {
+            if (const auto peek = reinterpret_cast<PeekMessageFn>(GetProcAddress(user32, "PeekMessageA")))
+            {
+                g_PeekMessage = safetyhook::create_inline(reinterpret_cast<void*>(peek), reinterpret_cast<void*>(Hooked_PeekMessageA));
+            }
+        }
+        if (!g_PeekMessage) { spdlog::warn("PW busy wait: PeekMessageA could not be hooked; the message pump keeps polling."); }
+
         g_BusyWait.store(DrawCensus::iBusyWaitFix);
         spdlog::info("PW busy wait: level {}; handoff signal +{:X} {}, render spin +{:X} {}, ticker spin +{:X} {}; {} timer.",
             DrawCensus::iBusyWaitFix, kFrameReadyStore, g_HandoffSignal ? "hooked" : "FAILED",
             kRenderSpin, g_RenderSpin ? "hooked" : "FAILED", kTickerSleep, g_TickerSpin ? "hooked" : "FAILED",
             g_BusyTimer ? "high resolution" : "no");
+        spdlog::info("PW busy wait: message pump {}.", g_PeekMessage ? "hooked at PeekMessageA" : "NOT hooked");
     }
 
     // ---- frame pacing: the game's waits -----------------------------------------------------
@@ -3007,6 +3038,7 @@ namespace
             int level = 0;
             in >> level;
             if (!g_RenderSpin) { spdlog::warn("PW busy wait: the spin sites are not hooked (Busy Wait Fix must be above 0 at start-up)."); }
+            else if (level >= 3 && !g_PeekMessage) { spdlog::warn("PW busy wait: level 3 asked for, but PeekMessageA is not hooked; the pump keeps polling."); }
             else
             {
                 g_BusyWait.store(std::max(0, std::min(3, level)));

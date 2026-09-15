@@ -4,6 +4,149 @@ Read the root `docs/NEXT-SESSION.md` first for the conventions (evidence levels,
 screenshot with the user, close the game after every test, never push). This file is the
 Peace Walker-specific state.
 
+## START HERE: the 60 Hz stutter is solved; the work left is promotion (2026-09-15)
+
+Full detail and every measurement is in `docs/pw/frame-pacing.md`. This is the state and the plan.
+
+### What the answer turned out to be
+
+**The game never blocks.** It spins in three places where it should wait, and together they cost
+about a full core. Fixing the first one gave the user a flat 16.6 ms frame time at a solid 60, on an
+otherwise stock frame loop. Their words: "It ran incredibly smoothly, that was it all along."
+
+| Loop | Site | The defect |
+| --- | --- | --- |
+| Render thread | loop `+17BD0`, sleep at `+17CCF` | reads the handoff byte at display`+0x32c0`; with no frame ready calls `Sleep(0)` and reads it again, forever |
+| Ticker | loop `+76020`, sleep at `+76051` | truncates the time left to whole milliseconds, so the last fraction spins; and calls `timeBeginPeriod`/`timeEndPeriod`, a system-global lock, **every iteration** |
+| Message pump | `+77610` | `PeekMessageA` then `Sleep(1)`, which no arriving message can wake |
+
+Process CPU, switched live in one spot with nothing else changed:
+
+| Level | What is on | Process CPU |
+| --- | --- | --- |
+| 0 | the game's own spins | 122.1% of one core |
+| 1 | render thread event | 26.8% |
+| 2 | + ticker timer | 36.9% (menu noise; its own thread was only 3-4%) |
+| 3 | + message pump | 23.6% |
+
+Counters confirm the mechanism: per 5 s the render thread's waits are satisfied by the event
+**exactly 300 times**, which is 60 a second, one per frame. At level 3 the harmless 2 ms timeouts
+fall from ~2200 to ~150 per 5 s, the ticker sleeps 300 times at 15.94 ms, and the pump parks ~1820
+times.
+
+### What this retires
+
+- **The frame skip governor override must not ship.** It was disabled for every measurement across
+  both sessions and was never the fix. The isolating run had it back at the game's own default.
+- **The state object cache is a performance feature, not a stutter fix.** Keep it: it removes 350
+  redundant device state creations a frame and about 8% of the game thread's executed CPU, which
+  matters on slower processors. It is not load-bearing for pacing.
+- Dead ends, all documented with their measurements so they are not retried: releasing the display
+  lock across `Present` (crashes in `nvwgf2umx`), waiting for the vblank ourselves (cadence drifts),
+  yielding the lock before the flip (works by the numbers, invisible to the eye, and its phase
+  reading cost a `GetFrameStatistics` per present), and matching the tick rate to the display (the
+  display flips at 59.9998 Hz against a 60.0000 Hz tick, so there is nothing to correct).
+
+### Where the code is, and why that is the problem
+
+Everything built this session lives in **`pw/src/features/draw_census.cpp`**, which the project
+compiles **only in the Lab configuration**:
+
+```
+<ClCompile Include="src\features\draw_census.cpp" Condition="'$(Configuration)'=='Lab'" />
+<ClCompile Include="src\features\render_hooks.cpp" Condition="'$(Configuration)'!='Lab'" />
+<ClCompile Include="src\features\render_policy.cpp" />        <!-- both -->
+```
+
+and `dllmain.cpp` picks one:
+
+```cpp
+#if MGS4E_LAB_BUILD
+    Probe::Run();
+    DrawCensus::Install();
+#else
+    RenderHooks::Install();
+#endif
+```
+
+**So a Release ASI contains none of the fix.** On top of that, `MGS4E_LAB_SWITCH` expands to
+`inline constexpr` outside Lab, so `DrawCensus::iBusyWaitFix` is a compile-time `0` in Release and
+the whole thing would be dead-stripped even if the file were compiled.
+
+### The promotion plan
+
+**Put it in its own module, not in `render_policy.cpp`.** The fix is self-contained: it needs
+`mgs4e::game::Module()`, spdlog, safetyhook, one event and one waitable timer. It touches no
+Direct3D and no other feature. So:
+
+1. New `pw/src/features/busy_wait.cpp` / `.hpp`, added to the vcxproj **with no `Condition`** so
+   both configurations compile it. Move `InstallBusyWaitHooks`, `Hooked_PeekMessageA`,
+   `BusyWaitSleep`, `ReportBusyWait`, the three site constants and the counters across verbatim.
+2. The level becomes a **real setting in both builds**: `inline int iBusyWaitFix = 0;` in the new
+   header, **not** an `MGS4E_LAB_SWITCH`. Check that the `Read`/`Report` pair for `BusyWaitFix` in
+   `pw/src/core/config.cpp` is not inside a Lab-only block; move it out if it is.
+3. Call `BusyWait::Install()` from **both** arms of the `#if MGS4E_LAB_BUILD` in `dllmain.cpp`,
+   at the same point `DrawCensus::Install()` runs today. That point is proven: the signature check
+   passes there, so the game's `.text` is already decrypted.
+4. Leave the `busywait` live command in `draw_census.cpp`; have it call a small
+   `BusyWait::SetLevel(int)` so Lab keeps live switching and Release does not need the poll thread.
+5. Add the field to `tool/src/pw/pw_fields.cpp` so the Config Tool exposes it.
+
+### Challenges to expect, in the order they will bite
+
+1. **The unexplained start-up crash.** Earlier this session the state object cache was implemented
+   in `render_policy.cpp` and called from `draw_census.cpp`, and the game aborted at start-up every
+   time, **even with the cache disabled**, and even when the only cross-module reference was a
+   counter read inside a log line that never executed. Moving the cache into `draw_census.cpp` made
+   it go away. **This is not understood.** The leading hypothesis is a stale object file or an ODR
+   mismatch: a header included by both translation units changed while one was not rebuilt, so the
+   two disagreed about a layout. **Before concluding anything, delete `obj\MGSPWEnabler` and do a
+   clean rebuild.** Putting the busy wait fix in its own module rather than `render_policy.cpp`
+   avoids the known-bad path entirely, which is why the plan does that.
+2. **`MGS4E_LAB_SWITCH` silently constant-folds.** If the setting is left as a lab switch, Release
+   builds will compile, run, log nothing and do nothing. Verify by grepping the Release binary for
+   the string `PW busy wait:` the way `lab-build-configuration` describes.
+3. **Hooking `PeekMessageA` in user32 is process-wide.** RTSS, the Steam overlay and MGSPatriotFix
+   pump messages too, and they will all go through our hook. The level gate is the only thing
+   deciding who waits, and the added cost is a 1 ms wait that only fires when the queue was already
+   empty. MGSHDFix ships exactly this for `PeekMessageW`, so it is proven in the sibling games, but
+   it is the most likely source of a compatibility report.
+4. **The 2 ms handoff timeout is load-bearing for shutdown.** The render thread's loop exits on the
+   quit flag at display`+0x3bc8`, which it only re-reads after the wait returns. The timeout is what
+   guarantees it wakes if the final frame never comes. **Do not raise it without thinking about
+   exit**, and never remove it.
+5. **Signature checks must fail soft.** They already do: a mismatch logs a warning and installs
+   nothing. Keep that, and keep reading the bytes rather than assuming encodings. This session the
+   check failed once because `xor ecx, ecx` at `+17CCF` is **`33 C9`**, not `31 C9`.
+6. **Never redirect execution from these hooks.** Neither hook changes `rip`, so nothing depends on
+   safetyhook's redirect semantics. The render thread's `Sleep(0)` is left to run as a cheap yield,
+   and the ticker's own sleep is neutralised by setting its elapsed register equal to its period
+   register (that register is recomputed from the clock at the top of every iteration, so clobbering
+   it is safe). Keep it that way.
+7. **The state object cache has the same module problem plus the crash mystery.** It is optional, so
+   promote the busy wait fix first and ship it; the cache can follow once (1) is understood.
+
+### The testing still owed
+
+None of this has been soaked. Needed, with the governor at the game's default and the cache off so
+the fix is judged alone:
+
+- Menus, Codec calls, cutscenes and movies (paced to 30 by an explicit wait count at `+78070`,
+  so confirm the ticker level does not disturb them), Mother Base, a mission end, and a long
+  session.
+- Windowed, borderless and exclusive fullscreen, and alt-tab in each.
+- The ticker level (2) judged **in gameplay**. Every measurement of it so far was at a menu, where
+  its contribution is inside the noise.
+- A decision on the shipping default. MGSHDFix defaults its equivalent to Full; 3 is the likely
+  answer here once the soak is clean.
+
+### Lab controls
+
+`Busy Wait Fix` in the settings: 0 off, 1 render thread, 2 also ticker, 3 also message pump. Every
+hook is installed at start-up and reads an atomic level, so the live command `busywait N` switches
+behaviour without a relaunch and both behaviours can be compared in one spot in one session. The
+per-5-second line is `PW busy wait: level N; handoff waits ..., ticker sleeps ..., pump waits ...`.
+
 ## Where things are
 
 - Game: `C:\Program Files\Steam\steamapps\common\MGS_PW`, exe `mgspw\METAL GEAR SOLID PEACE
