@@ -84,6 +84,14 @@ Allow Tearing = false
 ; the Direct3D device lock is not held across the driver's vsync wait and the game thread can
 ; keep recording. Same pacing, no tearing.
 Present Without Blocking = false
+; Waitable Swap Chain: the chain is rebuilt with a frame-latency waitable object and the frame is
+; paced on that handle, so the vsync wait happens outside Present and the Direct3D device lock is
+; not held across it. This is the candidate fix for the 60 Hz stutter.
+Waitable Swap Chain = false
+; State Object Cache: the game asks the device for the same handful of sampler and depth-stencil
+; states hundreds of times a frame, and every call takes the Direct3D device lock that the render
+; thread holds inside Present. Serving them from a cache keeps the game thread off that lock.
+State Object Cache = false
 ; Swap Chain Buffers: 0 the game's (2), else the flip chain's buffer count.
 Swap Chain Buffers = 0
 ; One-off log lines at start-up.

@@ -1,14 +1,16 @@
 # Peace Walker: the 60 Hz stutter (frame pacing, 2026-09-14)
 
-**Root cause, established by measurement:** the render thread blocks inside `Present` for about
-eight milliseconds of every frame, in the display driver's own sleep loop, **while holding the
-Direct3D 11 device lock**. The game thread, recording the next frame on a deferred context,
-blocks on that lock for roughly seven milliseconds of every frame. Its frame therefore takes
-9.6 ms of wall clock to do 2.7 ms of work, and when that occasionally crosses the 16.7 ms tick
-the game's own frame-skip governor doubles a frame. That doubled frame is the stutter.
+**Root cause, established by measurement:** the game asks the Direct3D 11 **device** to create a
+sampler or depth-stencil state about **350 times a frame**, and in a whole session it only ever
+asks for **18 distinct ones**. Every one of those calls takes the device-wide lock. The render
+thread holds that lock while it sits inside `Present`, where the display driver performs the vsync
+wait as a sleep loop for about eight milliseconds. So the game thread loses about **7.3 ms of
+every frame** queued behind those creations, its frame takes 9.6 ms of wall clock to do 2.7 ms of
+work, and when that crosses the 16.7 ms tick the game's own frame-skip governor doubles a frame.
+That doubled frame is the stutter.
 
 **Not yet fixed.** The governor switch removes the amplifier, not the cause. The candidate fix is
-a waitable swap chain; see section 5.
+a state object cache; see section 5.
 
 Everything below was measured on the user's machine with the Lab build. The instrumentation is in
 `pw/src/features/draw_census.cpp`, the keys in `shared/pw/settings_keys.hpp`.
@@ -135,6 +137,35 @@ GAME+17CB2 (Present) < RTSS hook < our hook < Steam overlay
 The driver implements the vsync wait as a sleep loop inside `Present`, and the device lock is held
 for its duration. That is the seven milliseconds the game thread loses.
 
+### 3.3a The calls that block, and what they cost
+
+Disassembling the game frames the profiler named identifies both blocking calls as **device**
+vtable entries, not context ones:
+
+| Site | Vtable offset | Method |
+| --- | --- | --- |
+| `GAME+18532` | 0xA8, slot 21 | `CreateDepthStencilState` |
+| `GAME+185DC` | 0xB8, slot 23 | `CreateSamplerState` |
+
+They sit in a sixteen-entry loop at `GAME+18500` with `OMSetDepthStencilState` (context slot 36)
+alongside, so the game recreates its state objects whenever its own state cache goes dirty.
+Timing those two calls and nothing else changed the whole picture:
+
+| | At the title | In gameplay |
+| --- | --- | --- |
+| device state creations | 11 a frame | **350 a frame** |
+| their cost | 0.01 ms a frame | **7.9 ms a frame** |
+| distinct descriptions, whole session | 12 | 18 |
+
+The worst tick then reads `17.19 ms, of it 3.53 executed, 13.97 in 9461 D3D call(s) (longest
+CreateSamplerState)`, and the per-tick Direct3D mean rises from 0.27 ms to 7.29 ms, which is
+exactly the time that had been unattributed. The calls are not expensive in themselves, as the
+title shows: the cost is entirely contention for the device lock.
+
+This is also why nothing else worked. Buffer counts, the waitable object, the tearing flag, the
+sync interval and the ticker all change **when** Present blocks, not **that** it blocks, so the
+lock is held either way. Fast Sync works because it stops Present blocking at all.
+
 ### 3.4 Thread CPU
 
 Per five seconds in gameplay, as a percentage of one core:
@@ -175,11 +206,34 @@ a vblank-locked ticker. That instrumentation hooked every one of the render thre
 
 ## 5. The fix that has not been built yet
 
-A **waitable swap chain**: create it with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
+**A state object cache.** Hash the description in the `CreateSamplerState` and
+`CreateDepthStencilState` hooks (we already hook the first, for anisotropic filtering), hand back
+the object the game asked for last time, and only call the runtime on a genuine miss. Eighteen
+entries cover an entire session, so after the first frames the game thread would stop touching the
+device lock and the 7.3 ms would go to roughly zero whatever Present is doing.
+
+**A first attempt crashed and needs redoing carefully (2026-09-14).** The game quit through its own
+`abort()` at `GAME+9594BD` (`int 0x29`, fast-fail code 7) about half a second into start-up. The
+obvious reading is that it cannot cope with being handed a state object it already holds, but that
+is **not established**: the same build crashed identically with the cache switched off, so the
+fault was somewhere else in that build and was never isolated. Reverting to the previous commit
+ran normally. Rebuild it incrementally, testing after each step; if sharing really is the problem
+the evidence will be a crash that follows the first cache hit and stops when the cache is off.
+
+The experimental code is kept outside the tree as `pw_draw_census_statecache.cpp.bak` and
+`pw_render_policy_statecache.cpp.bak` in the user's TEMP directory.
+
+**The alternative, if sharing turns out to be unsafe:** a waitable swap chain: create it with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
 wait on the handle from `GetFrameLatencyWaitableObject` before presenting, and let `Present`
 return straight away. The vsync wait then happens on the render thread outside any Direct3D call,
 so the device lock is free and the game thread keeps recording. Vsync pacing is preserved and
 nothing tears.
+
+It was built and measured on 2026-09-14 and **did not help**: the chain was created, the frame
+slot handle was acquired, the render thread did wait on it, and the numbers did not move at all
+(9.6 ms mean, 17 ms worst, six outliers), because Present still blocks for want of a free buffer.
+Three buffers together with the waitable object changed nothing either. Kept here because the
+reasoning is sound for a different engine and because the code was written.
 
 The work, and the risk:
 

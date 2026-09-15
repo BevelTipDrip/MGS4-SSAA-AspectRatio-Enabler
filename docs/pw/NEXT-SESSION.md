@@ -99,24 +99,26 @@ research keys remain Lab-only.
 
 Full write-up with every measurement, every dead end and the instrumentation: [frame-pacing.md](frame-pacing.md).
 
-**The cause.** The render thread blocks inside `Present` for about eight milliseconds a frame, in
-the display driver's sleep loop, holding the Direct3D 11 device lock. The game thread blocks on
-that lock for seven milliseconds of every frame while recording the next one, so a frame that is
-2.7 ms of real work takes 9.6 ms of wall clock. When that crosses the 16.7 ms tick the game's own
-frame-skip governor (`+78462`) doubles a frame, which is the visible spike. Confirmed by sampling
-both threads and unwinding their stacks.
+**The cause.** The game asks the Direct3D device to create a sampler or depth-stencil state about
+350 times a frame, and only ever asks for 18 distinct ones. Each call takes the device-wide lock,
+which the render thread holds while it sits inside `Present` doing the driver's vsync wait. The
+game thread loses 7.3 ms of every frame queued behind them, so a frame of 2.7 ms real work takes
+9.6 ms of wall clock, and when that crosses the 16.7 ms tick the game's own frame-skip governor
+(`+78462`) doubles a frame. Found by sampling both threads with a real stack unwind, then timing
+the two calls the profiler named.
 
 **Pick up here:**
-1. Build the waitable swap chain (section 5 of the write-up): intercept creation, rebuild it
-   through `CreateSwapChainForHwnd` with the frame-latency waitable flag, carry the flag through
-   `ResizeBuffers`, and wait on the handle in the Present hook before the original call. That
-   moves the vsync wait outside the device lock. Watch work per tick fall from 9.6 toward 5.
-2. If that is not viable, the fallback is telling users to enable NVIDIA Fast Sync, which is
-   user-confirmed to remove the stutter and measured to take work per tick from 9.6 ms to 5 ms.
+1. Build the state object cache (section 5 of the write-up), incrementally, testing after each
+   step. The first attempt crashed at start-up and the fault was never isolated: it persisted with
+   the cache disabled, so do not assume object sharing is the problem until that is shown.
+   Expect the per-tick Direct3D time to fall from 7.3 ms to near zero.
+2. Measure again from the same lab file and the same spot: work per tick should fall from 9.6
+   toward the 5 ms Fast Sync achieves, with no missed ticks.
 3. Promote `Frame Skip Governor` into the Release build as a shipped setting. It is not the cause
    but it halves the damage, and it is measured and understood.
-4. The render thread's `Sleep(0)` handoff spin burns 47 percent of a core for nothing. Worth
-   replacing with an event once the main problem is solved, but it is not implicated in the stutter.
+4. Fallback if the cache cannot be made safe: NVIDIA Fast Sync, user-confirmed.
+5. The waitable swap chain was built and measured as no help; the render thread's `Sleep(0)` spin
+   burns 47 percent of a core but is not implicated.
 
 ## 2026-09-12 late: the 21:9 canvas works (Lab)
 
