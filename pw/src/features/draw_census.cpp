@@ -93,6 +93,187 @@ namespace
     constexpr UINT kSwapChainFlagAllowTearing = 0x800;   // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
     constexpr UINT kPresentAllowTearing = 0x200;         // DXGI_PRESENT_ALLOW_TEARING
     constexpr UINT kPresentDoNotWait = 0x8;              // DXGI_PRESENT_DO_NOT_WAIT
+    // The game's display object (pointer at +15969D8) carries a critical section at +0x3300. The
+    // render loop enters it at +17C1D, calls Present at +17CAF inside it, and leaves at +17CC9, so
+    // it is held across the whole vsync wait; the game thread then blocks on it while handing over
+    // the next frame (measured 2026-09-15: 6.17 ms a tick, 14.31 worst). Releasing it around the
+    // present lets the game thread carry on recording, which is all it wants to do meanwhile.
+    //
+    // Only ever released when this thread genuinely owns it exactly once, read from the section's
+    // own owner and recursion fields, so a wrong guess about who holds what cannot unbalance it.
+    constexpr uintptr_t kDisplayObjectPtr = 0x15969D8;
+    constexpr size_t kDisplayCriticalSection = 0x3300;
+    std::atomic<uint64_t> g_LockFreed { 0 }, g_LockNotOwned { 0 };
+
+    CRITICAL_SECTION* DisplaySection()
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        auto** slot = reinterpret_cast<void**>(base + kDisplayObjectPtr);
+        if (!mgs4e::mem::Readable(slot, sizeof(void*))) { return nullptr; }
+        auto* display = static_cast<uint8_t*>(*slot);
+        if (!display) { return nullptr; }
+        auto* cs = reinterpret_cast<CRITICAL_SECTION*>(display + kDisplayCriticalSection);
+        return mgs4e::mem::Readable(cs, sizeof(CRITICAL_SECTION)) ? cs : nullptr;
+    }
+
+    // The display's vertical blank, waited on with the game's lock released. Unlike releasing the
+    // lock across Present, nothing of ours is inside the driver while the game thread runs, so the
+    // two cannot meet there (releasing it across Present itself crashed in nvwgf2umx, 2026-09-15).
+    // Waiting here also lands us just after a flip, so the Present that follows has a free buffer
+    // and returns rather than blocking: the vsync pacing is unchanged.
+    // Giving the lock up for the idle part of the wait only. Present keeps doing the pacing, so
+    // the cadence cannot drift the way it did when we waited on the vertical blank ourselves
+    // (2026-09-15: a fixed wait does not self-correct and dropped frames whenever the loop came
+    // back late). The flip is due one display period after the last one, so we sleep until a
+    // margin before that, holding nothing, and hand the lock back before calling Present.
+    int64_t Ticks();
+    double TicksToMs(int64_t t);
+    HANDLE g_YieldTimer = nullptr;
+    double g_DisplayPeriodMs = 0;
+    std::atomic<uint64_t> g_LockYields { 0 }, g_LockYieldTicks { 0 }, g_YieldNoStats { 0 }, g_YieldLate { 0 };
+    // Where the display actually is, asked of the presentation engine rather than inferred from our
+    // own last present. GetFrameStatistics reports the wall-clock time of a real vertical blank and
+    // the refresh count that went with it, so the flip we aim at is computed from the display's own
+    // clock and an overshoot is corrected on the next frame instead of feeding into it.
+    //
+    // The first attempt anchored on the previous Present return, which is a time we had ourselves
+    // moved by sleeping: the error compounded at about 1.5 ms a frame until Present missed the flip
+    // and the frame locked at 33 ms for a second at a time (2026-09-15, three runs in one session).
+    // The period the ticker is actually forced to, in seconds; 0 leaves the game's 60.000 Hz.
+    // Held apart from g_TickPeriod so it can be changed while the game runs, and so the ticker
+    // hook can be installed without committing to a value at start-up.
+    std::atomic<double> g_ForcedTickPeriod { 0.0 };
+    std::atomic<bool> g_TickFollowsMeasured { false };
+    double g_MeasuredPeriodMs = 0;
+    UINT g_LastSyncRefresh = 0;
+    int64_t g_LastSyncQpc = 0;
+
+    // The true refresh period, from two statistics samples at least a second apart. The mode table
+    // only ever says 60, never 59.94, and that difference alone is a missed flip every 17 seconds.
+    void NotePeriod(UINT refresh, int64_t qpc)
+    {
+        if (!g_LastSyncRefresh || refresh < g_LastSyncRefresh) { g_LastSyncRefresh = refresh; g_LastSyncQpc = qpc; return; }
+        const UINT spanned = refresh - g_LastSyncRefresh;
+        if (spanned < 60) { return; }
+        const double ms = TicksToMs(qpc - g_LastSyncQpc) / static_cast<double>(spanned);
+        if (ms > 1.0 && ms < 100.0) { g_MeasuredPeriodMs = ms; }
+        g_LastSyncRefresh = refresh;
+        g_LastSyncQpc = qpc;
+    }
+
+    void PreciseSleep(double ms)
+    {
+        if (ms <= 0) { return; }
+        if (!g_YieldTimer) { Sleep(static_cast<DWORD>(ms)); return; }
+        LARGE_INTEGER due {};
+        due.QuadPart = -static_cast<LONGLONG>(ms * 10000.0);
+        if (SetWaitableTimer(g_YieldTimer, &due, 0, nullptr, nullptr, FALSE))
+        {
+            WaitForSingleObject(g_YieldTimer, static_cast<DWORD>(ms) + 2);
+        }
+    }
+
+    void ReadDisplayPeriod()
+    {
+        DEVMODEW dm {};
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        {
+            g_DisplayPeriodMs = 1000.0 / static_cast<double>(dm.dmDisplayFrequency);
+        }
+        g_YieldTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        spdlog::info("PW pacing: the display lock will be yielded until {} ms before each flip ({:.3f} ms period, {} timer).",
+            DrawCensus::iYieldLockBeforePresent, g_DisplayPeriodMs, g_YieldTimer ? "high resolution" : "coarse");
+    }
+
+    // The refresh period, measured from the presentation engine on every present. Kept separate
+    // from the lock yield because it is the number the ticker wants: the compositor reports the
+    // display's nominal rate (59.9970 Hz here), while the flips themselves arrive 16.7346 ms apart,
+    // and the beat between that and the game's true 60.000 Hz tick has a period of about four and a
+    // half seconds, which is what the frame time graph shows (2026-09-15).
+    void SampleDisplayPeriod(IDXGISwapChain* chain)
+    {
+        // Only when something actually wants the number. GetFrameStatistics is a Direct3D call in
+        // the present path, taking the same device lock and display critical section this whole
+        // investigation has been clearing out, so it must never run just because the build has it.
+        if (!chain || (DrawCensus::iYieldLockBeforePresent <= 0 && DrawCensus::iFramePacing != 1)) { return; }
+        DXGI_FRAME_STATISTICS st {};
+        if (FAILED(chain->GetFrameStatistics(&st)) || st.SyncQPCTime.QuadPart == 0) { return; }
+        NotePeriod(st.SyncRefreshCount, st.SyncQPCTime.QuadPart);
+        if (g_TickFollowsMeasured.load() && g_MeasuredPeriodMs > 0)
+        {
+            g_ForcedTickPeriod.store(g_MeasuredPeriodMs / 1000.0);
+        }
+    }
+
+    // Gives the lock up for the idle stretch before the flip. Nothing of ours is inside the driver
+    // meanwhile, which is what made releasing it across Present itself crash.
+    void YieldLockBeforePresent(IDXGISwapChain* chain)
+    {
+        if (DrawCensus::iYieldLockBeforePresent <= 0 || !chain) { return; }
+
+        // Frame statistics need a flip-model or fullscreen chain; a windowed blit chain has no
+        // phase to report. Without one we do not guess: the lock simply stays held.
+        DXGI_FRAME_STATISTICS st {};
+        if (FAILED(chain->GetFrameStatistics(&st)) || st.SyncQPCTime.QuadPart == 0)
+        {
+            if (g_YieldNoStats.fetch_add(1) == 0)
+            {
+                spdlog::warn("PW pacing: the swap chain reports no frame statistics, so the flip's phase is unknown and the display lock will not be yielded.");
+            }
+            return;
+        }
+        const double period = g_MeasuredPeriodMs > 0 ? g_MeasuredPeriodMs : g_DisplayPeriodMs;
+        if (period <= 0) { return; }
+
+        CRITICAL_SECTION* cs = DisplaySection();
+        if (!cs || cs->OwningThread != reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentThreadId())) || cs->RecursionCount != 1) { return; }
+
+        const int64_t t0 = Ticks();
+        const double sinceVBlank = TicksToMs(t0 - st.SyncQPCTime.QuadPart);
+        if (sinceVBlank < 0.0 || sinceVBlank > 1000.0) { g_YieldLate.fetch_add(1); return; }   // a stale sample: do not act on it
+        double sleep = period - std::fmod(sinceVBlank, period) - static_cast<double>(DrawCensus::iYieldLockBeforePresent);
+        if (sleep > period) { sleep = period; }                                                // never hold off for more than one refresh
+        if (sleep <= 0.5) { return; }
+
+        LeaveCriticalSection(cs);
+        PreciseSleep(sleep);
+        EnterCriticalSection(cs);
+        g_LockYields.fetch_add(1);
+        g_LockYieldTicks.fetch_add(Ticks() - t0);
+    }
+
+    IDXGIOutput* g_PresentOutput = nullptr;
+    std::atomic<uint64_t> g_VBlankWaitsOutside { 0 }, g_VBlankWaitTicksOutside { 0 };
+
+    void EnsureOutput(IDXGISwapChain* chain)
+    {
+        if (g_PresentOutput || !chain) { return; }
+        IDXGIOutput* found = nullptr;
+        if (SUCCEEDED(chain->GetContainingOutput(&found)) && found)
+        {
+            g_PresentOutput = found;
+            spdlog::info("PW pacing: the display's vertical blank will be waited on outside the game's display lock.");
+        }
+        else { spdlog::warn("PW pacing: the swap chain has no containing output; the vblank cannot be waited on outside the lock."); }
+    }
+
+    bool FreeDisplaySection(CRITICAL_SECTION*& held)
+    {
+        held = nullptr;
+        if (!DrawCensus::bFreeLockDuringPresent) { return false; }
+        CRITICAL_SECTION* cs = DisplaySection();
+        if (!cs) { return false; }
+        if (cs->OwningThread != reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentThreadId())) || cs->RecursionCount != 1)
+        {
+            g_LockNotOwned.fetch_add(1);
+            return false;
+        }
+        LeaveCriticalSection(cs);
+        held = cs;
+        g_LockFreed.fetch_add(1);
+        return true;
+    }
     std::atomic<uint64_t> g_PresentRetries { 0 }, g_PresentGaveUp { 0 };
     SafetyHookInline SwapChain_ResizeBuffers_hook {};
     std::atomic<bool> g_TearingChain { false };          // the chain was created with the flag
@@ -299,8 +480,13 @@ namespace
         {
             const int k = std::max(1, static_cast<int>(std::lround(g_DisplayRefresh / 60.0)));
             g_TickPeriod = k / g_DisplayRefresh;
-            g_TickerCompare = safetyhook::create_mid(base + kTickerCompare, [](SafetyHookContext& ctx) { ctx.xmm7.f64[0] = g_TickPeriod; });
-            spdlog::info("PW pacing: ticker paced to the display: {:.4f} Hz / {} = {:.4f} ms a tick ({}).", g_DisplayRefresh, k, g_TickPeriod * 1000.0, g_TickerCompare ? "hooked" : "hook FAILED");
+            g_ForcedTickPeriod.store(g_TickPeriod);
+            g_TickerCompare = safetyhook::create_mid(base + kTickerCompare, [](SafetyHookContext& ctx)
+            {
+                const double period = g_ForcedTickPeriod.load(std::memory_order_relaxed);
+                if (period > 0) { ctx.xmm7.f64[0] = period; }
+            });
+            spdlog::info("PW pacing: ticker paced to the display: {:.4f} Hz / {} = {:.4f} ms a tick ({}). The compositor reports this rate; the swap chain's own statistics are measured separately and can be adopted with the live command \"tick auto\".", g_DisplayRefresh, k, g_TickPeriod * 1000.0, g_TickerCompare ? "hooked" : "hook FAILED");
         }
         else
         {
@@ -2136,6 +2322,26 @@ namespace
             }
             g_Work.Reset();
             { std::lock_guard lock(g_Mutex); g_Work.lastTexture.clear(); }
+            SampleDisplayPeriod(self);
+            YieldLockBeforePresent(self);
+            if (DrawCensus::bVBlankOutsideLock)
+            {
+                EnsureOutput(self);
+                CRITICAL_SECTION* cs = DisplaySection();
+                if (g_PresentOutput && cs
+                    && cs->OwningThread == reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(GetCurrentThreadId()))
+                    && cs->RecursionCount == 1)
+                {
+                    LeaveCriticalSection(cs);
+                    const int64_t waited = Ticks();
+                    g_PresentOutput->WaitForVBlank();
+                    g_VBlankWaitTicksOutside.fetch_add(Ticks() - waited);
+                    g_VBlankWaitsOutside.fetch_add(1);
+                    EnterCriticalSection(cs);
+                }
+            }
+            CRITICAL_SECTION* handedBack = nullptr;
+            FreeDisplaySection(handedBack);
             HRESULT pr;
             if (DrawCensus::bPresentNoWait)
             {
@@ -2155,6 +2361,7 @@ namespace
                 }
             }
             else { pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags); }
+            if (handedBack) { EnterCriticalSection(handedBack); }
             g_LastPresentEnd = Ticks();
             g_LastPresentTicks = g_LastPresentEnd - now;
             return pr;
@@ -2346,6 +2553,28 @@ namespace
                 const uint64_t d = g_DrawsSeen.load(), l = g_ListsSeen.load(), f = g_Frame.load();
                 spdlog::info("PW census: rate: {} draw(s), {} command list(s), {} frame(s) in the last second; large-texture maps so far {} ({} failed), CPU access stripped on {} textures.", d - lastDraws, l - lastLists, f - lastFrames, g_TextureMaps.load(), g_TextureMapFails.load(), g_GpuLocalStripped.load());
                 if (DrawCensus::bVBlankWaitLog && (i % 5) == 4) { LogThreadCpu(); }
+                if (DrawCensus::iYieldLockBeforePresent > 0)
+                {
+                    static uint64_t lastYields = 0, lastYieldTicks = 0;
+                    const uint64_t y = g_LockYields.load(), tk = g_LockYieldTicks.load();
+                    spdlog::info("PW pacing: display lock yielded {} time(s) this second, {:.2f} ms each; refresh period measured at {:.4f} ms, {} sample(s) unusable.",
+                        y - lastYields, y > lastYields ? TicksToMs(tk - lastYieldTicks) / (y - lastYields) : 0.0, g_MeasuredPeriodMs, g_YieldNoStats.load() + g_YieldLate.load());
+                    lastYields = y; lastYieldTicks = tk;
+                }
+                if (DrawCensus::bVBlankOutsideLock)
+                {
+                    static uint64_t lastWaits = 0, lastTicks = 0;
+                    const uint64_t w = g_VBlankWaitsOutside.load(), tk = g_VBlankWaitTicksOutside.load();
+                    spdlog::info("PW pacing: vblank waited outside the lock {} time(s) this second, {:.2f} ms each.", w - lastWaits, w > lastWaits ? TicksToMs(tk - lastTicks) / (w - lastWaits) : 0.0);
+                    lastWaits = w; lastTicks = tk;
+                }
+                if (DrawCensus::bFreeLockDuringPresent)
+                {
+                    static uint64_t lastFreed = 0, lastNot = 0;
+                    const uint64_t fr = g_LockFreed.load(), no = g_LockNotOwned.load();
+                    spdlog::info("PW pacing: display lock released around {} present(s) this second, not owned at {}.", fr - lastFreed, no - lastNot);
+                    lastFreed = fr; lastNot = no;
+                }
                 {
                     static uint64_t lastCreates = 0, lastTicks = 0;
                     const uint64_t c = g_StateCreates.load(), tk = g_StateCreateTicks.load();
@@ -2642,6 +2871,52 @@ namespace
                 ProfileThread(tid, std::max(1, seconds));
             }
         }
+        else if (cmd == "tick")
+        {
+            // "tick auto" follows the measured flip interval, "tick <ms>" forces one, "tick off"
+            // hands the ticker back to the game's 60.000 Hz. Needs Frame Pacing = 1 so the hook
+            // is installed; without it there is nothing to write to.
+            std::string what;
+            in >> what;
+            if (!g_TickerCompare)
+            {
+                spdlog::warn("PW pacing: the ticker is not hooked (Frame Pacing must be 1), so its period cannot be changed.");
+            }
+            else if (what == "auto")
+            {
+                g_TickFollowsMeasured.store(true);
+                if (g_MeasuredPeriodMs > 0) { g_ForcedTickPeriod.store(g_MeasuredPeriodMs / 1000.0); }
+                spdlog::info("PW pacing: the ticker now follows the measured flip interval, {:.4f} ms ({:.4f} Hz) (command).", g_MeasuredPeriodMs, g_MeasuredPeriodMs > 0 ? 1000.0 / g_MeasuredPeriodMs : 0.0);
+            }
+            else if (what == "off")
+            {
+                g_TickFollowsMeasured.store(false);
+                g_ForcedTickPeriod.store(0.0);
+                spdlog::info("PW pacing: the ticker is back to the game's own 60.000 Hz (command).");
+            }
+            else
+            {
+                const double ms = std::atof(what.c_str());
+                if (ms > 1.0 && ms < 100.0)
+                {
+                    g_TickFollowsMeasured.store(false);
+                    g_ForcedTickPeriod.store(ms / 1000.0);
+                    spdlog::info("PW pacing: the ticker is forced to {:.4f} ms a tick ({:.4f} Hz) (command).", ms, 1000.0 / ms);
+                }
+                else { spdlog::warn("PW pacing: 'tick' wants auto, off, or a period in milliseconds; got '{}'.", what); }
+            }
+        }
+        else if (cmd == "yield")
+        {
+            // "yield N": the margin in milliseconds left for Present after the lock is taken back.
+            // Swept live because the right value is the time the driver needs to get a frame into
+            // the flip queue before the vertical blank, which no measurement of ours predicts.
+            int ms = 0;
+            in >> ms;
+            DrawCensus::iYieldLockBeforePresent = std::max(0, ms);
+            g_LockYields.store(0); g_LockYieldTicks.store(0);
+            spdlog::info("PW pacing: the display lock will now be yielded until {} ms before each flip (command).", DrawCensus::iYieldLockBeforePresent);
+        }
         else if (cmd == "sample")
         {
             int n = 6;
@@ -2712,6 +2987,7 @@ namespace DrawCensus
 {
     void Install()
     {
+        if (DrawCensus::iYieldLockBeforePresent > 0) { ReadDisplayPeriod(); }
         if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
         InstallVBlankWaitHook();
         InstallHandoffWait();

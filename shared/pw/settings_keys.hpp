@@ -77,6 +77,9 @@ namespace mgspwe::keys
     constexpr const char* FramePacing_Game = "Game";
     constexpr const char* FramePacing_Display = "Display";
     constexpr const char* FramePacing_VBlank = "VBlank";   // Lab: "Game" or "Display"
+    constexpr const char* YieldLockBeforePresent = "Yield Lock Before Present";   // ms of margin: the display lock is given up until shortly before the flip is due, then taken back so Present still does the pacing
+    constexpr const char* VBlankOutsideLock = "Wait For VBlank Outside The Lock";   // the vsync wait is done on the display's vertical blank with the game's display lock released, then the lock is taken back and Present is called
+    constexpr const char* FreeLockDuringPresent = "Free Lock During Present";   // the render thread holds the game's display critical section across Present; released around the wait so the game thread can record the next frame
     constexpr const char* StateObjectCache = "State Object Cache";   // 0 none, 1 depth-stencil, 2 samplers, 3 both: hand back the state object the game already asked for instead of calling the device again
     constexpr const char* PresentSync = "Present Sync";
     constexpr const char* SwapChainBuffers = "Swap Chain Buffers";

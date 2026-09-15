@@ -29,7 +29,10 @@ namespace DrawCensus
     MGS4E_LAB_SWITCH(int, iFramePacing, 0);       // 0 the game's 60.000 Hz ticker; 1 paced to the display's real refresh rate; 2 locked to the display's vblank
     MGS4E_LAB_SWITCH(int, iPresentSync, -1);
     MGS4E_LAB_SWITCH(bool, bAllowTearing, false);
-    MGS4E_LAB_SWITCH(bool, bPresentNoWait, false); // Present with DO_NOT_WAIT and retry: the vsync wait happens between short calls instead of inside one long one, so the game thread is not locked out while it waits  // flip chain created with ALLOW_TEARING; windowed Present(0, ALLOW_TEARING): never blocks on the display      // -1 the game's sync interval (1); 0..4 forced       // 0 the game's 60.000 Hz ticker; 1 the ticker paced to the display's real refresh rate
+    MGS4E_LAB_SWITCH(bool, bPresentNoWait, false);
+    MGS4E_LAB_SWITCH(bool, bFreeLockDuringPresent, false);
+    MGS4E_LAB_SWITCH(bool, bVBlankOutsideLock, false);
+    MGS4E_LAB_SWITCH(int, iYieldLockBeforePresent, 0); // ms of margin; 0 off. The display lock is released until this long before the flip is due and then taken back, so the game thread gets the idle part of the wait while Present keeps doing the pacing // release the display lock, wait for the display's vertical blank with no Direct3D call in flight, take the lock back, then present: the wait moves out of the lock without the two threads meeting inside the driver // the render loop enters the game's display critical section at +17C1D, presents at +17CAF inside it and leaves at +17CC9, so the lock is held across the whole vsync wait and the game thread blocks on it; released around the present instead
     MGS4E_LAB_SWITCH(bool, bLightHooks, false);   // hook only the resolve on the contexts: no per-draw cost, no census, no timing  // write every shader's bytecode to C:\mgspf_tools\pw\shaders
 
 #if MGS4E_LAB_BUILD

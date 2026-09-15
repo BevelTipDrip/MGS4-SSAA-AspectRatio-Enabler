@@ -219,6 +219,12 @@ namespace mgspwe::config
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
             Report(Graphics, AllowTearing, DrawCensus::bAllowTearing);
+            Read(ini, Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
+            Report(Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
+            Read(ini, Graphics, VBlankOutsideLock, DrawCensus::bVBlankOutsideLock);
+            Report(Graphics, VBlankOutsideLock, DrawCensus::bVBlankOutsideLock);
+            Read(ini, Graphics, FreeLockDuringPresent, DrawCensus::bFreeLockDuringPresent);
+            Report(Graphics, FreeLockDuringPresent, DrawCensus::bFreeLockDuringPresent);
             Read(ini, Graphics, PresentNoWait, DrawCensus::bPresentNoWait);
             Report(Graphics, PresentNoWait, DrawCensus::bPresentNoWait);
             Read(ini, Graphics, SwapChainBuffers, InternalSize::iSwapChainBuffers);

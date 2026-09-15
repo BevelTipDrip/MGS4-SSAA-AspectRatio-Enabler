@@ -292,6 +292,78 @@ from Present, and the game thread's work falls from 9.6 ms to about 5 ms with ze
 An RTSS 60 fps cap on top makes the graph perfectly flat but changes nothing the game thread can
 see, so it is stabilising presentation only.
 
+### 5.4 Releasing the display lock before the flip (tried, abandoned 2026-09-15)
+
+The render loop holds the game's display critical section across `Present`, so the game thread
+blocks on it for about 6 ms a tick (3.3a). Releasing it **across** `Present` crashes inside
+`nvwgf2umx`: the lock is load-bearing. Waiting for the vertical blank ourselves with the lock
+released fixed the game thread completely but wrecked the cadence, because a fixed wait does not
+self-correct. The third attempt kept `Present` as the pacing authority and gave the lock up only
+for the idle stretch before the flip.
+
+**First anchor, wrong.** The sleep target was computed from when the previous `Present` returned,
+which is a time we had ourselves moved by sleeping. The error compounded instead of correcting:
+
+| Frame | Interval | Time inside `Present` |
+| --- | --- | --- |
+| n | 26.0 ms | 7.3 ms |
+| n+1 | 27.7 ms | 5.6 ms |
+| n+2 | 29.2 ms | 4.1 ms |
+| n+3 | 30.8 ms | 2.7 ms |
+| n+4 | 33.4 ms | 0.1 ms |
+
+About 1.5 ms of drift a frame until `Present` missed the flip entirely, after which the frame
+locked at 33 ms for a second or more. Three such runs in one session.
+
+**Second anchor, correct but not worth it.** `IDXGISwapChain::GetFrameStatistics` reports the
+wall-clock time of a real vertical blank and the refresh count with it, so the target comes from the
+display's own clock and an overshoot is corrected on the next frame. With that, a margin sweep
+against doubled ticks:
+
+| Margin | Lock released a frame | Doubled ticks / 5 s | Blocked on locks | Worst tick |
+| --- | --- | --- | --- | --- |
+| 1 ms | 5.05 ms | 0 | 0.07 ms | 15.8 ms |
+| 2 ms | 4.20 ms | 0 | 0.00 ms | 3.9 ms |
+| 3 ms | 3.30 ms | 0 | 0.06 ms | 13.5 ms |
+| 5 ms | 1.46 ms | 6 | 6.62 ms | 16.9 ms |
+| 7 ms | varies | 4 | 4.27 ms | 25.5 ms |
+
+By the numbers the lock contention goes to zero at 2 ms. **The user could not see any improvement,
+and judged it slightly worse.** That verdict is confounded: with the yield enabled,
+`GetFrameStatistics` ran on **every present**, inside the present path, taking the same device lock
+this whole investigation is about. The yield was paying for its own phase reading at the worst
+possible place.
+
+**Conclusion: the game thread's wait on the display lock is real but is not what the user sees.**
+Removing it entirely changed nothing visible. Before this is retried, the phase must be sampled
+once every 30-60 presents and extrapolated in between, since flip times are arithmetic once the
+period is known; only then is a measurement of the yield worth anything.
+
+### 5.5 The tick rate does not beat against the display (disproved 2026-09-15)
+
+The standing theory, from the user and from the first session, was that the game's true 60.000 Hz
+ticker beats against a display that is really 59.9xx, and the stutter is the two crossing. It is
+wrong on this hardware.
+
+Measured from the presentation engine every frame, in gameplay, six readings:
+
+| Flip interval | Rate |
+| --- | --- |
+| 16.6667 ms | 59.9997 - 59.9999 Hz |
+
+The display flips at 59.9998 Hz against a 60.0000 Hz tick. That is two ten-thousandths of a hertz,
+a drift of one frame every **eighty minutes**. It cannot produce a jump every few seconds, so the
+`Frame Pacing = Display` path has nothing to correct and was not run.
+
+An earlier figure of 59.755 Hz was **an artifact and should be ignored**. The period was only being
+sampled at moments when the lock yield fired, and the yield fires on the beat, so the signal was
+being sampled in step with itself. Its values swung between 16.674 and 16.790 ms on the same five
+second cycle as the yields, which is the fingerprint of aliasing. The "independent" corroboration
+offered at the time, a beat loop of about 4.5 s, came from the same biased source.
+
+**Rule taken from this: a periodic measurement must never be sampled on a schedule derived from the
+thing being measured.**
+
 ## 6. The Lab instrumentation
 
 All keys under `[Graphics]`, Lab build only unless noted, all off by default.
@@ -355,6 +427,20 @@ waitable swap chain: do not block inside something that holds a resource others 
   thread's own running mean, which also keeps the 30 fps menus from qualifying.
 - **`GetThreadTimes` was doubted and turned out to be right.** `QueryThreadCycleTime` agreed with
   it. The cycle counter is still the better instrument, because it cannot be dismissed.
+
+### 8.x A probe left ungated is a regression, not a probe
+
+`SampleDisplayPeriod` was added to feed the tick rate test and called from the `Present` hook with
+**no guard at all**. It ran on every frame of the "quiet" build that was handed to the user as the
+known-good configuration, calling `GetFrameStatistics` in the present path. The user spotted it
+immediately from the frame time graph: "looks like you still left some stuff on, it was not doing
+this before in this configuration."
+
+Every other addition that session checked its own switch first. This one did not, and it undid the
+night's work in the one build that was supposed to prove it.
+
+**Rule: anything added to a hot path is written with its guard as the first line of the function,
+before the body exists. Then audit the diff for hot-path calls and confirm each one's guard.**
 
 ## 9. Testing rules
 
