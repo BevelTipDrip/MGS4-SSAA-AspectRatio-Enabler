@@ -30,7 +30,6 @@ namespace InternalSize
     MGS4E_LAB_SWITCH(int, iSwapChainBuffers, 0);   // 0 the game's flip chain (2 buffers: one frame in flight, Present blocks on the display); 3 gives Present a frame of slack // swap chain buffers at the internal size (flip model stretches them onto the window) and the fit told the picture is the whole buffer
     inline bool bFullscreenRefreshFix = true;      // exclusive fullscreen asks for the display's current refresh rate instead of the game's 60/1 (render_policy.cpp)
     inline bool bFullscreenResolutionFix = true;   // exclusive fullscreen runs at the selected screen resolution instead of the monitor's largest mode (the +1A25B hook and the buffer guard)
-    inline int iStateObjectCache = 0;   // 0 none, 1 depth-stencil, 2 samplers, 3 both. The game asks the device for the same handful of sampler and depth-stencil states hundreds of times a frame and each call takes the device-wide lock the render thread holds inside Present, which is the 60 Hz stutter (docs/pw/frame-pacing.md)
     inline bool bGpuLocalTextures = false; // strip CPU write access from large default textures so GPU copies into them stay in video memory (render_policy.cpp)
     inline bool bDisableMsaa = false; // scene targets created single-sampled; the game's resolve becomes a copy (render_policy.cpp)
     inline int iAnisotropy = 0;       // 2..16: every linear sampler anisotropic at that level; 0 = the game's samplers (render_policy.cpp)

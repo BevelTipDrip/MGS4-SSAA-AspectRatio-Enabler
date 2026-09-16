@@ -10,6 +10,7 @@
 
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "draw_census.hpp"
@@ -166,6 +167,19 @@ namespace mgspwe::config
                 else { Read(ini, Graphics, AnisotropicFiltering, InternalSize::iAnisotropy); }
                 Report(Graphics, AnisotropicFiltering, InternalSize::iAnisotropy);
             }
+            {
+                // One checkbox for users, "true" or "false"; a Lab session can still name a single
+                // kind by number to isolate one (1 the objects, 2 the samplers, 3 both).
+                std::string kinds;
+                Read(ini, Graphics, StateObjectCache, kinds);
+                // An absent key keeps the built-in default; only a value present in the file
+                // overrides it, so a settings file written before this feature still gets it.
+                if (!kinds.empty())
+                {
+                    StateCache::iLevel = (kinds == "true") ? 3 : (kinds == "false") ? 0 : std::atoi(kinds.c_str());
+                }
+                Report(Graphics, StateObjectCache, StateCache::iLevel);
+            }
             Read(ini, Graphics, BusyWaitFix, BusyWait::iLevel);
             Report(Graphics, BusyWaitFix, BusyWait::iLevel);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
@@ -211,12 +225,6 @@ namespace mgspwe::config
                 Read(ini, Graphics, FramePacing, pacing);
                 DrawCensus::iFramePacing = (_stricmp(pacing.c_str(), "Display") == 0) ? 1 : (_stricmp(pacing.c_str(), "VBlank") == 0) ? 2 : 0;
                 Report(Graphics, FramePacing, DrawCensus::iFramePacing == 1 ? "Display" : DrawCensus::iFramePacing == 2 ? "VBlank" : "Game");
-            }
-            {
-                std::string kinds;
-                Read(ini, Graphics, StateObjectCache, kinds);
-                InternalSize::iStateObjectCache = (kinds == "true") ? 3 : (kinds.empty() || kinds == "false") ? 0 : std::atoi(kinds.c_str());
-                Report(Graphics, StateObjectCache, InternalSize::iStateObjectCache);
             }
             Read(ini, Graphics, PresentSync, DrawCensus::iPresentSync);
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);

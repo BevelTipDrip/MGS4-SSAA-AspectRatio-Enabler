@@ -5,6 +5,7 @@
 #include "internal_size.hpp"
 #include "log.hpp"
 #include "render_policy.hpp"
+#include "state_cache.hpp"
 
 #include <mutex>
 #include <unordered_map>
@@ -13,6 +14,9 @@ namespace
 {
     // ID3D11Device / ID3D11DeviceContext / IDXGIFactory vtable slots (d3d11.h, dxgi.h order).
     constexpr size_t kDevCreateTexture2D = 5;
+    constexpr size_t kDevCreateBlendState = 20;
+    constexpr size_t kDevCreateDepthStencilState = 21;
+    constexpr size_t kDevCreateRasterizerState = 22;
     constexpr size_t kDevCreateSamplerState = 23;
     constexpr size_t kDevCreateDeferredContext = 27;
     constexpr size_t kCtxMap = 14;
@@ -25,6 +29,8 @@ namespace
     SafetyHookInline D3D11CreateDevice_hook {}, D3D11CreateDeviceAndSwapChain_hook {};
     SafetyHookInline CreateDXGIFactory_hook {}, CreateDXGIFactory1_hook {}, CreateDXGIFactory2_hook {};
     SafetyHookInline Device_CreateTexture2D_hook {}, Device_CreateSamplerState_hook {}, Device_CreateDeferredContext_hook {};
+    // Hooked only to serve the state cache: these three carry no render policy of their own.
+    SafetyHookInline Device_CreateBlendState_hook {}, Device_CreateDepthStencilState_hook {}, Device_CreateRasterizerState_hook {};
     SafetyHookInline Factory_CreateSwapChain_hook {};
 
     // Context hooks are vtable entry replacements (an inline hook on a deferred context's Map
@@ -144,13 +150,51 @@ namespace
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateSamplerState(ID3D11Device* self, const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** out)
     {
+        // The cache is keyed on what the GAME asked for, kept before the render policy rewrites it,
+        // so the next identical request is recognised and still gets our anisotropy override.
+        const bool cache = StateCache::Wants(StateCache::kSamplers) && desc && out;
+        D3D11_SAMPLER_DESC asked {};
+        if (cache)
+        {
+            asked = *desc;
+            if (StateCache::Serve(self, asked, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        }
         D3D11_SAMPLER_DESC changed {};
         if (desc)
         {
             changed = *desc;
             if (RenderPolicy::SamplerDesc(changed)) { desc = &changed; }
         }
-        return Device_CreateSamplerState_hook.stdcall<HRESULT>(self, desc, out);
+        const HRESULT r = Device_CreateSamplerState_hook.stdcall<HRESULT>(self, desc, out);
+        if (cache && SUCCEEDED(r) && *out) { StateCache::Keep(self, asked, *out); }
+        return r;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateBlendState(ID3D11Device* self, const D3D11_BLEND_DESC* desc, ID3D11BlendState** out)
+    {
+        const bool cache = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cache && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const HRESULT r = Device_CreateBlendState_hook.stdcall<HRESULT>(self, desc, out);
+        if (cache && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
+        return r;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateDepthStencilState(ID3D11Device* self, const D3D11_DEPTH_STENCIL_DESC* desc, ID3D11DepthStencilState** out)
+    {
+        const bool cache = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cache && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const HRESULT r = Device_CreateDepthStencilState_hook.stdcall<HRESULT>(self, desc, out);
+        if (cache && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
+        return r;
+    }
+
+    HRESULT STDMETHODCALLTYPE Hooked_CreateRasterizerState(ID3D11Device* self, const D3D11_RASTERIZER_DESC* desc, ID3D11RasterizerState** out)
+    {
+        const bool cache = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cache && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const HRESULT r = Device_CreateRasterizerState_hook.stdcall<HRESULT>(self, desc, out);
+        if (cache && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
+        return r;
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateDeferredContext(ID3D11Device* self, UINT flags, ID3D11DeviceContext** out)
@@ -169,6 +213,14 @@ namespace
         Device_CreateTexture2D_hook = safetyhook::create_inline(dv[kDevCreateTexture2D], reinterpret_cast<void*>(Hooked_CreateTexture2D));
         Device_CreateSamplerState_hook = safetyhook::create_inline(dv[kDevCreateSamplerState], reinterpret_cast<void*>(Hooked_CreateSamplerState));
         Device_CreateDeferredContext_hook = safetyhook::create_inline(dv[kDevCreateDeferredContext], reinterpret_cast<void*>(Hooked_CreateDeferredContext));
+        if (StateCache::Wants(StateCache::kObjects))
+        {
+            Device_CreateBlendState_hook = safetyhook::create_inline(dv[kDevCreateBlendState], reinterpret_cast<void*>(Hooked_CreateBlendState));
+            Device_CreateDepthStencilState_hook = safetyhook::create_inline(dv[kDevCreateDepthStencilState], reinterpret_cast<void*>(Hooked_CreateDepthStencilState));
+            Device_CreateRasterizerState_hook = safetyhook::create_inline(dv[kDevCreateRasterizerState], reinterpret_cast<void*>(Hooked_CreateRasterizerState));
+            spdlog::info("PW render: state cache on (blend {}, depth-stencil {}, rasterizer {}).",
+                Device_CreateBlendState_hook ? "ok" : "FAILED", Device_CreateDepthStencilState_hook ? "ok" : "FAILED", Device_CreateRasterizerState_hook ? "ok" : "FAILED");
+        }
         ID3D11DeviceContext* immediate = context;
         if (!immediate) { device->GetImmediateContext(&immediate); }
         if (immediate)

@@ -51,6 +51,11 @@ Anisotropic Filtering = true
 ; turning it down keeps the part that matters. Turn it down if another overlay misbehaves.
 Busy Wait Fix = 3
 
+; State Object Cache: the game asks the device to create the same handful of blend, depth-stencil,
+; rasterizer and sampler state objects hundreds of times a frame, and a whole session only ever
+; uses 42 distinct ones. They are immutable, so the one it asked for last time is handed back.
+State Object Cache = true
+
 GPU Local Textures = true
 
 [Debugging]

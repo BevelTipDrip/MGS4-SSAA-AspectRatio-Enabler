@@ -17,6 +17,7 @@
 #include "render_policy.hpp"
 #include "post_scale.hpp"
 #include "busy_wait.hpp"
+#include "state_cache.hpp"
 
 #include <unordered_set>
 #include <map>
@@ -1951,127 +1952,6 @@ namespace
     SafetyHookInline Device_CreateDepthStencilState_hook {};
     SafetyHookInline Device_CreateBlendState_hook {};
     SafetyHookInline Device_CreateRasterizerState_hook {};
-    // ---- the state object cache ------------------------------------------------------------------
-    // The game asks for the same handful of sampler and depth-stencil states hundreds of times a
-    // frame and each call takes the Direct3D device lock, which the render thread holds inside
-    // Present: about seven milliseconds of every frame lost, and the cause of the 60 Hz stutter
-    // (docs/pw/frame-pacing.md). Handing back the object it asked for last time keeps it off that
-    // lock. Keys are built field by field, because the game's descriptions sit on its stack and
-    // their padding bytes are whatever was there before.
-    std::mutex g_StateCacheMutex;
-    std::map<std::string, IUnknown*> g_StateCache;
-    std::atomic<uint64_t> g_StateCacheHits { 0 };
-
-    void KeyPart(std::string& key, uint32_t v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); }
-    void KeyPart(std::string& key, float v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); }
-
-    std::string SamplerCacheKey(const void* device, const D3D11_SAMPLER_DESC& d)
-    {
-        std::string key(1, 'S');
-        key.append(reinterpret_cast<const char*>(&device), sizeof(device));
-        KeyPart(key, static_cast<uint32_t>(d.Filter));
-        KeyPart(key, static_cast<uint32_t>(d.AddressU));
-        KeyPart(key, static_cast<uint32_t>(d.AddressV));
-        KeyPart(key, static_cast<uint32_t>(d.AddressW));
-        KeyPart(key, d.MipLODBias);
-        KeyPart(key, static_cast<uint32_t>(d.MaxAnisotropy));
-        KeyPart(key, static_cast<uint32_t>(d.ComparisonFunc));
-        for (float c : d.BorderColor) { KeyPart(key, c); }
-        KeyPart(key, d.MinLOD);
-        KeyPart(key, d.MaxLOD);
-        return key;
-    }
-
-    void KeyStencilOp(std::string& key, const D3D11_DEPTH_STENCILOP_DESC& o)
-    {
-        KeyPart(key, static_cast<uint32_t>(o.StencilFailOp));
-        KeyPart(key, static_cast<uint32_t>(o.StencilDepthFailOp));
-        KeyPart(key, static_cast<uint32_t>(o.StencilPassOp));
-        KeyPart(key, static_cast<uint32_t>(o.StencilFunc));
-    }
-
-    std::string DepthCacheKey(const void* device, const D3D11_DEPTH_STENCIL_DESC& d)
-    {
-        std::string key(1, 'D');
-        key.append(reinterpret_cast<const char*>(&device), sizeof(device));
-        KeyPart(key, static_cast<uint32_t>(d.DepthEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.DepthWriteMask));
-        KeyPart(key, static_cast<uint32_t>(d.DepthFunc));
-        KeyPart(key, static_cast<uint32_t>(d.StencilEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.StencilReadMask));
-        KeyPart(key, static_cast<uint32_t>(d.StencilWriteMask));
-        KeyStencilOp(key, d.FrontFace);
-        KeyStencilOp(key, d.BackFace);
-        return key;
-    }
-
-    std::string BlendCacheKey(const void* device, const D3D11_BLEND_DESC& d)
-    {
-        std::string key(1, 'B');
-        key.append(reinterpret_cast<const char*>(&device), sizeof(device));
-        KeyPart(key, static_cast<uint32_t>(d.AlphaToCoverageEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.IndependentBlendEnable ? 1 : 0));
-        for (const D3D11_RENDER_TARGET_BLEND_DESC& t : d.RenderTarget)
-        {
-            KeyPart(key, static_cast<uint32_t>(t.BlendEnable ? 1 : 0));
-            KeyPart(key, static_cast<uint32_t>(t.SrcBlend));
-            KeyPart(key, static_cast<uint32_t>(t.DestBlend));
-            KeyPart(key, static_cast<uint32_t>(t.BlendOp));
-            KeyPart(key, static_cast<uint32_t>(t.SrcBlendAlpha));
-            KeyPart(key, static_cast<uint32_t>(t.DestBlendAlpha));
-            KeyPart(key, static_cast<uint32_t>(t.BlendOpAlpha));
-            KeyPart(key, static_cast<uint32_t>(t.RenderTargetWriteMask));
-        }
-        return key;
-    }
-
-    std::string RasterCacheKey(const void* device, const D3D11_RASTERIZER_DESC& d)
-    {
-        std::string key(1, 'R');
-        key.append(reinterpret_cast<const char*>(&device), sizeof(device));
-        KeyPart(key, static_cast<uint32_t>(d.FillMode));
-        KeyPart(key, static_cast<uint32_t>(d.CullMode));
-        KeyPart(key, static_cast<uint32_t>(d.FrontCounterClockwise ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.DepthBias));
-        KeyPart(key, d.DepthBiasClamp);
-        KeyPart(key, d.SlopeScaledDepthBias);
-        KeyPart(key, static_cast<uint32_t>(d.DepthClipEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.ScissorEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.MultisampleEnable ? 1 : 0));
-        KeyPart(key, static_cast<uint32_t>(d.AntialiasedLineEnable ? 1 : 0));
-        return key;
-    }
-
-    // The cache keeps its own reference for the life of the process, so the object cannot die
-    // between the lookup and the AddRef; the lock is released before calling into the runtime.
-    bool StateCacheServe(const std::string& key, IUnknown** out)
-    {
-        IUnknown* found = nullptr;
-        {
-            std::lock_guard lock(g_StateCacheMutex);
-            const auto it = g_StateCache.find(key);
-            if (it == g_StateCache.end()) { return false; }
-            found = it->second;
-        }
-        found->AddRef();
-        *out = found;
-        g_StateCacheHits.fetch_add(1);
-        return true;
-    }
-
-    void StateCacheKeep(const std::string& key, IUnknown* made)
-    {
-        bool inserted = false;
-        size_t held = 0;
-        {
-            std::lock_guard lock(g_StateCacheMutex);
-            inserted = g_StateCache.emplace(key, made).second;
-            held = g_StateCache.size();
-        }
-        if (!inserted) { return; }
-        made->AddRef();
-        if (held <= 48) { spdlog::info("PW render: state cache holds {} object(s).", held); }
-    }
     std::atomic<uint64_t> g_StateCreates { 0 }, g_StateCreateTicks { 0 };
     std::set<uint64_t> g_StateDescs;   // under g_Mutex: distinct descriptions asked for
     uint64_t HashBytes(const void* data, size_t size)
@@ -2092,34 +1972,34 @@ namespace
     }
     HRESULT STDMETHODCALLTYPE Hooked_CreateBlendState(ID3D11Device* self, const D3D11_BLEND_DESC* desc, ID3D11BlendState** out)
     {
-        const bool cacheIt = (InternalSize::iStateObjectCache & 1) != 0 && desc && out;
-        if (cacheIt && StateCacheServe(BlendCacheKey(self, *desc), reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const bool cacheIt = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cacheIt && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
         const int64_t t0 = Ticks();
         const HRESULT r = Device_CreateBlendState_hook.stdcall<HRESULT>(self, desc, out);
         NoteStateCreate(desc, sizeof(D3D11_BLEND_DESC), Ticks() - t0, "CreateBlendState");
-        if (cacheIt && SUCCEEDED(r) && *out) { StateCacheKeep(BlendCacheKey(self, *desc), *out); }
+        if (cacheIt && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
         return r;
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateRasterizerState(ID3D11Device* self, const D3D11_RASTERIZER_DESC* desc, ID3D11RasterizerState** out)
     {
-        const bool cacheIt = (InternalSize::iStateObjectCache & 1) != 0 && desc && out;
-        if (cacheIt && StateCacheServe(RasterCacheKey(self, *desc), reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const bool cacheIt = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cacheIt && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
         const int64_t t0 = Ticks();
         const HRESULT r = Device_CreateRasterizerState_hook.stdcall<HRESULT>(self, desc, out);
         NoteStateCreate(desc, sizeof(D3D11_RASTERIZER_DESC), Ticks() - t0, "CreateRasterizerState");
-        if (cacheIt && SUCCEEDED(r) && *out) { StateCacheKeep(RasterCacheKey(self, *desc), *out); }
+        if (cacheIt && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
         return r;
     }
 
     HRESULT STDMETHODCALLTYPE Hooked_CreateDepthStencilState(ID3D11Device* self, const D3D11_DEPTH_STENCIL_DESC* desc, ID3D11DepthStencilState** out)
     {
-        const bool cacheDepth = (InternalSize::iStateObjectCache & 1) != 0 && desc && out;
-        if (cacheDepth && StateCacheServe(DepthCacheKey(self, *desc), reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+        const bool cacheDepth = StateCache::Wants(StateCache::kObjects) && desc && out;
+        if (cacheDepth && StateCache::Serve(self, *desc, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
         const int64_t t0 = Ticks();
         const HRESULT r = Device_CreateDepthStencilState_hook.stdcall<HRESULT>(self, desc, out);
         NoteStateCreate(desc, sizeof(D3D11_DEPTH_STENCIL_DESC), Ticks() - t0, "CreateDepthStencilState");
-        if (cacheDepth && SUCCEEDED(r) && *out) { StateCacheKeep(DepthCacheKey(self, *desc), *out); }
+        if (cacheDepth && SUCCEEDED(r) && *out) { StateCache::Keep(self, *desc, *out); }
         return r;
     }
     std::set<std::string> g_SamplersSeen;   // under g_Mutex
@@ -2133,11 +2013,11 @@ namespace
     HRESULT STDMETHODCALLTYPE Hooked_CreateSamplerState(ID3D11Device* self, const D3D11_SAMPLER_DESC* desc, ID3D11SamplerState** out)
     {
         D3D11_SAMPLER_DESC changed {}, asked {};
-        const bool cacheSampler = (InternalSize::iStateObjectCache & 2) != 0 && desc && out;
+        const bool cacheSampler = StateCache::Wants(StateCache::kSamplers) && desc && out;
         if (cacheSampler)
         {
             asked = *desc;
-            if (StateCacheServe(SamplerCacheKey(self, asked), reinterpret_cast<IUnknown**>(out))) { return S_OK; }
+            if (StateCache::Serve(self, asked, reinterpret_cast<IUnknown**>(out))) { return S_OK; }
         }
         if (desc)
         {
@@ -2153,7 +2033,7 @@ namespace
         const int64_t createStart = Ticks();
         const HRESULT r = Device_CreateSamplerState_hook.stdcall<HRESULT>(self, desc, out);
         NoteStateCreate(desc, desc ? sizeof(D3D11_SAMPLER_DESC) : 0, Ticks() - createStart, "CreateSamplerState");
-        if (cacheSampler && SUCCEEDED(r) && *out) { StateCacheKeep(SamplerCacheKey(self, asked), *out); }
+        if (cacheSampler && SUCCEEDED(r) && *out) { StateCache::Keep(self, asked, *out); }
         if (SUCCEEDED(r) && out && *out && desc)
         {
             const D3D11_SAMPLER_DESC& game = (desc == &changed) ? *reinterpret_cast<const D3D11_SAMPLER_DESC*>(&changed) : *desc;
@@ -2581,11 +2461,11 @@ namespace
                     const uint64_t c = g_StateCreates.load(), tk = g_StateCreateTicks.load();
                     size_t distinct = 0;
                     { std::lock_guard lock(g_Mutex); distinct = g_StateDescs.size(); }
-                    if (c != lastCreates || g_StateCacheHits.load() > 0)
+                    if (c != lastCreates || StateCache::Hits() > 0)
                     {
                         spdlog::info("PW pacing: device state creation: {} call(s) this second ({:.1f} a frame) costing {:.2f} ms ({:.2f} a frame); {} distinct descriptions asked for since start; cache served {}.",
                             c - lastCreates, f > lastFrames ? static_cast<double>(c - lastCreates) / (f - lastFrames) : 0.0,
-                            TicksToMs(tk - lastTicks), f > lastFrames ? TicksToMs(tk - lastTicks) / (f - lastFrames) : 0.0, distinct, g_StateCacheHits.load());
+                            TicksToMs(tk - lastTicks), f > lastFrames ? TicksToMs(tk - lastTicks) / (f - lastFrames) : 0.0, distinct, StateCache::Hits());
                     }
                     lastCreates = c; lastTicks = tk;
                 }
