@@ -36,8 +36,12 @@ times.
 
 ### What this retires
 
-- **The frame skip governor override must not ship.** It was disabled for every measurement across
-  both sessions and was never the fix. The isolating run had it back at the game's own default.
+- **The frame skip governor is no longer needed for the stutter**, but it stays as a user option
+  (user's call 2026-09-16). Note what the knob actually does: it hooks only the **raise** at
+  `+78462` and skips that store, so a long-measured frame can no longer promote the wait count. The
+  explicit set at `+78070` that paces 30 fps menus and movies, and the lowering path at `+7843C`,
+  are both left intact. It turns the governor **down, not off**, and earlier notes calling it a
+  disable were wrong.
 - **The state object cache is a performance feature, not a stutter fix.** Keep it: it removes 350
   redundant device state creations a frame and about 8% of the game thread's executed CPU, which
   matters on slower processors. It is not load-bearing for pacing.
