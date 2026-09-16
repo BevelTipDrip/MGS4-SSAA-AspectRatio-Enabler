@@ -9,9 +9,45 @@ namespace
     // on its own stack and their padding is whatever happened to be there before, so hashing the
     // bytes would treat identical requests as different ones. The device pointer is part of the
     // key so objects can never be handed to a device that did not make them.
-    std::mutex g_Mutex;
+    std::recursive_mutex g_Mutex;
     std::map<std::string, IUnknown*> g_Objects;
     std::atomic<uint64_t> g_Hits { 0 };
+
+    // Diagnostic: report the first few times this lock is taken re-entrantly, and from where. A
+    // plain std::mutex throws std::system_error here, which unwinds into driver frames that have no
+    // handler and aborts the process.
+    thread_local int t_Depth = 0;
+    std::atomic<int> g_Reported { 0 };
+
+    struct Reenter
+    {
+        std::lock_guard<std::recursive_mutex> lock;
+        explicit Reenter(const char* what) : lock(g_Mutex)
+        {
+            if (t_Depth++ > 0 && g_Reported.fetch_add(1) < 6)
+            {
+                void* frames[24] {};
+                const USHORT n = RtlCaptureStackBackTrace(0, 24, frames, nullptr);
+                std::string out;
+                for (USHORT i = 0; i < n; i++)
+                {
+                    const auto addr = reinterpret_cast<uintptr_t>(frames[i]);
+                    HMODULE owner = nullptr;
+                    char name[MAX_PATH] = "?";
+                    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCSTR>(addr), &owner) && owner)
+                    {
+                        GetModuleFileNameA(owner, name, MAX_PATH);
+                    }
+                    const char* leaf = std::strrchr(name, '\\');
+                    out += std::format("\n    {}+{:#x}", leaf ? leaf + 1 : name, owner ? addr - reinterpret_cast<uintptr_t>(owner) : addr);
+                }
+                spdlog::critical("PW state cache: lock taken again by the same thread in {} (depth {}) on thread {}:{}", what, t_Depth, GetCurrentThreadId(), out);
+                spdlog::default_logger()->flush();
+            }
+        }
+        ~Reenter() { --t_Depth; }
+    };
 
     void KeyPart(std::string& key, uint32_t v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); }
     void KeyPart(std::string& key, float v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); }
@@ -102,7 +138,7 @@ namespace
     {
         IUnknown* found = nullptr;
         {
-            std::lock_guard lock(g_Mutex);
+            Reenter guard("Serve");
             const auto it = g_Objects.find(key);
             if (it == g_Objects.end()) { return false; }
             found = it->second;
@@ -118,7 +154,7 @@ namespace
         bool inserted = false;
         size_t held = 0;
         {
-            std::lock_guard lock(g_Mutex);
+            Reenter guard("Keep");
             inserted = g_Objects.emplace(key, made).second;
             held = g_Objects.size();
         }
@@ -141,5 +177,5 @@ namespace StateCache
     void Keep(const void* device, const D3D11_RASTERIZER_DESC& d, IUnknown* made) { KeepKey(CacheKey(device, d), made); }
 
     uint64_t Hits() { return g_Hits.load(); }
-    size_t Held() { std::lock_guard lock(g_Mutex); return g_Objects.size(); }
+    size_t Held() { Reenter guard("Held"); return g_Objects.size(); }
 }

@@ -18,6 +18,7 @@
 #include "post_scale.hpp"
 #include "busy_wait.hpp"
 #include "state_cache.hpp"
+#include <typeinfo>
 
 #include <unordered_set>
 #include <map>
@@ -331,7 +332,14 @@ namespace
         bool uiUpload = false;          // the last constant upload on this context was a UI one (the private module says)
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
-    std::mutex g_Mutex;
+    // Recursive on purpose. These hooks sit on Direct3D entry points, and the runtime, the display
+    // driver and the Steam overlay all call back into them from inside a call we are already
+    // servicing: the driver creates a sampler while we are inside Present, and our Present hook is
+    // holding this. A plain std::mutex detects that as self-deadlock and THROWS std::system_error,
+    // which unwinds into driver frames that have no handler, reaches the game's unhandled filter
+    // and aborts the process. That is the start-up crash that went unexplained on 2026-09-15; it is
+    // latent and only surfaces when code layout changes the timing (docs/pw/frame-pacing.md).
+    std::recursive_mutex g_Mutex;
     std::unordered_map<void*, ContextState> g_State;
     void STDMETHODCALLTYPE Hooked_PSSetSamplers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11SamplerState* const* samplers);
     std::atomic<int> g_FramesToLog { 0 };
@@ -360,7 +368,7 @@ namespace
     std::atomic<DWORD> g_PresentThread { 0 };
     struct CallerStat { uint32_t calls = 0; int64_t ticks = 0; uint32_t maxArg = 0; };
     std::map<uintptr_t, CallerStat> g_MainSleepers, g_MainWaiters;   // under g_PacingMutex
-    std::mutex g_PacingMutex;
+    std::recursive_mutex g_PacingMutex;
     std::atomic<uint64_t> g_OtherThreadWaits { 0 };
     int64_t Ticks();
     double TicksToMs(int64_t t);
@@ -523,7 +531,7 @@ namespace
     // stack read, and resumed; one log block per hitch, a few per run.
     struct ThreadWait { DWORD tid = 0; std::atomic<uintptr_t> caller { 0 }; std::atomic<int64_t> since { 0 }; std::atomic<uint32_t> ms { 0 }; };
     thread_local ThreadWait* t_Wait = nullptr;
-    std::mutex g_WaitTableMutex;
+    std::recursive_mutex g_WaitTableMutex;
     std::vector<ThreadWait*> g_WaitTable;
     ThreadWait& MyWait()
     {
@@ -2881,8 +2889,171 @@ namespace
 
 namespace DrawCensus
 {
+    std::string Where(uintptr_t a)
+    {
+        HMODULE owner = nullptr;
+        char name[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(a), &owner) && owner)
+        {
+            GetModuleFileNameA(owner, name, MAX_PATH);
+            const char* leaf = std::strrchr(name, '\\');
+            return std::format("{}+{:#x}", leaf ? leaf + 1 : name, a - reinterpret_cast<uintptr_t>(owner));
+        }
+        return std::format("{:#x}", a);
+    }
+
+    // RtlCaptureStackBackTrace cannot unwind out of a safetyhook stub, so anything on the stack that
+    // points into a module's executable pages is taken as a plausible return address. False
+    // positives are obvious in the output and cost nothing; a missed frame does not.
+    std::string StackScan(uintptr_t rsp, int want)
+    {
+        std::string out;
+        int found = 0;
+        for (int i = 0; i < 160 && found < want; i++)
+        {
+            auto* slot = reinterpret_cast<uintptr_t*>(rsp + static_cast<uintptr_t>(i) * 8);
+            if (!mgs4e::mem::Readable(slot, sizeof(uintptr_t))) { break; }
+            const uintptr_t a = *slot;
+            if (a < 0x10000) { continue; }
+            MEMORY_BASIC_INFORMATION mbi {};
+            if (!VirtualQuery(reinterpret_cast<LPCVOID>(a), &mbi, sizeof(mbi))) { continue; }
+            if (mbi.State != MEM_COMMIT || mbi.Type != MEM_IMAGE) { continue; }
+            const DWORD x = mbi.Protect & 0xFF;
+            if (x != PAGE_EXECUTE && x != PAGE_EXECUTE_READ && x != PAGE_EXECUTE_READWRITE && x != PAGE_EXECUTE_WRITECOPY) { continue; }
+            out += std::format("\n    [rsp+{:#x}] {}", i * 8, Where(a));
+            found++;
+        }
+        return out;
+    }
+
+    // A thrown MSVC C++ exception carries its own type information: parameter 2 is the ThrowInfo
+    // and parameter 3 the image base every field inside it is an RVA against. Walking that to the
+    // first catchable type's TypeDescriptor yields the decorated type name, which is the one thing
+    // that says what actually went wrong.
+    constexpr DWORD kCxxException = 0xE06D7363;
+
+
+    struct CxxTypeDescriptor { const void* vft; void* spare; char name[1]; };
+    struct CxxCatchableType { unsigned properties; int pType; int mdisp; int pdisp; int vdisp; int sizeOrOffset; int copyFunction; };
+    struct CxxCatchableTypeArray { int count; int types[1]; };
+    struct CxxThrowInfo { unsigned attributes; int pmfnUnwind; int pForwardCompat; int pCatchableTypeArray; };
+
+    std::string ThrownType(const EXCEPTION_RECORD* r)
+    {
+        if (r->NumberParameters < 4) { return "(no type information)"; }
+        const auto base = static_cast<uintptr_t>(r->ExceptionInformation[3]);
+        const auto* ti = reinterpret_cast<const CxxThrowInfo*>(r->ExceptionInformation[2]);
+        if (!base || !ti || !mgs4e::mem::Readable(ti, sizeof(*ti)) || !ti->pCatchableTypeArray) { return "(no throw information)"; }
+        const auto* arr = reinterpret_cast<const CxxCatchableTypeArray*>(base + ti->pCatchableTypeArray);
+        if (!mgs4e::mem::Readable(arr, sizeof(*arr)) || arr->count <= 0) { return "(no catchable types)"; }
+        const auto* ct = reinterpret_cast<const CxxCatchableType*>(base + arr->types[0]);
+        if (!mgs4e::mem::Readable(ct, sizeof(*ct))) { return "(unreadable catchable type)"; }
+        const auto* td = reinterpret_cast<const CxxTypeDescriptor*>(base + ct->pType);
+        if (!mgs4e::mem::Readable(td, sizeof(*td) + 64)) { return "(unreadable type descriptor)"; }
+        return std::string(td->name, strnlen(td->name, 200));
+    }
+
+    LONG CALLBACK FaultLog(EXCEPTION_POINTERS* ex)
+    {
+        const DWORD code = ex && ex->ExceptionRecord ? ex->ExceptionRecord->ExceptionCode : 0;
+        if (code == kCxxException)
+        {
+            static std::atomic<int> thrown { 0 };
+            if (thrown.fetch_add(1) < 10)
+            {
+                std::string what;
+                if (ex->ExceptionRecord->NumberParameters >= 2)
+                {
+                    // std::exception's first member is its vtable, the second its message pointer.
+                    auto** obj = reinterpret_cast<char**>(ex->ExceptionRecord->ExceptionInformation[1]);
+                    if (obj && mgs4e::mem::Readable(obj, 16) && obj[1] && mgs4e::mem::Readable(obj[1], 1))
+                    {
+                        what = std::format(" -- \"{}\"", std::string(obj[1], strnlen(obj[1], 160)));
+                    }
+                }
+                spdlog::critical("PW throw: {}{} on thread {}; stack:{}",
+                    ThrownType(ex->ExceptionRecord), what, GetCurrentThreadId(),
+                    StackScan(static_cast<uintptr_t>(ex->ContextRecord ? ex->ContextRecord->Rsp : 0), 14));
+                spdlog::default_logger()->flush();
+            }
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION
+            && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW
+            && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_IN_PAGE_ERROR)
+        {
+            return EXCEPTION_CONTINUE_SEARCH;   // C++ throws and debugger noise are not crashes
+        }
+        static std::atomic<int> told { 0 };
+        if (told.fetch_add(1) >= 4) { return EXCEPTION_CONTINUE_SEARCH; }
+
+        void* at = ex->ExceptionRecord->ExceptionAddress;
+        HMODULE mod = nullptr;
+        char name[MAX_PATH] = "?";
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCSTR>(at), &mod);
+        if (mod) { GetModuleFileNameA(mod, name, MAX_PATH); }
+        const char* leaf = std::strrchr(name, '\\');
+        const uintptr_t off = mod ? reinterpret_cast<uintptr_t>(at) - reinterpret_cast<uintptr_t>(mod) : 0;
+        std::string what;
+        if (code == EXCEPTION_ACCESS_VIOLATION && ex->ExceptionRecord->NumberParameters >= 2)
+        {
+            what = std::format(" {} {:#x}", ex->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                ex->ExceptionRecord->ExceptionInformation[1]);
+        }
+        spdlog::critical("PW fault: {:#x} at {}+{:#x}{} on thread {} (game module {}).",
+            code, leaf ? leaf + 1 : name, off, what, GetCurrentThreadId(),
+            static_cast<const void*>(mgs4e::game::Module()));
+        spdlog::default_logger()->flush();
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // Passive last-resort reporters. None of them fired for the 2026-09-15 crash, which is itself
+    // the finding: that abort came from the GAME's runtime, not ours, because the exception unwound
+    // out of our hook into driver frames and was caught by the game's unhandled filter.
+    void OnTerminate()
+    {
+        std::string what = "(no active exception)";
+        if (const std::exception_ptr e = std::current_exception())
+        {
+            try { std::rethrow_exception(e); }
+            catch (const std::exception& ex) { what = std::format("{} -- {}", typeid(ex).name(), ex.what()); }
+            catch (...) { what = "(an exception that does not derive from std::exception)"; }
+        }
+        spdlog::critical("PW terminate: {} on thread {}.", what, GetCurrentThreadId());
+        spdlog::default_logger()->flush();
+        std::_Exit(3);
+    }
+
+    void OnBadParameter(const wchar_t* expr, const wchar_t* func, const wchar_t* file, unsigned line, uintptr_t)
+    {
+        const auto narrow = [](const wchar_t* w) -> std::string
+        {
+            if (!w) { return "?"; }
+            std::string o;
+            for (; *w; ++w) { o += (*w < 128) ? static_cast<char>(*w) : '?'; }
+            return o;
+        };
+        spdlog::critical("PW bad parameter: {} in {} ({}:{}) on thread {}.", narrow(expr), narrow(func), narrow(file), line, GetCurrentThreadId());
+        spdlog::default_logger()->flush();
+        std::_Exit(4);
+    }
+
+    void OnPureCall()
+    {
+        spdlog::critical("PW pure virtual call on thread {}.", GetCurrentThreadId());
+        spdlog::default_logger()->flush();
+        std::_Exit(5);
+    }
+
     void Install()
     {
+        AddVectoredExceptionHandler(1, FaultLog);
+        std::set_terminate(OnTerminate);
+        _set_invalid_parameter_handler(OnBadParameter);
+        _set_purecall_handler(OnPureCall);
+        spdlog::default_logger()->flush_on(spdlog::level::trace);
         if (DrawCensus::iYieldLockBeforePresent > 0) { ReadDisplayPeriod(); }
         if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
         InstallVBlankWaitHook();
