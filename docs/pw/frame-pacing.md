@@ -539,6 +539,41 @@ waitable swap chain: do not block inside something that holds a resource others 
 - **`GetThreadTimes` was doubted and turned out to be right.** `QueryThreadCycleTime` agreed with
   it. The cycle counter is still the better instrument, because it cannot be dismissed.
 
+### 8.y The start-up crash: solved with a debugger, 2026-09-16
+
+**Cause.** `UiBias`'s lock was taken from functions reached by Direct3D hooks, and those hooks are
+re-entered from inside calls we are already servicing. Two paths were caught: the **Steam overlay**
+draws from within the game's `Present` and sets shader resources, re-entering the census hook, which
+calls `UiBias::Active()`; and the runtime calls back during `Unmap`, re-entering `OnConstantUnmap`.
+
+On a plain `std::mutex`, that re-entry is **not a hang**. MSVC throws `std::system_error`
+("resource deadlock would occur"), which unwinds into overlay and driver frames that carry no C++
+handler, reaches the **game's own** unhandled exception filter at `+75D10`, and becomes
+`terminate` -> `abort` -> `__fastfail(FAST_FAIL_FATAL_APP_EXIT)` at `+9594BD`. A fast fail bypasses
+user-mode exception dispatch, so no handler of ours could ever see it and the log simply stopped.
+
+**Fix:** the bias lock is recursive, because re-entrancy is inherent to hooking; and `Active()` is
+lock-free, since "is anything biased" is one bit read from a hot hook. **Every lock in the main tree
+is a plain `std::mutex` again** — with nothing masking anything, the game starts cleanly three times
+out of three, where the same build crashed three times out of three before.
+
+**What cost two sessions, and why.** Symptoms moved whenever unrelated code changed, which looked
+like memory corruption but was only layout shifting when the overlay first drew. Ruled out by test,
+not by argument: MGSPatriotFix (crashes with and without), heap corruption (full page heap found
+nothing), our census and cache locks (owner records read zero at the throw), the display critical
+section features (compiled out, still crashed), memory pressure, and a same-name global collision
+(both are in anonymous namespaces).
+
+**The lesson: reach for a debugger first.** Every in-process instrument perturbed the layout and
+moved the fault; four attempts died that way. WinDbg named the culprit on the first run, because it
+can walk out of a safetyhook stub, which has no unwind data, and our stack scanners cannot.
+AddressSanitizer is **not** an option here: an injected ASI that imports its runtime fails to load
+with module-not-found.
+
+**How to do it again:** `cdb -p <pid> -cf script -logo out.txt`, script being `.sympath <bin\Lab\pdb>`,
+then `sxe -c ".echo ===CPP-THROW===;kv 30;gc" eh`, then `g`. Do **not** use `.symfix` or
+`.reload /f`; the symbol server download stalls past the crash.
+
 ### 8.x A probe left ungated is a regression, not a probe
 
 `SampleDisplayPeriod` was added to feed the tick rate test and called from the `Present` hook with

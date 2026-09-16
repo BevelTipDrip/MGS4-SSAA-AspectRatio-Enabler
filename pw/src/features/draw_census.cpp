@@ -332,14 +332,11 @@ namespace
         bool uiUpload = false;          // the last constant upload on this context was a UI one (the private module says)
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
-    // Recursive on purpose. These hooks sit on Direct3D entry points, and the runtime, the display
-    // driver and the Steam overlay all call back into them from inside a call we are already
-    // servicing: the driver creates a sampler while we are inside Present, and our Present hook is
-    // holding this. A plain std::mutex detects that as self-deadlock and THROWS std::system_error,
-    // which unwinds into driver frames that have no handler, reaches the game's unhandled filter
-    // and aborts the process. That is the start-up crash that went unexplained on 2026-09-15; it is
-    // latent and only surfaces when code layout changes the timing (docs/pw/frame-pacing.md).
-    std::recursive_mutex g_Mutex;
+    // Plain, deliberately. These are only ever taken around our own bookkeeping, never across a
+    // call that can re-enter us: the Direct3D descriptions are built before the lock. The re-entry
+    // that caused the 2026-09-15 start-up crash was in the bias module's lock, not here, and making
+    // these recursive only hid it (docs/pw/frame-pacing.md).
+    std::mutex g_Mutex;
     std::unordered_map<void*, ContextState> g_State;
     void STDMETHODCALLTYPE Hooked_PSSetSamplers(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11SamplerState* const* samplers);
     std::atomic<int> g_FramesToLog { 0 };
@@ -368,7 +365,7 @@ namespace
     std::atomic<DWORD> g_PresentThread { 0 };
     struct CallerStat { uint32_t calls = 0; int64_t ticks = 0; uint32_t maxArg = 0; };
     std::map<uintptr_t, CallerStat> g_MainSleepers, g_MainWaiters;   // under g_PacingMutex
-    std::recursive_mutex g_PacingMutex;
+    std::mutex g_PacingMutex;
     std::atomic<uint64_t> g_OtherThreadWaits { 0 };
     int64_t Ticks();
     double TicksToMs(int64_t t);
@@ -531,7 +528,7 @@ namespace
     // stack read, and resumed; one log block per hitch, a few per run.
     struct ThreadWait { DWORD tid = 0; std::atomic<uintptr_t> caller { 0 }; std::atomic<int64_t> since { 0 }; std::atomic<uint32_t> ms { 0 }; };
     thread_local ThreadWait* t_Wait = nullptr;
-    std::recursive_mutex g_WaitTableMutex;
+    std::mutex g_WaitTableMutex;
     std::vector<ThreadWait*> g_WaitTable;
     ThreadWait& MyWait()
     {
