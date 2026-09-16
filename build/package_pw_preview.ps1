@@ -1,5 +1,5 @@
-# Packages a Peace Walker preview zip for testers, from bin\Release: the plugin, the loader and a
-# commented settings file, no tool. The full release packager (package.ps1) is untouched; this
+# Packages a Peace Walker preview zip for testers, from bin\Release: the plugin, the loader, a
+# commented settings file and the Config Tool. The full release packager (package.ps1) is untouched; this
 # one has no version gate and no changelog gate, since previews are not releases.
 #
 #   MGSPWEnabler_preview_<date>[_<tag>].zip
@@ -8,6 +8,7 @@
 #     MGSPWEnabler.settings           the settings with comments (build\pw_preview\MGSPWEnabler.settings)
 #     mgspw\winmm.dll                 Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
 #     mgspw\scripts\MGSPWEnabler.asi  the Peace Walker plugin, Release build
+#     MGS4Enabler.exe                 the Config Tool; it detects the game from where it sits
 #
 # The loader is not in this repository. Pass -LoaderZip with the Ultimate-ASI-Loader_x64.zip
 # from https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases (or drop it in build\loader\).
@@ -24,6 +25,9 @@ $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
 
 $asiPw = Join-Path $root 'bin\Release\MGSPWEnabler.asi'
 if (-not (Test-Path $asiPw)) { throw "Missing $asiPw - build the Release configuration first." }
+
+$tool = Join-Path $root 'bin\Release\MGS4Enabler.exe'
+if (-not (Test-Path $tool)) { throw "Missing $tool - build the tool's Release configuration first." }
 
 # A Lab build must never go out, even to testers: it carries the research instrumentation.
 if (Select-String -Path $asiPw -Pattern 'LAB MODE: research instrumentation' -Quiet) {
@@ -54,6 +58,7 @@ Copy-Item $asiPw (Join-Path $stage 'mgspw\scripts\MGSPWEnabler.asi')
 Copy-Item (Join-Path $PSScriptRoot 'pw_preview\MGSPWEnabler.settings') (Join-Path $stage 'MGSPWEnabler.settings')
 Copy-Item (Join-Path $PSScriptRoot 'pw_preview\README.txt') (Join-Path $stage 'README.txt')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
+Copy-Item $tool (Join-Path $stage 'MGS4Enabler.exe')
 
 $name = 'MGSPWEnabler_preview_' + (Get-Date).ToString('yyyy-MM-dd')
 if ($Tag) { $name += "_$Tag" }
@@ -65,3 +70,4 @@ Remove-Item $loaderDir -Recurse -Force
 
 Write-Host "Packaged $zip"
 Write-Host "  MGSPWEnabler.asi $((Get-Item $asiPw).Length) bytes, loader $($loaderDll.Name) $loaderVersion"
+Write-Host "  MGS4Enabler.exe $((Get-Item $tool).Length) bytes"

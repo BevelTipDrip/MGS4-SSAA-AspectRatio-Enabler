@@ -70,6 +70,21 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_LightHooks =
             "Leaves the game's draws unhooked (only the resolve is hooked): the frame rate of a Release-like\n"
             "build with the rendering knobs still applied. No census or timing in this mode.";
+        constexpr const char* kHelp_BusyWaitFix =
+            "The game never waits: it spins while it should be idle, which costs about a whole processor "
+            "core and is what caused the stutter at 60 Hz.\n\n"
+            "Off leaves the game as it shipped. Render thread is the fix that matters and is the safest. "
+            "Render thread and ticker adds the frame timer. Everything also lets the window sleep between "
+            "messages, which is the only part that touches other programs, so turn it down a step if an "
+            "overlay misbehaves.";
+
+        constexpr const char* kHelp_StateObjectCache =
+            "The game asks the graphics card to build the same few hundred render settings every single "
+            "frame, when it only ever uses about forty of them. They never change once built, so this "
+            "hands back the one it asked for last time.\n\n"
+            "Saves roughly one frame's worth of processor work in twelve. Worth most on a slower "
+            "processor. Turn it off only if you are chasing a rendering problem.";
+
         constexpr const char* kHelp_FullscreenRefreshFix =
             "On (the normal state): exclusive Fullscreen asks for the display's current refresh rate. The game asks\n"
             "for 60 Hz whatever the display runs, which on a 120 Hz desktop dropped one frame a second. Off: the\n"
@@ -205,6 +220,11 @@ namespace mgs4e::tool::pw
                         F::Choice(G, K::Msaa, kHelp_Msaa, K::Msaa_4x, { K::Msaa_4x, K::Msaa_Off }),
                         F::Bool(G, K::AnisotropicFiltering, kHelp_Anisotropy, true),
                         F::Bool(G, K::GpuLocalTextures, kHelp_GpuLocalRelease, true),
+                    }},
+                    { "Performance", {
+                        F::Choice(G, K::BusyWaitFix, kHelp_BusyWaitFix, "Everything",
+                            { "Off", "Render thread", "Render thread and ticker", "Everything" }),
+                        F::Bool(G, K::StateObjectCache, kHelp_StateObjectCache, true),
                     }},
                 }},
                 { "Lab", {

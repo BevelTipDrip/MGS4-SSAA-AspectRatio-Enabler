@@ -49,7 +49,7 @@ Anisotropic Filtering = true
 ; of polling a flag with Sleep(0); 2 also sleeps the ticker's last sub-millisecond on a high
 ; resolution timer; 3 also parks the message pump on its queue. Cumulative, and ordered so that
 ; turning it down keeps the part that matters. Turn it down if another overlay misbehaves.
-Busy Wait Fix = 3
+Busy Wait Fix = Everything
 
 ; State Object Cache: the game asks the device to create the same handful of blend, depth-stencil,
 ; rasterizer and sampler state objects hundreds of times a frame, and a whole session only ever

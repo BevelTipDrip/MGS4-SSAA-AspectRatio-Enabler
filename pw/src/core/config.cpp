@@ -180,8 +180,21 @@ namespace mgspwe::config
                 }
                 Report(Graphics, StateObjectCache, StateCache::iLevel);
             }
-            Read(ini, Graphics, BusyWaitFix, BusyWait::iLevel);
-            Report(Graphics, BusyWaitFix, BusyWait::iLevel);
+            {
+                // The Config Tool writes words; a hand-edited file may hold a number. Accept both,
+                // and let an absent key keep the built-in default rather than forcing it off.
+                std::string level;
+                Read(ini, Graphics, BusyWaitFix, level);
+                if (!level.empty())
+                {
+                    if (_stricmp(level.c_str(), BusyWaitFix_Off) == 0) { BusyWait::iLevel = 0; }
+                    else if (_stricmp(level.c_str(), BusyWaitFix_Render) == 0) { BusyWait::iLevel = 1; }
+                    else if (_stricmp(level.c_str(), BusyWaitFix_Ticker) == 0) { BusyWait::iLevel = 2; }
+                    else if (_stricmp(level.c_str(), BusyWaitFix_All) == 0) { BusyWait::iLevel = 3; }
+                    else { BusyWait::iLevel = std::clamp(std::atoi(level.c_str()), 0, 3); }
+                }
+                Report(Graphics, BusyWaitFix, BusyWait::iLevel);
+            }
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Read(ini, Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
