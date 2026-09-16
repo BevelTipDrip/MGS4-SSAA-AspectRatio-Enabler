@@ -25,9 +25,26 @@ namespace
     struct VertexBias { UINT texW, texH; bool hasRect; float x0, y0, x1, y1; float dx, dy; };
     struct TranslationBias { bool any; float tx, ty; float dx, dy; };
 
-    std::mutex g_Mutex;
+    // Recursive by necessity. Every function guarded by this is reached from a Direct3D hook, and
+    // those hooks are re-entered from inside calls we are already servicing: the Steam overlay
+    // draws from within the game's Present, and the runtime and driver call back during Unmap.
+    // WinDbg caught both paths on 2026-09-16. On a plain std::mutex that re-entry is not a hang but
+    // a thrown std::system_error, which unwinds into overlay and driver frames carrying no handler,
+    // reaches the game's unhandled filter and aborts the process. That was the start-up crash that
+    // went unexplained for two sessions.
+    std::recursive_mutex g_Mutex;
     std::vector<VertexBias> g_Vertex;
     std::vector<TranslationBias> g_Translation;
+
+    // Active() is read from Direct3D hooks, and those hooks are re-entered by the Steam overlay,
+    // which draws from inside the game's Present. Taking g_Mutex there deadlocked against a lock
+    // this thread already held; on a plain std::mutex that is not a hang but a thrown
+    // std::system_error, which unwinds into the overlay's frames, finds no handler and aborts the
+    // process. That was the unexplained start-up crash of 2026-09-15, found with WinDbg on
+    // 2026-09-16. Whether anything is biased is one bit, so it is published as one, and the hot
+    // read needs no lock at all. Updated only under g_Mutex, where the lists change.
+    std::atomic<bool> g_AnyBias { false };
+    void PublishActive() { g_AnyBias.store(!g_Vertex.empty() || !g_Translation.empty(), std::memory_order_release); }
     std::atomic<uint64_t> g_AppliedVertex { 0 };
     std::atomic<uint64_t> g_AppliedTranslation { 0 };
     std::atomic<bool> g_GameplaySeen { false };
@@ -63,8 +80,8 @@ namespace UiBias
 {
     bool Active()
     {
-        std::lock_guard lock(g_Mutex);
-        return !g_Vertex.empty() || !g_Translation.empty();
+        // Deliberately lock-free: see g_AnyBias above.
+        return g_AnyBias.load(std::memory_order_acquire);
     }
 
     uint64_t AppliedVertex() { return g_AppliedVertex.load(); }
@@ -293,7 +310,7 @@ namespace UiBias
             std::string tex;
             in >> tex;
             std::lock_guard lock(g_Mutex);
-            if (tex == "clear") { g_Vertex.clear(); spdlog::info("PW live: vertex biases cleared."); return true; }
+            if (tex == "clear") { g_Vertex.clear(); PublishActive(); spdlog::info("PW live: vertex biases cleared."); return true; }
             VertexBias b {};
             if (sscanf_s(tex.c_str(), "%ux%u", &b.texW, &b.texH) != 2 || !(in >> b.dx >> b.dy))
             {
@@ -302,6 +319,7 @@ namespace UiBias
             }
             if (in >> b.x0 >> b.y0 >> b.x1 >> b.y1) { b.hasRect = true; }
             g_Vertex.push_back(b);
+            PublishActive();
             spdlog::info("PW live: vertex bias on texture {}x{}{} by ({}, {}); {} active.", b.texW, b.texH,
                 b.hasRect ? std::format(" rect ({},{})-({},{})", b.x0, b.y0, b.x1, b.y1) : std::string(""), b.dx, b.dy, g_Vertex.size());
             return true;
@@ -311,7 +329,7 @@ namespace UiBias
             std::string first;
             in >> first;
             std::lock_guard lock(g_Mutex);
-            if (first == "clear") { g_Translation.clear(); spdlog::info("PW live: translation biases cleared."); return true; }
+            if (first == "clear") { g_Translation.clear(); PublishActive(); spdlog::info("PW live: translation biases cleared."); return true; }
             TranslationBias b {};
             bool ok = false;
             if (first == "any") { b.any = true; ok = static_cast<bool>(in >> b.dx >> b.dy); }
@@ -321,6 +339,7 @@ namespace UiBias
             }
             if (!ok) { spdlog::warn("PW live: bad tbias '{}' (tbias <tx> <ty> <dx> <dy> | tbias any <dx> <dy> | tbias clear).", line); return true; }
             g_Translation.push_back(b);
+            PublishActive();
             if (b.any) { spdlog::info("PW live: translation bias on every UI draw by ({}, {}); {} active.", b.dx, b.dy, g_Translation.size()); }
             else { spdlog::info("PW live: translation bias on ({}, {}) by ({}, {}); {} active.", b.tx, b.ty, b.dx, b.dy, g_Translation.size()); }
             return true;
