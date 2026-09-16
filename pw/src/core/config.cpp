@@ -9,6 +9,7 @@
 #include "pw/settings_keys.hpp"
 
 #include "internal_size.hpp"
+#include "busy_wait.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "draw_census.hpp"
@@ -165,6 +166,8 @@ namespace mgspwe::config
                 else { Read(ini, Graphics, AnisotropicFiltering, InternalSize::iAnisotropy); }
                 Report(Graphics, AnisotropicFiltering, InternalSize::iAnisotropy);
             }
+            Read(ini, Graphics, BusyWaitFix, BusyWait::iLevel);
+            Report(Graphics, BusyWaitFix, BusyWait::iLevel);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Read(ini, Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);
@@ -219,8 +222,6 @@ namespace mgspwe::config
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
             Report(Graphics, AllowTearing, DrawCensus::bAllowTearing);
-            Read(ini, Graphics, BusyWaitFix, DrawCensus::iBusyWaitFix);
-            Report(Graphics, BusyWaitFix, DrawCensus::iBusyWaitFix);
             Read(ini, Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
             Report(Graphics, YieldLockBeforePresent, DrawCensus::iYieldLockBeforePresent);
             Read(ini, Graphics, VBlankOutsideLock, DrawCensus::bVBlankOutsideLock);

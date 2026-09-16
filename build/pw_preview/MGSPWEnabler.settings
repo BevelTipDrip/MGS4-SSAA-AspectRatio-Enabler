@@ -44,6 +44,13 @@ Anisotropic Filtering = true
 ; The game's full-size frame textures carry CPU write access and end up in system memory, so its
 ; per-frame copies into them cross the PCIe bus (about 5 ms each at 8K). On, they stay in video
 ; memory: 60 fps at 8K instead of 27. The game was never seen to write them from the CPU.
+; Busy Wait Fix: the game spins where it should wait, which costs about a full core and is what
+; the 60 Hz stutter was. 0 off; 1 the render thread waits on an event for the frame handoff instead
+; of polling a flag with Sleep(0); 2 also sleeps the ticker's last sub-millisecond on a high
+; resolution timer; 3 also parks the message pump on its queue. Cumulative, and ordered so that
+; turning it down keeps the part that matters. Turn it down if another overlay misbehaves.
+Busy Wait Fix = 3
+
 GPU Local Textures = true
 
 [Debugging]

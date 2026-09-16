@@ -32,7 +32,6 @@ namespace DrawCensus
     MGS4E_LAB_SWITCH(bool, bPresentNoWait, false);
     MGS4E_LAB_SWITCH(bool, bFreeLockDuringPresent, false);
     MGS4E_LAB_SWITCH(bool, bVBlankOutsideLock, false);
-    MGS4E_LAB_SWITCH(int, iBusyWaitFix, 0); // 0 off; 1 the render thread waits on an event for the frame handoff instead of spinning on Sleep(0); 2 also sleeps the ticker's last sub-millisecond on a high resolution timer; 3 also parks the message pump on its queue
     MGS4E_LAB_SWITCH(int, iYieldLockBeforePresent, 0); // ms of margin; 0 off. The display lock is released until this long before the flip is due and then taken back, so the game thread gets the idle part of the wait while Present keeps doing the pacing // release the display lock, wait for the display's vertical blank with no Direct3D call in flight, take the lock back, then present: the wait moves out of the lock without the two threads meeting inside the driver // the render loop enters the game's display critical section at +17C1D, presents at +17CAF inside it and leaves at +17CC9, so the lock is held across the whole vsync wait and the game thread blocks on it; released around the present instead
     MGS4E_LAB_SWITCH(bool, bLightHooks, false);   // hook only the resolve on the contexts: no per-draw cost, no census, no timing  // write every shader's bytecode to C:\mgspf_tools\pw\shaders
 

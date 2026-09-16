@@ -84,6 +84,7 @@
     <ClCompile Include="src\features\probe.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\draw_census.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\internal_size.cpp" />
+    <ClCompile Include="src\features\busy_wait.cpp" />
     <ClCompile Include="src\features\render_policy.cpp" />
     <ClCompile Include="src\features\render_hooks.cpp" Condition="'$(Configuration)'!='Lab'" />
     <ClCompile Include="src\features\post_scale.cpp" Condition="'$(Configuration)'=='Lab'" />
@@ -128,6 +129,7 @@
     <ClInclude Include="src\features\draw_census.hpp" />
     <ClInclude Include="src\features\ui_bias.hpp" />
     <ClInclude Include="src\features\canvas.hpp" />
+    <ClInclude Include="src\features\busy_wait.hpp" />
     <ClInclude Include="src\features\render_policy.hpp" />
     <ClInclude Include="src\features\render_hooks.hpp" />
     <ClInclude Include="src\features\internal_size.hpp" />

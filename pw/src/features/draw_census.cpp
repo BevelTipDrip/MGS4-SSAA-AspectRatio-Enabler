@@ -16,6 +16,7 @@
 #include "internal_size.hpp"
 #include "render_policy.hpp"
 #include "post_scale.hpp"
+#include "busy_wait.hpp"
 
 #include <unordered_set>
 #include <map>
@@ -499,165 +500,6 @@ namespace
     uint32_t g_Hitches = 0;
     int64_t Ticks() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
     double TicksToMs(int64_t t) { static const double f = [] { LARGE_INTEGER q; QueryPerformanceFrequency(&q); return 1000.0 / static_cast<double>(q.QuadPart); }(); return static_cast<double>(t) * f; }
-    // ---- the busy waits ------------------------------------------------------------------------
-    // Peace Walker never blocks. Three loops spin where they should wait:
-    //
-    //   render thread  +17BD0  reads the handoff byte at display+0x32c0 and, when no frame is
-    //                          ready, calls Sleep(0) and reads it again. Measured at 47% of a core.
-    //   ticker         +76020  compares elapsed against the period and, when the tick is not due,
-    //                          raises the timer resolution, sleeps the WHOLE milliseconds left,
-    //                          drops the resolution and loops. The last sub-millisecond truncates
-    //                          to Sleep(0), and timeBeginPeriod/timeEndPeriod, which take a
-    //                          system-global lock, run on every iteration.
-    //   message pump   +77610  PeekMessageA then Sleep(1). It does at least sleep, so it is the
-    //                          least costly of the three.
-    //
-    // MGSHDFix fixes the same class of defect in MGS2 and MGS3 by shortening the spins: a high
-    // resolution waitable timer for the frame wait leaving a 1 ms margin for the game's own loop to
-    // spin out, and MsgWaitForMultipleObjects for the pump. We follow that for the ticker.
-    //
-    // For the render thread we deliberately do not. It is not waiting on a clock, it is waiting on
-    // the game thread, and Peace Walker publishes the frame with a single store at +17683. So there
-    // is an exact point to signal from, and a blind sleep there would only delay the frame. We wait
-    // on an event instead. Every wait carries a short timeout, so a signal we somehow miss costs
-    // one timeout and the loop then behaves exactly as it does today; it cannot hang.
-    //
-    // Neither hook redirects execution. The render thread's Sleep(0) is left to run after our wait,
-    // where it is a cheap yield, and the ticker's own sleep is neutralised by setting its elapsed
-    // register equal to its period register so the length it computes comes out zero. That register
-    // is recomputed from the clock at the top of every iteration, so clobbering it is safe.
-    constexpr uintptr_t kFrameReadyStore  = 0x1768A;   // immediately after mov byte [rbx+0x32c0], 1
-    constexpr uintptr_t kRenderSpin       = 0x17CCF;   // xor ecx, ecx ; call Sleep
-    constexpr uintptr_t kTickerSleep      = 0x76051;   // mov ecx, 1 ; call timeBeginPeriod
-    constexpr DWORD kHandoffTimeoutMs = 2;
-    constexpr double kTickSpinMarginMs = 1.0;          // left for the game's loop to spin out
-    constexpr double kTickMaxWaitMs = 50.0;            // a bad clock read must not park the game
-
-    std::atomic<int> g_BusyWait { 0 };
-    HANDLE g_FrameReady = nullptr;
-    HANDLE g_BusyTimer = nullptr;
-    safetyhook::MidHook g_HandoffSignal, g_RenderSpin, g_TickerSpin;
-    std::atomic<uint64_t> g_FrameWaits { 0 }, g_FrameWaitTimeouts { 0 }, g_FrameWaitTicks { 0 };
-    std::atomic<uint64_t> g_TickSleeps { 0 }, g_TickTicks { 0 };
-    std::atomic<uint64_t> g_PumpWaits { 0 };
-    safetyhook::InlineHook g_PeekMessage;
-    using PeekMessageFn = BOOL(WINAPI*)(LPMSG, HWND, UINT, UINT, UINT);
-
-    // The pump calls PeekMessageA and, with nothing queued, Sleep(1). A Sleep cannot be woken by
-    // input, so the window stays unresponsive for the rest of the millisecond and the thread wakes
-    // whether or not anything arrived. MsgWaitForMultipleObjects with QS_ALLINPUT returns the
-    // moment a message lands and otherwise costs the same millisecond. This is MGSHDFix's fix for
-    // MGS2 and MGS3 verbatim, including the 1 ms timeout.
-    BOOL WINAPI Hooked_PeekMessageA(LPMSG msg, HWND wnd, UINT first, UINT last, UINT remove)
-    {
-        const BOOL got = g_PeekMessage.call<BOOL>(msg, wnd, first, last, remove);
-        if (!got && g_BusyWait.load(std::memory_order_relaxed) >= 3)
-        {
-            MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
-            g_PumpWaits.fetch_add(1);
-        }
-        return got;
-    }
-    std::atomic<int64_t> g_BusyReport { 0 };
-
-    void BusyWaitSleep(double ms)
-    {
-        if (ms <= 0 || !g_BusyTimer) { return; }
-        LARGE_INTEGER due {};
-        due.QuadPart = -static_cast<LONGLONG>(ms * 10000.0);
-        if (SetWaitableTimer(g_BusyTimer, &due, 0, nullptr, nullptr, FALSE))
-        {
-            WaitForSingleObject(g_BusyTimer, static_cast<DWORD>(ms) + 2);
-        }
-    }
-
-    void ReportBusyWait()
-    {
-        const int64_t now = Ticks();
-        int64_t last = g_BusyReport.load();
-        if (!last) { g_BusyReport.store(now); return; }
-        if (TicksToMs(now - last) < 5000.0) { return; }
-        if (!g_BusyReport.compare_exchange_strong(last, now)) { return; }
-        const uint64_t w = g_FrameWaits.exchange(0), to = g_FrameWaitTimeouts.exchange(0), wt = g_FrameWaitTicks.exchange(0);
-        const uint64_t s = g_TickSleeps.exchange(0), st = g_TickTicks.exchange(0);
-        spdlog::info("PW busy wait: level {}; handoff waits {} ({:.2f} ms each, {} timed out), ticker sleeps {} ({:.2f} ms each), pump waits {}.",
-            g_BusyWait.load(), w, w ? TicksToMs(wt) / w : 0.0, to, s, s ? TicksToMs(st) / s : 0.0, g_PumpWaits.exchange(0));
-    }
-
-    void InstallBusyWaitHooks()
-    {
-        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-        const auto* store = reinterpret_cast<const uint8_t*>(base + kFrameReadyStore - 7);
-        const auto* spin = reinterpret_cast<const uint8_t*>(base + kRenderSpin);
-        const auto* tick = reinterpret_cast<const uint8_t*>(base + kTickerSleep);
-        // mov byte [rbx+0x32c0], 1 / xor ecx, ecx ; call [rip+x] / mov ecx, 1 ; call [rip+x]
-        if (!(store[0] == 0xC6 && store[1] == 0x83 && store[6] == 0x01
-              && spin[0] == 0x33 && spin[1] == 0xC9 && spin[2] == 0xFF
-              && tick[0] == 0xB9 && tick[1] == 0x01 && tick[5] == 0xFF))
-        {
-            spdlog::warn("PW busy wait: the sites +{:X}/+{:X}/+{:X} do not look as expected; not hooked.", kFrameReadyStore, kRenderSpin, kTickerSleep);
-            return;
-        }
-
-        g_FrameReady = CreateEventW(nullptr, FALSE, FALSE, nullptr);   // auto-reset
-        g_BusyTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-        if (!g_FrameReady)
-        {
-            spdlog::warn("PW busy wait: no event could be created; the render thread keeps spinning.");
-            return;
-        }
-
-        // The game thread has just published the frame: wake the render thread.
-        g_HandoffSignal = safetyhook::create_mid(base + kFrameReadyStore, [](SafetyHookContext&)
-        {
-            if (g_BusyWait.load(std::memory_order_relaxed) >= 1) { SetEvent(g_FrameReady); }
-        });
-
-        // The render thread has no frame: wait for one instead of spinning on Sleep(0).
-        g_RenderSpin = safetyhook::create_mid(base + kRenderSpin, [](SafetyHookContext&)
-        {
-            if (g_BusyWait.load(std::memory_order_relaxed) < 1) { return; }
-            const int64_t t0 = Ticks();
-            const DWORD r = WaitForSingleObject(g_FrameReady, kHandoffTimeoutMs);
-            g_FrameWaitTicks.fetch_add(static_cast<uint64_t>(Ticks() - t0));
-            g_FrameWaits.fetch_add(1);
-            if (r == WAIT_TIMEOUT) { g_FrameWaitTimeouts.fetch_add(1); }
-            ReportBusyWait();
-        });
-
-        // The tick is not due: sleep the time left on a high resolution timer, less a margin, and
-        // neutralise the game's own sleep by telling it no time remains.
-        g_TickerSpin = safetyhook::create_mid(base + kTickerSleep, [](SafetyHookContext& ctx)
-        {
-            if (g_BusyWait.load(std::memory_order_relaxed) < 2 || !g_BusyTimer) { return; }
-            const double remainingMs = (ctx.xmm7.f64[0] - ctx.xmm6.f64[0]) * 1000.0;
-            if (!std::isfinite(remainingMs) || remainingMs <= kTickSpinMarginMs) { return; }
-            const int64_t t0 = Ticks();
-            BusyWaitSleep(std::min(remainingMs - kTickSpinMarginMs, kTickMaxWaitMs));
-            g_TickTicks.fetch_add(static_cast<uint64_t>(Ticks() - t0));
-            g_TickSleeps.fetch_add(1);
-            ctx.xmm6.f64[0] = ctx.xmm7.f64[0];   // its own Sleep now computes zero
-        });
-
-        // The pump lives in user32, so the hook goes there rather than on an import: the game
-        // imports PeekMessageA, but so do the overlays, and only the level gate decides who waits.
-        if (const HMODULE user32 = GetModuleHandleW(L"user32.dll"))
-        {
-            if (const auto peek = reinterpret_cast<PeekMessageFn>(GetProcAddress(user32, "PeekMessageA")))
-            {
-                g_PeekMessage = safetyhook::create_inline(reinterpret_cast<void*>(peek), reinterpret_cast<void*>(Hooked_PeekMessageA));
-            }
-        }
-        if (!g_PeekMessage) { spdlog::warn("PW busy wait: PeekMessageA could not be hooked; the message pump keeps polling."); }
-
-        g_BusyWait.store(DrawCensus::iBusyWaitFix);
-        spdlog::info("PW busy wait: level {}; handoff signal +{:X} {}, render spin +{:X} {}, ticker spin +{:X} {}; {} timer.",
-            DrawCensus::iBusyWaitFix, kFrameReadyStore, g_HandoffSignal ? "hooked" : "FAILED",
-            kRenderSpin, g_RenderSpin ? "hooked" : "FAILED", kTickerSleep, g_TickerSpin ? "hooked" : "FAILED",
-            g_BusyTimer ? "high resolution" : "no");
-        spdlog::info("PW busy wait: message pump {}.", g_PeekMessage ? "hooked at PeekMessageA" : "NOT hooked");
-    }
-
     // ---- frame pacing: the game's waits -----------------------------------------------------
     using SleepFn = void(WINAPI*)(DWORD);
     using WaitFn = DWORD(WINAPI*)(HANDLE, DWORD);
@@ -3037,13 +2879,12 @@ namespace
             // so both behaviours can be compared in one spot in one session.
             int level = 0;
             in >> level;
-            if (!g_RenderSpin) { spdlog::warn("PW busy wait: the spin sites are not hooked (Busy Wait Fix must be above 0 at start-up)."); }
-            else if (level >= 3 && !g_PeekMessage) { spdlog::warn("PW busy wait: level 3 asked for, but PeekMessageA is not hooked; the pump keeps polling."); }
+            if (!BusyWait::Installed()) { spdlog::warn("PW busy wait: the spin sites are not hooked (Busy Wait Fix must be above 0 at start-up)."); }
             else
             {
-                g_BusyWait.store(std::max(0, std::min(3, level)));
-                if (g_BusyWait.load() >= 1) { SetEvent(g_FrameReady); }   // never leave the loop parked on the old behaviour
-                spdlog::info("PW busy wait: level {} (command).", g_BusyWait.load());
+                if (level >= 3 && !BusyWait::PumpHooked()) { spdlog::warn("PW busy wait: level 3 asked for, but PeekMessageA is not hooked; the pump keeps polling."); }
+                BusyWait::SetLevel(level);
+                spdlog::info("PW busy wait: level {} (command).", std::max(0, std::min(3, level)));
             }
         }
         else if (cmd == "tick")
@@ -3163,7 +3004,6 @@ namespace DrawCensus
     void Install()
     {
         if (DrawCensus::iYieldLockBeforePresent > 0) { ReadDisplayPeriod(); }
-        if (DrawCensus::iBusyWaitFix > 0) { InstallBusyWaitHooks(); }
         if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
         InstallVBlankWaitHook();
         InstallHandoffWait();
