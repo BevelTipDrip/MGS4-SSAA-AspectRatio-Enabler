@@ -1580,10 +1580,14 @@ namespace
     {
         if (g_FramesToLog.load() > 0)
         {
+        // Described BEFORE the lock. DescribeTarget and DescribeTexture call into Direct3D,
+        // including Release, and the runtime can call straight back into these hooks; holding our
+        // own lock across that is a self-deadlock waiting to happen. Found while hunting the
+        // 2026-09-15 start-up crash. It is not that crash, but it is the same class of fault.
+            std::string described = (count > 0 && views) ? DescribeTarget(views[0]) : std::string("none");
+            described += depth ? " +depth" : "";
             std::lock_guard lock(g_Mutex);
-            ContextState& st = g_State[self];
-            st.target = (count > 0 && views) ? DescribeTarget(views[0]) : std::string("none");
-            st.target += depth ? " +depth" : "";
+            g_State[self].target = std::move(described);
         }
         Original<decltype(&Hooked_OMSetRenderTargets)>(self, kCtxOMSetRenderTargets)(self, count, views, depth);
     }
@@ -1629,9 +1633,15 @@ namespace
         }
         if (start == 0 && count > 0 && views && (g_FramesToLog.load() > 0 || UiBias::Active()))
         {
+        // Described BEFORE the lock. DescribeTarget and DescribeTexture call into Direct3D,
+        // including Release, and the runtime can call straight back into these hooks; holding our
+        // own lock across that is a self-deadlock waiting to happen. Found while hunting the
+        // 2026-09-15 start-up crash. It is not that crash, but it is the same class of fault.
+            std::string described = DescribeTexture(views[0]);
+            const std::string token = "SRV0=" + described.substr(0, described.find(' '));
             std::lock_guard lock(g_Mutex);
-            g_State[self].texture = DescribeTexture(views[0]);
-            Trace(self, "SRV0=" + g_State[self].texture.substr(0, g_State[self].texture.find(' ')));
+            g_State[self].texture = std::move(described);
+            Trace(self, token);
         }
         Original<decltype(&Hooked_PSSetShaderResources)>(self, kCtxPSSetShaderResources)(self, start, count, views);
     }
@@ -1781,7 +1791,16 @@ namespace
 
     void STDMETHODCALLTYPE Hooked_CSSetShaderResources(ID3D11DeviceContext* self, UINT start, UINT count, ID3D11ShaderResourceView* const* views)
     {
-        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0) { std::lock_guard lock(g_Mutex); g_State[self].csTexture = DescribeTexture(views[0]); }
+        if (start == 0 && count > 0 && views && g_FramesToLog.load() > 0)
+        {
+        // Described BEFORE the lock. DescribeTarget and DescribeTexture call into Direct3D,
+        // including Release, and the runtime can call straight back into these hooks; holding our
+        // own lock across that is a self-deadlock waiting to happen. Found while hunting the
+        // 2026-09-15 start-up crash. It is not that crash, but it is the same class of fault.
+            std::string described = DescribeTexture(views[0]);
+            std::lock_guard lock(g_Mutex);
+            g_State[self].csTexture = std::move(described);
+        }
         Original<decltype(&Hooked_CSSetShaderResources)>(self, kCtxCSSetShaderResources)(self, start, count, views);
     }
 
