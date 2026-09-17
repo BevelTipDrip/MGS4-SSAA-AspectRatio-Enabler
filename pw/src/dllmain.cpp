@@ -11,6 +11,7 @@
 #include "draw_census.hpp"
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "file_prefetch.hpp"
 #include "probe.hpp"
 #include "render_hooks.hpp"
 
@@ -49,6 +50,7 @@ namespace
             // The stutter fix, and the one feature here that is not about what the picture looks
             // like. It ships in both builds: the Lab census only adds a live switch for it.
             BusyWait::Install();
+            FilePrefetch::Install();
 
 #if MGS4E_LAB_BUILD
             // A Lab build always runs its research features; their keys (from the user's settings

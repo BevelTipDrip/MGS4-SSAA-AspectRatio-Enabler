@@ -289,7 +289,43 @@ namespace
     // CResource::Map from the game's UI vertex upload, 2026-09-12), which a vtable swap cannot
     // do since the original function runs untouched. A hooked method finds its set by the
     // vtable of the context it was called on and calls the original entry from there.
-    constexpr size_t kSlotCount = 80;
+    // Must cover the HIGHEST slot index hooked below, not the count of slots we happen to use.
+    // It was 80 while kCtxFlush (111) and kCtxFinishCommandList (114) were being stored, so every
+    // device creation wrote two vtable pointers 31 and 34 slots past the end of this array, into
+    // whatever globals the linker had placed after it. That is the memory corruption behind two
+    // sessions of moving symptoms: a mutex reporting an owner nobody set, a canvas reporting a
+    // size nobody computed, and faults that jumped whenever unrelated code changed the layout.
+    // Found 2026-09-16 with a data breakpoint on the globals it was landing on.
+    constexpr size_t kSlotCount = 128;
+
+    // Every context slot must fit; a new one above kSlotCount would corrupt memory silently.
+    static_assert(kCtxVSSetConstantBuffers < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetShaderResources < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetSamplers < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxVSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawIndexed < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDraw < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxMap < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxUnmap < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawIndexedInstanced < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawInstanced < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxIASetPrimitiveTopology < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxOMSetRenderTargets < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxRSSetViewports < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxRSSetScissorRects < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxUpdateSubresource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDispatch < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDispatchIndirect < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCopySubresourceRegion < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCopyResource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxResolveSubresource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxExecuteCommandList < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxFlush < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxFinishCommandList < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetShaderResources < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetUnorderedAccessViews < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
     struct ContextHooks
     {
         void** vtable = nullptr;
@@ -370,8 +406,62 @@ namespace
     int64_t Ticks();
     double TicksToMs(int64_t t);
     void* PatchImport(const char* dll, const char* name, void* replacement);
+    void InstallFileHooks();
     void LogThreadCpu();
     void InstallAlertHooks();
+    // ---- synchronous file reads ------------------------------------------------------------
+    using ReadFileFn = BOOL(WINAPI*)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+    ReadFileFn g_RealReadFile = nullptr;
+    std::atomic<uint32_t> g_Reads { 0 };
+    std::atomic<uint64_t> g_ReadTicks { 0 }, g_ReadBytes { 0 };
+    std::atomic<uint64_t> g_ReadWorstTicks { 0 };
+    std::mutex g_ReadMutex;
+    std::string g_ReadWorstFile;
+
+    std::string FileOf(HANDLE h)
+    {
+        char buf[MAX_PATH] { };
+        const DWORD n = GetFinalPathNameByHandleA(h, buf, MAX_PATH, FILE_NAME_NORMALIZED | VOLUME_NAME_NONE);
+        if (!n || n >= MAX_PATH) { return "?"; }
+        const char* leaf = std::strrchr(buf, '\\');
+        return leaf ? leaf + 1 : buf;
+    }
+
+    BOOL WINAPI Hooked_ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, LPDWORD read, LPOVERLAPPED ov)
+    {
+        const int64_t t0 = Ticks();
+        const BOOL r = g_RealReadFile(file, buffer, bytes, read, ov);
+        // Everything below this line clobbers the thread's last error, and callers legitimately
+        // read it after ReadFile: a pending overlapped read reports failure plus ERROR_IO_PENDING,
+        // and a short read is distinguished the same way. Losing it made resource loads fail
+        // intermittently and broke a fullscreen effect (2026-09-16). Save it first, restore it last.
+        const DWORD lastError = GetLastError();
+        const int64_t dt = Ticks() - t0;
+        g_Reads.fetch_add(1);
+        g_ReadTicks.fetch_add(static_cast<uint64_t>(dt));
+        g_ReadBytes.fetch_add(bytes);
+        uint64_t worst = g_ReadWorstTicks.load();
+        if (static_cast<uint64_t>(dt) > worst && g_ReadWorstTicks.compare_exchange_strong(worst, static_cast<uint64_t>(dt)))
+        {
+            // Only for a read that actually cost something: naming the file is itself a file call.
+            if (TicksToMs(dt) > 1.0)
+            {
+                std::string name = FileOf(file);
+                std::lock_guard lock(g_ReadMutex);
+                g_ReadWorstFile = std::move(name);
+            }
+        }
+        SetLastError(lastError);
+        return r;
+    }
+
+    void InstallFileHooks()
+    {
+        g_RealReadFile = reinterpret_cast<ReadFileFn>(PatchImport("KERNEL32.dll", "ReadFile", reinterpret_cast<void*>(&Hooked_ReadFile)));
+        spdlog::info("PW file: ReadFile import hook {} (synchronous reads on the game thread are the suspected source of the audio spikes).",
+            g_RealReadFile ? "ok" : "FAILED");
+    }
+
     // ---- the game's 60 Hz ticker ------------------------------------------------------------
     // Thread +75FD0 (started at +775B9): QPC start; loop { elapsed = (QPC - start) / freq; while
     // period > elapsed: timeBeginPeriod(1), Sleep((period - elapsed) * 1000), timeEndPeriod(1);
@@ -2220,6 +2310,17 @@ namespace
                         const uint64_t w = g_VBlankWaits.load();
                         spdlog::info("PW pacing:   vblank ticker: intervals long (>1.5 vblank) {}, short (<0.5) {}; wait per tick mean {:.2f} ms, max {:.2f} ms.", g_VBlankLong.exchange(0), g_VBlankShort.exchange(0), w ? TicksToMs(g_VBlankWaitTicks.exchange(0)) / w : 0.0, TicksToMs(g_VBlankWaitMax.exchange(0)));
                     }
+                    if (g_RealReadFile)
+                    {
+                        const uint32_t n = g_Reads.exchange(0);
+                        const double ms = TicksToMs(static_cast<int64_t>(g_ReadTicks.exchange(0)));
+                        const double worst = TicksToMs(static_cast<int64_t>(g_ReadWorstTicks.exchange(0)));
+                        const double mb = static_cast<double>(g_ReadBytes.exchange(0)) / (1024.0 * 1024.0);
+                        std::string file;
+                        { std::lock_guard lock(g_ReadMutex); file.swap(g_ReadWorstFile); }
+                        spdlog::info("PW file: {} read(s) in this window costing {:.1f} ms for {:.2f} MB; longest single read {:.2f} ms{}{}.",
+                            n, ms, mb, worst, file.empty() ? "" : " from ", file);
+                    }
                     spdlog::info("PW pacing:   sleeps:{}", CallerTable(g_MainSleepers, g_Pacing.frames));
                     spdlog::info("PW pacing:   waits:{}", CallerTable(g_MainWaiters, g_Pacing.frames));
                     g_Pacing = PacingWindow {}; g_Pacing.start = now;
@@ -3072,6 +3173,7 @@ namespace DrawCensus
         spdlog::default_logger()->flush_on(spdlog::level::trace);
         if (DrawCensus::iYieldLockBeforePresent > 0) { ReadDisplayPeriod(); }
         if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
+        if (DrawCensus::bPacingLog || DrawCensus::bVBlankWaitLog) { InstallFileHooks(); }
         InstallVBlankWaitHook();
         InstallHandoffWait();
         InstallGovernor();

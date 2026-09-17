@@ -10,6 +10,7 @@
 
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "file_prefetch.hpp"
 #include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
@@ -181,6 +182,18 @@ namespace mgspwe::config
                 Report(Graphics, StateObjectCache, StateCache::iLevel);
             }
             {
+                std::string mode;
+                Read(ini, Graphics, AudioPrefetch, mode);
+                if (!mode.empty())
+                {
+                    if (_stricmp(mode.c_str(), AudioPrefetch_Off) == 0) { FilePrefetch::iMode = 0; }
+                    else if (_stricmp(mode.c_str(), AudioPrefetch_OnOpen) == 0) { FilePrefetch::iMode = 1; }
+                    else if (_stricmp(mode.c_str(), AudioPrefetch_All) == 0) { FilePrefetch::iMode = 2; }
+                    else { FilePrefetch::iMode = std::clamp(std::atoi(mode.c_str()), 0, 2); }
+                }
+                Report(Graphics, AudioPrefetch, FilePrefetch::iMode);
+            }
+            {
                 // The Config Tool writes words; a hand-edited file may hold a number. Accept both,
                 // and let an absent key keep the built-in default rather than forcing it off.
                 std::string level;
@@ -239,6 +252,8 @@ namespace mgspwe::config
                 DrawCensus::iFramePacing = (_stricmp(pacing.c_str(), "Display") == 0) ? 1 : (_stricmp(pacing.c_str(), "VBlank") == 0) ? 2 : 0;
                 Report(Graphics, FramePacing, DrawCensus::iFramePacing == 1 ? "Display" : DrawCensus::iFramePacing == 2 ? "VBlank" : "Game");
             }
+            Read(ini, Graphics, GpuLocalMinWidth, InternalSize::iGpuLocalMinWidth);
+            Report(Graphics, GpuLocalMinWidth, InternalSize::iGpuLocalMinWidth);
             Read(ini, Graphics, PresentSync, DrawCensus::iPresentSync);
             Report(Graphics, PresentSync, DrawCensus::iPresentSync);
             Read(ini, Graphics, AllowTearing, DrawCensus::bAllowTearing);
