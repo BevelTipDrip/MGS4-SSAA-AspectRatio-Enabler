@@ -95,7 +95,11 @@ namespace
         DWORD disposition, DWORD flags, HANDLE templ)
     {
         const HANDLE h = g_RealCreateFileW(name, access, share, sa, disposition, flags, templ);
+        // CreateFile reports ERROR_ALREADY_EXISTS through the last error even when it succeeds, so
+        // queuing must not be allowed to overwrite it.
+        const DWORD lastError = GetLastError();
         if (FilePrefetch::iMode >= 1 && h != INVALID_HANDLE_VALUE && name && WorthWarming(name)) { Queue(name); }
+        SetLastError(lastError);
         return h;
     }
 
@@ -103,6 +107,7 @@ namespace
         DWORD disposition, DWORD flags, HANDLE templ)
     {
         const HANDLE h = g_RealCreateFileA(name, access, share, sa, disposition, flags, templ);
+        const DWORD lastError = GetLastError();
         if (FilePrefetch::iMode >= 1 && h != INVALID_HANDLE_VALUE && name)
         {
             const int n = MultiByteToWideChar(CP_ACP, 0, name, -1, nullptr, 0);
@@ -113,6 +118,7 @@ namespace
                 if (WorthWarming(wide)) { Queue(std::move(wide)); }
             }
         }
+        SetLastError(lastError);
         return h;
     }
 

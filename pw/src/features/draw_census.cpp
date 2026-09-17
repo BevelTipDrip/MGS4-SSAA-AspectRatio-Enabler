@@ -395,6 +395,11 @@ namespace
     {
         const int64_t t0 = Ticks();
         const BOOL r = g_RealReadFile(file, buffer, bytes, read, ov);
+        // Everything below this line clobbers the thread's last error, and callers legitimately
+        // read it after ReadFile: a pending overlapped read reports failure plus ERROR_IO_PENDING,
+        // and a short read is distinguished the same way. Losing it made resource loads fail
+        // intermittently and broke a fullscreen effect (2026-09-16). Save it first, restore it last.
+        const DWORD lastError = GetLastError();
         const int64_t dt = Ticks() - t0;
         g_Reads.fetch_add(1);
         g_ReadTicks.fetch_add(static_cast<uint64_t>(dt));
@@ -410,6 +415,7 @@ namespace
                 g_ReadWorstFile = std::move(name);
             }
         }
+        SetLastError(lastError);
         return r;
     }
 
