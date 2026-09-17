@@ -370,8 +370,56 @@ namespace
     int64_t Ticks();
     double TicksToMs(int64_t t);
     void* PatchImport(const char* dll, const char* name, void* replacement);
+    void InstallFileHooks();
     void LogThreadCpu();
     void InstallAlertHooks();
+    // ---- synchronous file reads ------------------------------------------------------------
+    using ReadFileFn = BOOL(WINAPI*)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+    ReadFileFn g_RealReadFile = nullptr;
+    std::atomic<uint32_t> g_Reads { 0 };
+    std::atomic<uint64_t> g_ReadTicks { 0 }, g_ReadBytes { 0 };
+    std::atomic<uint64_t> g_ReadWorstTicks { 0 };
+    std::mutex g_ReadMutex;
+    std::string g_ReadWorstFile;
+
+    std::string FileOf(HANDLE h)
+    {
+        char buf[MAX_PATH] { };
+        const DWORD n = GetFinalPathNameByHandleA(h, buf, MAX_PATH, FILE_NAME_NORMALIZED | VOLUME_NAME_NONE);
+        if (!n || n >= MAX_PATH) { return "?"; }
+        const char* leaf = std::strrchr(buf, '\\');
+        return leaf ? leaf + 1 : buf;
+    }
+
+    BOOL WINAPI Hooked_ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, LPDWORD read, LPOVERLAPPED ov)
+    {
+        const int64_t t0 = Ticks();
+        const BOOL r = g_RealReadFile(file, buffer, bytes, read, ov);
+        const int64_t dt = Ticks() - t0;
+        g_Reads.fetch_add(1);
+        g_ReadTicks.fetch_add(static_cast<uint64_t>(dt));
+        g_ReadBytes.fetch_add(bytes);
+        uint64_t worst = g_ReadWorstTicks.load();
+        if (static_cast<uint64_t>(dt) > worst && g_ReadWorstTicks.compare_exchange_strong(worst, static_cast<uint64_t>(dt)))
+        {
+            // Only for a read that actually cost something: naming the file is itself a file call.
+            if (TicksToMs(dt) > 1.0)
+            {
+                std::string name = FileOf(file);
+                std::lock_guard lock(g_ReadMutex);
+                g_ReadWorstFile = std::move(name);
+            }
+        }
+        return r;
+    }
+
+    void InstallFileHooks()
+    {
+        g_RealReadFile = reinterpret_cast<ReadFileFn>(PatchImport("KERNEL32.dll", "ReadFile", reinterpret_cast<void*>(&Hooked_ReadFile)));
+        spdlog::info("PW file: ReadFile import hook {} (synchronous reads on the game thread are the suspected source of the audio spikes).",
+            g_RealReadFile ? "ok" : "FAILED");
+    }
+
     // ---- the game's 60 Hz ticker ------------------------------------------------------------
     // Thread +75FD0 (started at +775B9): QPC start; loop { elapsed = (QPC - start) / freq; while
     // period > elapsed: timeBeginPeriod(1), Sleep((period - elapsed) * 1000), timeEndPeriod(1);
@@ -2220,6 +2268,17 @@ namespace
                         const uint64_t w = g_VBlankWaits.load();
                         spdlog::info("PW pacing:   vblank ticker: intervals long (>1.5 vblank) {}, short (<0.5) {}; wait per tick mean {:.2f} ms, max {:.2f} ms.", g_VBlankLong.exchange(0), g_VBlankShort.exchange(0), w ? TicksToMs(g_VBlankWaitTicks.exchange(0)) / w : 0.0, TicksToMs(g_VBlankWaitMax.exchange(0)));
                     }
+                    if (g_RealReadFile)
+                    {
+                        const uint32_t n = g_Reads.exchange(0);
+                        const double ms = TicksToMs(static_cast<int64_t>(g_ReadTicks.exchange(0)));
+                        const double worst = TicksToMs(static_cast<int64_t>(g_ReadWorstTicks.exchange(0)));
+                        const double mb = static_cast<double>(g_ReadBytes.exchange(0)) / (1024.0 * 1024.0);
+                        std::string file;
+                        { std::lock_guard lock(g_ReadMutex); file.swap(g_ReadWorstFile); }
+                        spdlog::info("PW file: {} read(s) in this window costing {:.1f} ms for {:.2f} MB; longest single read {:.2f} ms{}{}.",
+                            n, ms, mb, worst, file.empty() ? "" : " from ", file);
+                    }
                     spdlog::info("PW pacing:   sleeps:{}", CallerTable(g_MainSleepers, g_Pacing.frames));
                     spdlog::info("PW pacing:   waits:{}", CallerTable(g_MainWaiters, g_Pacing.frames));
                     g_Pacing = PacingWindow {}; g_Pacing.start = now;
@@ -3072,6 +3131,7 @@ namespace DrawCensus
         spdlog::default_logger()->flush_on(spdlog::level::trace);
         if (DrawCensus::iYieldLockBeforePresent > 0) { ReadDisplayPeriod(); }
         if (DrawCensus::bPacingLog || DrawCensus::bHitchSampler || DrawCensus::bVBlankWaitLog) { InstallPacingHooks(); }
+        if (DrawCensus::bPacingLog || DrawCensus::bVBlankWaitLog) { InstallFileHooks(); }
         InstallVBlankWaitHook();
         InstallHandoffWait();
         InstallGovernor();

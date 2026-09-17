@@ -24,7 +24,7 @@ namespace RenderPolicy
             desc.SampleDesc.Quality = 0;
             changed = true;
         }
-        if (InternalSize::bGpuLocalTextures && desc.Usage == D3D11_USAGE_DEFAULT && desc.CPUAccessFlags && desc.Width >= 1024)
+        if (InternalSize::bGpuLocalTextures && desc.Usage == D3D11_USAGE_DEFAULT && desc.CPUAccessFlags && desc.Width >= static_cast<UINT>(InternalSize::iGpuLocalMinWidth))
         {
             desc.CPUAccessFlags = 0;
             stripped = true;
