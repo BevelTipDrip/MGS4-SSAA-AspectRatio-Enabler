@@ -79,13 +79,13 @@ namespace mgs4e::tool::pw
             "overlay misbehaves.";
 
         constexpr const char* kHelp_AudioPrefetch =
-            "Whenever a new voice line starts, the game reads it from a large archive on the main thread and "
+            "EXPERIMENTAL, off by default. Whenever a new voice line starts, the game reads it from a large archive on the main thread and "
             "waits for the disk. On a cold archive that wait was about ten milliseconds, which is the single "
             "frame hitch at the start of a Codec call or a voice line.\n\n"
             "Voice archives at start reads them through in the background right after launch, about 1.6 GB, "
             "so they are already in memory when the game asks. Windows gives that memory back the moment "
             "anything else needs it. As opened warms each archive only once the game has opened it, which "
-            "does not help the first line. Off leaves the game as it shipped.";
+            "does not help the first line. Off leaves the game as it shipped. Try Voice archives at start if you see a single-frame hitch when Codec calls or voice lines begin.";
 
         constexpr const char* kHelp_StateObjectCache =
             "The game asks the graphics card to build the same few hundred render settings every single "
@@ -234,7 +234,7 @@ namespace mgs4e::tool::pw
                         F::Choice(G, K::BusyWaitFix, kHelp_BusyWaitFix, "Everything",
                             { "Off", "Render thread", "Render thread and ticker", "Everything" }),
                         F::Bool(G, K::StateObjectCache, kHelp_StateObjectCache, true),
-                        F::Choice(G, K::AudioPrefetch, kHelp_AudioPrefetch, K::AudioPrefetch_All,
+                        F::Choice(G, K::AudioPrefetch, kHelp_AudioPrefetch, K::AudioPrefetch_Off,
                             { K::AudioPrefetch_Off, K::AudioPrefetch_OnOpen, K::AudioPrefetch_All }),
                     }},
                 }},

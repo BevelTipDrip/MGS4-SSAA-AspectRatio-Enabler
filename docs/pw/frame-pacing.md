@@ -510,6 +510,10 @@ path never reads. Every archive that ever stalled the game thread was in `EXLANG
 `MLG\disc0_rel\ADEMO`; those plus `ms0\<REGION>\DLCVOICE` are what mode 2 warms: **48 files,
 1.6 GB**, done **within two seconds of launch at ten percent of a core**, on a below-normal thread.
 
+**Shipping decision (user, 2026-09-17).** `Audio Prefetch` ships **experimental and off by default**:
+proven here, not yet soaked on a 16 GB machine, and a behaviour change at launch. Testers who see
+the hitch are told to switch on "Voice archives at start".
+
 **Frame-level note.** Windows during Codec screens show exactly 150 of 300 ticks doubled: that is
 the game's designed 30 fps for those screens (the explicit wait count at `+78070`), not a stutter.
 Gameplay windows in the same session read 60, 60, 61, 60 frames a second.

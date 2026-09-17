@@ -27,7 +27,10 @@ namespace FilePrefetch
     // on them exceeded a millisecond across a session where they had cost ten, and the user saw no
     // stutter in gameplay. The targeted set is 1.6 GB of reclaimable page cache, warmed in two
     // seconds at ten percent of a core, which is affordable even on a handheld.
-    inline int iMode = 2;
+    // Off by default and marked experimental (user's call, 2026-09-17): the start-up warm is proven
+    // to remove the hitch on this machine, but it has not been soaked on a 16 GB machine and it is
+    // a behaviour change at launch. Testers who see the Codec hitch are told to switch it on.
+    inline int iMode = 0;
 
     void Install();
     void Shutdown();

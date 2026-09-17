@@ -40,13 +40,13 @@ What is new in this preview, and what to watch for
     misbehaves, step it down to "Render thread and ticker" and say so.
   - "State Object Cache" saves roughly one frame's worth of processor work in twelve. It should
     change nothing you can see; report anything that looks wrong while it is on.
-  - "Audio Prefetch" removes the single-frame hitch at the start of a Codec call or voice line.
-    The game reads each line from a large archive on its main thread and waits for the disk;
-    "Voice archives at start" reads those archives through in the background right after launch
-    (about 1.6 GB, which Windows gives back whenever anything else needs the memory) so they are
-    already in memory when asked for. If launch feels slower or memory is tight, set it to
-    "As opened" or "Off" and say so.
-  - All three are on by default. Turning any off returns the game to how it shipped.
+  - "Audio Prefetch" is EXPERIMENTAL and off by default. It targets the single-frame hitch at
+    the start of a Codec call or voice line: the game reads each line from a large archive on
+    its main thread and waits for the disk. "Voice archives at start" reads those archives
+    through in the background right after launch (about 1.6 GB, which Windows gives back
+    whenever anything else needs the memory). If you see that hitch, switch it on and report
+    whether it goes away, and whether launch felt slower or memory got tight.
+  - The first two are on by default; turning either off returns the game to how it shipped.
 
 The aspect-ratio work in this plugin is a private component with a credit-required licence:
 free to use; credit BevelTipDrip directly and visibly if you redistribute or build on it.
