@@ -121,3 +121,34 @@ dump on 2026-09-13; the notes are in the private module.
 - The shader set: 11 `.cso` against the runtime `Create*Shader` counts; what the `.vpo`/`.fpo`
   become.
 - The perspective builder (3D camera).
+
+## Hidden developer menu: searched, none in the executable (2026-09-17)
+
+**Method.** The live-decrypted dumps (`C:\mgspf_tools\pw\pw_text.bin`, `pw_rdata.bin`, `pw_data.bin`;
+the rdata dump is fully decrypted, 0 of 81 blocks at encryption-level entropy) swept for ASCII,
+UTF-16 and Shift-JIS strings: debug, test, develop, cheat, muteki, stage select, god, noclip,
+console; RTTI class names; PSP debug facilities; launch switches; input chords.
+
+**Result: no debug menu is named anywhere in the executable.** The only plain menu identifiers are
+the shipped ones, in a table beside `set_menu_info_%02d` / `set_menu_system_%02d`: `staff develop
+delivery cyberval metal info_myouter info_player info_log trade recruit mission_select option
+key_config save game_exit`.
+
+**False leads, so they are not chased again.** `KONAMITESTPLAY`, `DEVIL` and `PWALKER` are entries
+in the banned-name filter (RVA `+D57698` region: player/base names the game refuses, in many
+languages). `MGSPW_VOCALOID` is the dead online DLC download service. `MGSPW_WIN32` is the window
+class. The `KEY_*` table is the keyboard vocabulary; nothing binds an F-key to anything hidden.
+Launch switches beyond the documented `-region -lan -selfregion -resolution -upscale -movie
+-launcherpath`: `-ctrltype`, `-launcherroot` (launcher plumbing), the rest are noise.
+
+**What IS there: a named-variable system.** `+11F8D0` is the MGS strcode hash
+(`h = ((h >> 19) | (h << 5)) + c`, 24-bit, empty string -> 1). `+A52E0` resolves a code by walking a
+loaded segment (root pointer at RVA `+10A63E8`) for records whose type byte is `0x5x`, reading the
+24-bit code from the three bytes before the payload. 1326 call sites resolve variables; 89 load the
+name as a string first (`C:\mgspf_tools\pw\named_var_rvas.txt`), all ordinary script variables:
+menu ids, dialog flags (`noAlert noKill noProc noTxt yesProc yesTxt`), UI elements (`lef_*`), model
+procedures (`model_*_draw_proc`, `model_invisible` among them, so that one is a script visibility
+flag, not a cheat). **The full variable set lives in that loaded segment, identified by code only,
+and none of the known codes occur in the dumped sections**, so it is script data in the heap. To
+enumerate it: copy the segment from a running game (read-only), collect every `0x5x` record's code,
+and test candidate names against the hash. That is the only remaining route to "hidden" toggles.
