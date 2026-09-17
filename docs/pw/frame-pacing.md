@@ -588,6 +588,38 @@ night's work in the one build that was supposed to prove it.
 **Rule: anything added to a hot path is written with its guard as the first line of the function,
 before the body exists. Then audit the diff for hot-path calls and confirm each one's guard.**
 
+### 8.z The real cause of the moving symptoms: an out-of-bounds write (2026-09-16)
+
+Two sessions of faults that jumped whenever unrelated code changed were **one stray pointer write**.
+
+`ContextHooks::original` held `kSlotCount = 80` entries, and the census stores each original vtable
+entry **by its slot index**. It hooks `kCtxFlush = 111` and `kCtxFinishCommandList = 114`. So every
+device creation wrote two 64-bit pointers **31 and 34 slots past the end of the array**, into
+whatever globals the linker had placed after it.
+
+**How it was finally caught.** The canvas globals are `int g_UnitsW = 480, g_UnitsH = 272`, and
+`Canvas::Configure` refuses 480x272 outright, so nothing in that code can change them. They held
+32763 and 1890641920: as adjacent integers, the two halves of `0x7FFB70B20000`, a DLL address. No
+dimension calculation produces that. A **data breakpoint** on those eight bytes named the
+instruction on the first run: `mov qword ptr [rsi+rdx*8],rcx` in `InstallContextHooks`.
+
+With the units no longer 480x272, `Canvas::Active()` returned true at 16:9, the post-chain quads
+were rewritten against a meaningless size, and the fullscreen effects broke with a
+direction-dependent flicker. Note the distinction the user drew: at 16:9 the canvas **is** still
+scaled, by an integer, in both axes; what should never run is the canvas module's **unit**
+rewriting.
+
+**Fixed** by sizing the array to the highest slot hooked rather than the number of slots used, plus
+a `static_assert` per slot so a future index above the bound is a build error. `render_hooks.cpp`
+was checked and was never affected: its highest slot is 57 against the same 80, which is why the
+Release build and the preview package were always sound.
+
+**This retroactively explains** the mutex that reported an owner our own records said did not exist
+(8.y), and every instrument that moved the fault instead of finding it. The lesson from 8.y stands
+doubled: **when symptoms move with code layout, stop instrumenting and put a data breakpoint on the
+corrupted bytes.** Both root causes this project has had were found by a debugger on the first run,
+after hours of in-process probing had failed.
+
 ## 9. Testing rules
 
 - `boot.ps1 -LabConfig` reads `MGSPWEnabler.lab.settings`. Regenerate it from the user's

@@ -20,7 +20,10 @@ namespace FilePrefetch
     // first in a conversation; 2 also walks every archive in the background from start-up, which
     // covers the first line too but pulls several gigabytes through the file cache, so it is not the
     // default and is a poor trade on a handheld.
-    inline int iMode = 1;
+    // Off by default: measured on 2026-09-16 and it made no difference to the spikes, which is
+    // consistent with the cost being the drive waking rather than the pages being cold. Kept as a
+    // Lab option so the idea can be retested on other hardware rather than re-argued.
+    inline int iMode = 0;
 
     void Install();
     void Shutdown();
