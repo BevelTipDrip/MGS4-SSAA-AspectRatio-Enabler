@@ -141,14 +141,30 @@ class. The `KEY_*` table is the keyboard vocabulary; nothing binds an F-key to a
 Launch switches beyond the documented `-region -lan -selfregion -resolution -upscale -movie
 -launcherpath`: `-ctrltype`, `-launcherroot` (launcher plumbing), the rest are noise.
 
-**What IS there: a named-variable system.** `+11F8D0` is the MGS strcode hash
-(`h = ((h >> 19) | (h << 5)) + c`, 24-bit, empty string -> 1). `+A52E0` resolves a code by walking a
-loaded segment (root pointer at RVA `+10A63E8`) for records whose type byte is `0x5x`, reading the
-24-bit code from the three bytes before the payload. 1326 call sites resolve variables; 89 load the
-name as a string first (`C:\mgspf_tools\pw\named_var_rvas.txt`), all ordinary script variables:
-menu ids, dialog flags (`noAlert noKill noProc noTxt yesProc yesTxt`), UI elements (`lef_*`), model
-procedures (`model_*_draw_proc`, `model_invisible` among them, so that one is a script visibility
-flag, not a cheat). **The full variable set lives in that loaded segment, identified by code only,
-and none of the known codes occur in the dumped sections**, so it is script data in the heap. To
-enumerate it: copy the segment from a running game (read-only), collect every `0x5x` record's code,
-and test candidate names against the hash. That is the only remaining route to "hidden" toggles.
+**What IS there: script argument lookup, not a toggle store (corrected 2026-09-17 evening).**
+`+11F8D0` is the MGS strcode hash (`h = ((h >> 19) | (h << 5)) + c`, masked to 24 bits after every
+step, empty string -> 1; disassembly confirmed). `+A52E0` finds a named argument on the script
+command currently being executed. Of its 1325 call sites, 1119 pass a compile-time constant in
+`ecx`: 662 distinct codes (`C:\mgspf_tools\pw\pw_var_codes.txt`, one line per code with its
+resolved name where known and every call site). Resolving them against the hash with controlled
+candidate pools (expected chance hits stated per pool: brute force to 3 characters ~2, identifier
+strings present in the binary ~0.6, a curated debug vocabulary ~1.5) gives ordinary per-object
+script arguments: `pos rot scale size color alpha angle model model_name item item_id weapon
+mission mission_id region region_id proc eft_file_name param flag mode life hp enemy player event
+camera collision pause rank option slot`, the pad-direction pairs `UD UL UR LL LR ...`, and the
+single letters `r g b a` (whose codes are their ASCII values, which is what validated the scheme).
+`debug` (x3, `+1663A1 +20F949 +2EC55A`) and `debug_flag` (`+2F98D3`) exist, but each is read as an
+argument of one script command and stored into that object's own field (a bit at `+0x10d0`, an int
+at `+0x72c`), i.e. a per-object switch that a stage script may or may not set. There is no global
+"debug mode" variable and no menu behind these.
+
+The heap region copied from the running game (`region.bin`, 2 MB at the cursors the +10A63F0
+context pointed at) contained none of the common codes (`pos`, `rot`, `model`, `flag`, `proc`,
+`color`, any byte order): that allocation was not the script argument store, so the earlier record
+layout guess (`C4 <code> 5x`) is void. Not pursued further: the arguments live inside the stage
+script data, and enumerating them would only list what stage scripts set, not a hidden menu.
+
+**Conclusion.** No evidence of a hidden developer menu in Peace Walker's executable: no menu id,
+no key binding, no launch switch, no global debug variable. Whatever debug tooling existed at
+Kojima Productions was compiled out of the shipped PSP build and the Master Collection port did
+not add any back.
