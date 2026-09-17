@@ -289,7 +289,43 @@ namespace
     // CResource::Map from the game's UI vertex upload, 2026-09-12), which a vtable swap cannot
     // do since the original function runs untouched. A hooked method finds its set by the
     // vtable of the context it was called on and calls the original entry from there.
-    constexpr size_t kSlotCount = 80;
+    // Must cover the HIGHEST slot index hooked below, not the count of slots we happen to use.
+    // It was 80 while kCtxFlush (111) and kCtxFinishCommandList (114) were being stored, so every
+    // device creation wrote two vtable pointers 31 and 34 slots past the end of this array, into
+    // whatever globals the linker had placed after it. That is the memory corruption behind two
+    // sessions of moving symptoms: a mutex reporting an owner nobody set, a canvas reporting a
+    // size nobody computed, and faults that jumped whenever unrelated code changed the layout.
+    // Found 2026-09-16 with a data breakpoint on the globals it was landing on.
+    constexpr size_t kSlotCount = 128;
+
+    // Every context slot must fit; a new one above kSlotCount would corrupt memory silently.
+    static_assert(kCtxVSSetConstantBuffers < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetShaderResources < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxPSSetSamplers < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxVSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawIndexed < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDraw < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxMap < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxUnmap < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawIndexedInstanced < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDrawInstanced < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxIASetPrimitiveTopology < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxOMSetRenderTargets < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxRSSetViewports < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxRSSetScissorRects < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxUpdateSubresource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDispatch < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxDispatchIndirect < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCopySubresourceRegion < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCopyResource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxResolveSubresource < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxExecuteCommandList < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxFlush < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxFinishCommandList < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetShaderResources < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetUnorderedAccessViews < kSlotCount, "context vtable slot is outside ContextHooks::original");
+    static_assert(kCtxCSSetShader < kSlotCount, "context vtable slot is outside ContextHooks::original");
     struct ContextHooks
     {
         void** vtable = nullptr;
