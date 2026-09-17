@@ -4,7 +4,31 @@ Read the root `docs/NEXT-SESSION.md` first for the conventions (evidence levels,
 screenshot with the user, close the game after every test, never push). This file is the
 Peace Walker-specific state.
 
-## START HERE: the 60 Hz stutter is solved; the work left is promotion (2026-09-15)
+## START HERE: pacing is solved and shipped; what is owed is a soak (2026-09-17)
+
+Three fixes are in the Release build, each proven by measurement and confirmed in play by the user.
+Full detail and every dead end: `docs/pw/frame-pacing.md`.
+
+| Fix | Module | What it removed |
+| --- | --- | --- |
+| Busy Wait Fix (level 3) | `busy_wait.cpp` | three spin loops; process CPU 122% -> 24% of a core; the 60 Hz stutter |
+| State Object Cache | `state_cache.cpp` | 350 redundant device state creations a frame, ~8% of game-thread CPU |
+| Audio Prefetch (voice archives at start) | `file_prefetch.cpp` | the single-frame hitch when a voice line or Codec call starts: a ~10 ms cold archive read on the game thread |
+
+Also fixed: `ContextHooks::original` was sized 80 while slots 111 and 114 were stored into it, an
+out-of-bounds write that corrupted whichever globals followed. It was Lab-only (Release's highest
+slot is 57) but it explained two sessions of symptoms that moved with code layout. Lesson, recorded
+in memory: **when a fault moves with layout, attach a debugger; do not add instruments.**
+
+**Owed, not done:** a soak with all three on through cutscenes and movies (paced to 30 by design at
+`+78070`; do not mistake that for stutter), Mother Base, a mission end, the three window modes and
+alt-tab; and a look at the start-up warm on a 16 GB machine, since 1.6 GB of page cache is
+reclaimable but not free. The Config Tool exposes all three on the Peace Walker page under
+Performance. The preview packager (`build\package_pw_preview.ps1`) ships plugin, loader, tool and
+template together.
+
+### The earlier plan, kept for the record (2026-09-15)
+#### START HERE: the 60 Hz stutter is solved; the work left is promotion (2026-09-15)
 
 Full detail and every measurement is in `docs/pw/frame-pacing.md`. This is the state and the plan.
 
