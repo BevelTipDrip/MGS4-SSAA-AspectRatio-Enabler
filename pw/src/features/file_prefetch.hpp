@@ -16,14 +16,18 @@
 // cache does the work, and it gives those pages back whenever anything else wants the memory.
 namespace FilePrefetch
 {
-    // 0 off; 1 warms each archive the moment the game opens it, which covers every line after the
-    // first in a conversation; 2 also walks every archive in the background from start-up, which
-    // covers the first line too but pulls several gigabytes through the file cache, so it is not the
-    // default and is a poor trade on a handheld.
+    // 0 off; 1 warms each archive the moment the game opens it; 2 also warms the voice archives in
+    // the background from start-up, about 1.1 GB of reclaimable page cache, so the first line of the
+    // first conversation is hot too. Mode 1 alone was measured useless (2026-09-16): the game opens
+    // these archives before our hook exists, so it never fired for them. Mode 2 is the candidate.
     // Off by default: measured on 2026-09-16 and it made no difference to the spikes, which is
     // consistent with the cost being the drive waking rather than the pages being cold. Kept as a
     // Lab option so the idea can be retested on other hardware rather than re-argued.
-    inline int iMode = 0;
+    // Defaults to the start-up warm. Proven 2026-09-17: with the voice archives hot, not one read
+    // on them exceeded a millisecond across a session where they had cost ten, and the user saw no
+    // stutter in gameplay. The targeted set is 1.6 GB of reclaimable page cache, warmed in two
+    // seconds at ten percent of a core, which is affordable even on a handheld.
+    inline int iMode = 2;
 
     void Install();
     void Shutdown();

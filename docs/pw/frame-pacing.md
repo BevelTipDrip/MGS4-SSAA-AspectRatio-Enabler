@@ -475,6 +475,45 @@ while the 300 event-satisfied waits per 5 s are unchanged.
 The site check initially failed because the `xor ecx, ecx` at `+17CCF` is encoded **`33 C9`**, not
 `31 C9`. Read the bytes, do not assume the encoding.
 
+## 5.7 The Codec and voice-line hitch: a cold archive read, fixed by warming (2026-09-17)
+
+**Symptom.** A single frame hitch whenever a new voice line starts (Codec calls, co-op voice lines).
+Testers reported the game otherwise "exceedingly smooth" after 5.6.
+
+**Cause.** One synchronous `ReadFile` on the game thread: 20 KB from a voice archive taking
+**9.7-10.2 ms**, in a tick that blocked 13.5 ms. The frame created nothing, mapped a normal amount,
+spent 0.25 ms in Direct3D; the wait caller table was empty because a synchronous read blocks in the
+kernel without calling any wait function. Confirmed off-CPU: 0.14 ms of executed cycles across a
+9.86 ms read.
+
+**Ruled out by test, in order.** Defender (excluded the whole game folder: same file, same 9.82 ms).
+Scheduling (game thread at highest priority: read still 9.86 ms, though the tick then fit the budget
+at 15.10 ms, which is why the *hitch* disappeared while the *read* did not; priority helps only
+because the tick sits on the 16.67 ms boundary). The drive waking from a low-power state: this was
+my working theory and it was **wrong**; it rested on "the same file costs the same twice", which is
+simply what a cold *region* costs when every voice line lands on a different offset of a 79 MB file.
+
+**Proof.** Warming one archive from outside the game made it vanish from the slow list while other,
+cold archives still cost 10 ms. Warming every voice archive, then playing: **not one voice-archive
+read over 1 ms across 21 active windows**, every longest read 0.12-0.22 ms and fully executing (a
+memory copy); gameplay at a flat 60; the user saw no stutter. So the game reads *through* the file
+cache, and residency is the whole story.
+
+**Why the first attempt "did not work".** Mode 1 warms an archive when the game opens it, and the
+game opens these before our import hook exists, so it warmed one 0.1 MB file and never touched a
+voice archive. The negative result was an instrumentation gap, not evidence. Recorded here so the
+"it made no difference" line in 5.6-era notes is not trusted again.
+
+**Inventory, corrected.** 134 archives, 8.4 GB (an earlier 886 / 20 GB figure was a PowerShell
+`-Include` double count). 6.3 GB of that is `MLG\disc0_rel\ADEMOHQ`, high-quality demo the voice
+path never reads. Every archive that ever stalled the game thread was in `EXLANG\disc0_rel` or
+`MLG\disc0_rel\ADEMO`; those plus `ms0\<REGION>\DLCVOICE` are what mode 2 warms: **48 files,
+1.6 GB**, done **within two seconds of launch at ten percent of a core**, on a below-normal thread.
+
+**Frame-level note.** Windows during Codec screens show exactly 150 of 300 ticks doubled: that is
+the game's designed 30 fps for those screens (the explicit wait count at `+78070`), not a stutter.
+Gameplay windows in the same session read 60, 60, 61, 60 frames a second.
+
 ## 6. The Lab instrumentation
 
 All keys under `[Graphics]`, Lab build only unless noted, all off by default.

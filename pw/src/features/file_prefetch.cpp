@@ -17,7 +17,7 @@ namespace
         if (dot == std::wstring::npos) { return false; }
         std::wstring ext = path.substr(dot);
         for (wchar_t& c : ext) { c = static_cast<wchar_t>(towlower(c)); }
-        return ext == L".pdt" || ext == L".xpr" || ext == L".txp";
+        return ext == L".pdt";
     }
 
     std::mutex g_Mutex;
@@ -152,22 +152,41 @@ namespace
         return nullptr;
     }
 
-    // Mode 2: walk the install and queue every archive, so even the first line of the first
-    // conversation is warm. Enumerating is done on the worker, not at start-up, so nothing is
-    // delayed by it.
-    void QueueEverything()
+    // Mode 2: warm the voice archives at start-up, so even the first line of the first conversation
+    // is hot. Only the folders that have ever produced a slow read (2026-09-17): every archive that
+    // stalled the game thread lived in EXLANG\disc0_rel or MLG\disc0_rel\ADEMO, and DLCVOICE is
+    // the same kind of content. Together about 1.1 GB of reclaimable page cache. MLG\disc0_rel\ADEMOHQ
+    // is 6.3 GB of high quality demo the voice path never touches and is deliberately excluded, which
+    // is what makes this acceptable on a handheld. Enumeration runs on the worker, not at start-up.
+    void QueueVoiceArchives()
     {
+        const std::filesystem::path base = mgs4e::game::Root() / "mgspw";
+        const std::filesystem::path folders[] = {
+            base / "EXLANG" / "disc0_rel",
+            base / "MLG" / "disc0_rel" / "ADEMO",
+        };
         std::error_code ec;
-        const std::filesystem::path root = mgs4e::game::Root();
-        for (auto it = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, ec);
-             it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        size_t queued = 0;
+        auto consider = [&](const std::filesystem::path& dir)
+        {
+            for (auto it = std::filesystem::directory_iterator(dir, std::filesystem::directory_options::skip_permission_denied, ec);
+                 it != std::filesystem::directory_iterator(); it.increment(ec))
+            {
+                if (ec) { ec.clear(); continue; }
+                if (!it->is_regular_file(ec)) { continue; }
+                std::wstring p = it->path().wstring();
+                if (WorthWarming(p)) { Queue(std::move(p)); queued++; }
+            }
+        };
+        for (const auto& f : folders) { consider(f); }
+        // DLC voice sits under a per-region folder: mgspw\ms0\<REGION>\DLCVOICE.
+        for (auto it = std::filesystem::directory_iterator(base / "ms0", std::filesystem::directory_options::skip_permission_denied, ec);
+             it != std::filesystem::directory_iterator(); it.increment(ec))
         {
             if (ec) { ec.clear(); continue; }
-            if (!it->is_regular_file(ec)) { continue; }
-            const std::wstring p = it->path().wstring();
-            if (WorthWarming(p)) { Queue(p); }
+            if (it->is_directory(ec)) { consider(it->path() / "DLCVOICE"); }
         }
-        spdlog::info("PW prefetch: every data archive queued for warming in the background.");
+        spdlog::info("PW prefetch: {} voice archive(s) queued for warming in the background.", queued);
     }
 }
 
@@ -190,10 +209,10 @@ namespace FilePrefetch
 
         g_Worker = std::thread(WorkerMain);
         spdlog::info("PW prefetch: mode {} ({}); CreateFileW {}, CreateFileA {}.",
-            iMode, iMode >= 2 ? "every archive from start-up" : "each archive as the game opens it",
+            iMode, iMode >= 2 ? "the voice archives from start-up" : "each archive as the game opens it",
             g_RealCreateFileW ? "hooked" : "not imported", g_RealCreateFileA ? "hooked" : "not imported");
 
-        if (iMode >= 2) { std::thread(QueueEverything).detach(); }
+        if (iMode >= 2) { std::thread(QueueVoiceArchives).detach(); }
     }
 
     void Shutdown()

@@ -81,7 +81,7 @@ namespace mgspwe::keys
     constexpr const char* AudioPrefetch = "Audio Prefetch";   // warm the game's data archives on a background thread so its own synchronous reads do not stall the frame
     constexpr const char* AudioPrefetch_Off = "Off";
     constexpr const char* AudioPrefetch_OnOpen = "As opened";
-    constexpr const char* AudioPrefetch_All = "Everything at start";
+    constexpr const char* AudioPrefetch_All = "Voice archives at start";
     constexpr const char* BusyWaitFix = "Busy Wait Fix";   // 0 off, 1 the render thread's handoff spin, 2 also the ticker's sub-millisecond tail, 3 also the message pump
     constexpr const char* BusyWaitFix_Off = "Off";
     constexpr const char* BusyWaitFix_Render = "Render thread";

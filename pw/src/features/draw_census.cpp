@@ -415,6 +415,8 @@ namespace
     std::atomic<uint32_t> g_Reads { 0 };
     std::atomic<uint64_t> g_ReadTicks { 0 }, g_ReadBytes { 0 };
     std::atomic<uint64_t> g_ReadWorstTicks { 0 };
+    std::atomic<uint64_t> g_ReadWorstCycles { 0 };
+    std::atomic<int> g_GameThreadPriority { 0 };   // cycles the thread executed during that worst read
     std::mutex g_ReadMutex;
     std::string g_ReadWorstFile;
 
@@ -429,6 +431,8 @@ namespace
 
     BOOL WINAPI Hooked_ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, LPDWORD read, LPOVERLAPPED ov)
     {
+        ULONG64 c0 = 0;
+        QueryThreadCycleTime(GetCurrentThread(), &c0);
         const int64_t t0 = Ticks();
         const BOOL r = g_RealReadFile(file, buffer, bytes, read, ov);
         // Everything below this line clobbers the thread's last error, and callers legitimately
@@ -443,6 +447,9 @@ namespace
         uint64_t worst = g_ReadWorstTicks.load();
         if (static_cast<uint64_t>(dt) > worst && g_ReadWorstTicks.compare_exchange_strong(worst, static_cast<uint64_t>(dt)))
         {
+            ULONG64 c1 = 0;
+            QueryThreadCycleTime(GetCurrentThread(), &c1);
+            g_ReadWorstCycles.store(c1 - c0);
             // Only for a read that actually cost something: naming the file is itself a file call.
             if (TicksToMs(dt) > 1.0)
             {
@@ -2315,11 +2322,12 @@ namespace
                         const uint32_t n = g_Reads.exchange(0);
                         const double ms = TicksToMs(static_cast<int64_t>(g_ReadTicks.exchange(0)));
                         const double worst = TicksToMs(static_cast<int64_t>(g_ReadWorstTicks.exchange(0)));
+                        const double worstExecMs = static_cast<double>(g_ReadWorstCycles.exchange(0)) / (4192.0 * 1000.0);   // at the nominal 4192 MHz
                         const double mb = static_cast<double>(g_ReadBytes.exchange(0)) / (1024.0 * 1024.0);
                         std::string file;
                         { std::lock_guard lock(g_ReadMutex); file.swap(g_ReadWorstFile); }
-                        spdlog::info("PW file: {} read(s) in this window costing {:.1f} ms for {:.2f} MB; longest single read {:.2f} ms{}{}.",
-                            n, ms, mb, worst, file.empty() ? "" : " from ", file);
+                        spdlog::info("PW file: {} read(s) in this window costing {:.1f} ms for {:.2f} MB; longest single read {:.2f} ms of which {:.3f} ms executing{}{}; game thread priority {}.",
+                            n, ms, mb, worst, worstExecMs, file.empty() ? "" : " from ", file, g_GameThreadPriority.load());
                     }
                     spdlog::info("PW pacing:   sleeps:{}", CallerTable(g_MainSleepers, g_Pacing.frames));
                     spdlog::info("PW pacing:   waits:{}", CallerTable(g_MainWaiters, g_Pacing.frames));
@@ -2926,6 +2934,25 @@ namespace
                 }
                 else { spdlog::warn("PW pacing: 'tick' wants auto, off, or a period in milliseconds; got '{}'.", what); }
             }
+        }
+        else if (cmd == "gameprio")
+        {
+            // "gameprio N": the game thread's scheduling priority, -2..2 or 15 (time critical). If a
+            // 9.7 ms read collapses at a higher priority, the cost was a lost scheduling quantum, not
+            // the device, and the fix is a priority rather than anything about files.
+            int prio = 0;
+            in >> prio;
+            const DWORD tid = g_VBlankTid.load();
+            if (!tid) { spdlog::warn("PW prio: the game thread is not identified yet."); }
+            else if (const HANDLE h = OpenThread(THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION, FALSE, tid))
+            {
+                const BOOL ok = SetThreadPriority(h, prio);
+                const int now = GetThreadPriority(h);
+                CloseHandle(h);
+                g_GameThreadPriority.store(now);
+                spdlog::info("PW prio: game thread {} priority set to {} ({}); it now reports {} (command).", tid, prio, ok ? "ok" : "FAILED", now);
+            }
+            else { spdlog::warn("PW prio: could not open the game thread {}.", tid); }
         }
         else if (cmd == "yield")
         {

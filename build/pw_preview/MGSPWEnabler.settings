@@ -56,6 +56,13 @@ Busy Wait Fix = Everything
 ; uses 42 distinct ones. They are immutable, so the one it asked for last time is handed back.
 State Object Cache = true
 
+; Audio Prefetch: the single-frame hitch when a voice line or Codec call starts is the game
+; reading the line from a cold archive on its main thread. "Voice archives at start" reads
+; those archives through in the background after launch (about 1.6 GB, given back to Windows
+; whenever anything else needs the memory) so they are already in memory when asked for.
+; "As opened" or "Off" are the alternatives.
+Audio Prefetch = Voice archives at start
+
 GPU Local Textures = true
 
 [Debugging]
