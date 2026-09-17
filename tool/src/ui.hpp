@@ -66,6 +66,13 @@ namespace mgs4e::tool
         bool Save();
         bool Dirty();
 
+        // Latched lab mode (lab_latch.hpp): the About page icon latches when a Lab plugin is
+        // deployed, Revert to shipped releases it, and either reopens the window on the file that
+        // is now live so the fields, the title and the status all say the same thing.
+        void OnLatch();
+        void OnRevert();
+        void ReopenOnLiveFile(const std::string& note);
+
         // Feature ownership (shared/features.hpp): every setting, ours or a manifest mod's,
         // that is on for a feature. Overlaps are shown beside the rows concerned and, at
         // save time, resolved by asking which mod keeps each feature.

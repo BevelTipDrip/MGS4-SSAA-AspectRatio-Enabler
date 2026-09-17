@@ -23,6 +23,7 @@ namespace mgspwe::config
     {
 #if MGS4E_LAB_BUILD
         bool g_LabMode = false;
+        bool g_Latched = false;   // lab mode came from the persistent latch, not the one-boot marker
 #endif
         std::filesystem::path g_File;
 
@@ -83,6 +84,25 @@ namespace mgspwe::config
                         fresh ? "present but there is no " + labFile.filename().string() : "stale");
                 }
                 std::filesystem::remove(marker, ec);
+            }
+            // The latch: dropped by the Config Tool's About page and never consumed, so every boot is
+            // a lab boot until the user reverts. Checked after the one-boot marker so the harness's
+            // behaviour is unchanged. A Release build never sees this block, so a stale latch can
+            // never affect a shipped plugin.
+            const std::filesystem::path latch = root / (std::string(MGSPWE_NAME) + ".lab.latched");
+            if (!g_LabMode && std::filesystem::exists(latch, ec))
+            {
+                const std::filesystem::path labFile = root / (std::string(MGSPWE_NAME) + ".lab.settings");
+                if (std::filesystem::exists(labFile, ec))
+                {
+                    g_LabMode = true;
+                    g_Latched = true;
+                    file = labFile;
+                }
+                else
+                {
+                    spdlog::warn("Lab latch {} is present but there is no {} - ignoring it.", latch.string(), labFile.filename().string());
+                }
             }
 #endif
             return file;
@@ -321,7 +341,11 @@ namespace mgspwe::config
 
         spdlog::info("Settings file: {}", g_File.string());
 #if MGS4E_LAB_BUILD
-        if (g_LabMode)
+        if (g_LabMode && g_Latched)
+        {
+            spdlog::warn("LAB MODE: research instrumentation latched by the Config Tool; every boot reads {} until Revert to shipped is pressed.", g_File.filename().string());
+        }
+        else if (g_LabMode)
         {
             spdlog::warn("LAB MODE: research instrumentation enabled for this boot only.");
         }

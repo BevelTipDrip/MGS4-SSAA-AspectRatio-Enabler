@@ -132,3 +132,23 @@ census table is the detector when one is needed), no stage automation, and no PI
 gives the game-side numbers a GPU capture would not. In-game hotkeys do exist now, for the
 frame-pacing work: F11 a census, F10 the missed-tick detail, F9 the thread sampler
 (`frame-pacing.md`).
+
+## Latched lab mode (2026-09-17)
+
+The one-boot marker (`MGSPWEnabler.lab`, dropped by the harness, consumed on boot, ignored after
+fifteen minutes) is unchanged. The **latch** is its persistent form: `MGSPWEnabler.lab.latched`
+beside the settings files, written and removed only by the Config Tool, honoured by a Lab plugin on
+every boot and never seen by a Release plugin, since the check lives inside the Lab-only block.
+
+The tool detects a lab setup without running anything: it reads the deployed
+`mgspw\scripts\MGSPWEnabler.asi` for the literal `LAB MODE: research instrumentation`, the same
+string the packager refuses a build on, so the two cannot drift. When it is present, the icon on
+the About page becomes the latch. Clicking it creates `MGSPWEnabler.lab.settings` from the shipped
+settings if missing (never the reverse), writes the latch, and reopens the window on the lab file.
+While latched the title reads `LAB | ...`, the status bar names the lab file, and **the tool edits
+the lab file**, so the game and the tool agree on one file. **Revert to shipped** removes the latch
+only; the lab settings and their knobs are kept. Unsaved changes prompt before either action.
+
+A latched Lab boot logs `LAB MODE: research instrumentation latched by the Config Tool; every boot
+reads MGSPWEnabler.lab.settings until Revert to shipped is pressed.` The MGS4 plugin does not have
+the latch yet (user's call: later); the tool side is written once for both games.

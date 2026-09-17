@@ -2,6 +2,9 @@
 #include "ui.hpp"
 
 #include "compat.hpp"
+#include "lab_latch.hpp"
+
+#include <wx/bmpbuttn.h>
 #include "features.hpp"
 #include "games.hpp"
 #include "ini.hpp"
@@ -84,6 +87,10 @@ namespace mgs4e::tool
         , m_Settings(std::move(settings))
     {
         SetIcons(wxIconBundle("IDI_ICON1", wxGetInstance()));
+        if (lablatch::Inspect(game, gameRoot).latched)
+        {
+            SetTitle("LAB  |  " + GetTitle());
+        }
 
         wxToolTip::Enable(true);
         wxToolTip::SetAutoPop(60000);
@@ -381,9 +388,20 @@ namespace mgs4e::tool
         wxPanel* panel = new wxPanel(parent);
         wxBoxSizer* outer = new wxBoxSizer(wxVERTICAL);
 
+        const lablatch::State lab = lablatch::Inspect(*m_Game, m_GameRoot);
+
         wxBoxSizer* head = new wxBoxSizer(wxHORIZONTAL);
         wxIcon mark("IDI_ICON1", wxBITMAP_TYPE_ICO_RESOURCE, FromDIP(48), FromDIP(48));
-        if (mark.IsOk())
+        if (mark.IsOk() && lab.labPluginDeployed && !lab.latched)
+        {
+            // A Lab plugin is installed: the icon is the latch.
+            wxBitmapButton* latch = new wxBitmapButton(panel, wxID_ANY, wxBitmap(mark));
+            latch->SetToolTip("A Lab build of the plugin is installed. Click to latch lab mode: every launch reads "
+                              + wxString(m_Game->name) + ".lab.settings, and this tool edits that file, until you press Revert to shipped.");
+            latch->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnLatch(); });
+            head->Add(latch, 0, wxRIGHT, FromDIP(12));
+        }
+        else if (mark.IsOk())
         {
             head->Add(new wxStaticBitmap(panel, wxID_ANY, wxBitmap(mark)), 0, wxRIGHT, FromDIP(12));
         }
@@ -394,6 +412,32 @@ namespace mgs4e::tool
         titles->Add(new wxStaticText(panel, wxID_ANY, m_Game->aboutSubtitle), 0);
         head->Add(titles, 0, wxALIGN_CENTER_VERTICAL);
         outer->Add(head, 0, wxALL, FromDIP(12));
+
+        // Lab mode: what the tool found, and the way back.
+        {
+            wxBoxSizer* labRow = new wxBoxSizer(wxHORIZONTAL);
+            wxString text;
+            if (lab.latched)
+            {
+                text = wxString::Format("Lab mode is latched: every launch reads %s.lab.settings and this tool edits that file.", m_Game->name);
+                wxButton* revert = new wxButton(panel, wxID_ANY, "Revert to shipped");
+                revert->SetToolTip(wxString::Format("Removes the latch. The game and this tool go back to %s.settings; your lab settings file is kept.", m_Game->name));
+                revert->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnRevert(); });
+                labRow->Add(revert, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+            }
+            else if (lab.labPluginDeployed)
+            {
+                text = "A Lab build of the plugin is installed. Click the icon above to latch lab mode.";
+            }
+            else
+            {
+                text = wxString::Format("Lab mode is not available: %s is a shipped build.", lab.plugin.filename().wstring());
+            }
+            wxStaticText* labText = new wxStaticText(panel, wxID_ANY, text);
+            labText->Wrap(FromDIP(lab.latched ? 470 : 620));
+            labRow->Add(labText, 1, wxALIGN_CENTER_VERTICAL);
+            outer->Add(labRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+        }
 
         wxStaticText* body = new wxStaticText(panel, wxID_ANY, wxString::Format(m_Game->aboutBody, m_Game->name, m_Game->name));
         body->Wrap(FromDIP(620));
@@ -700,6 +744,51 @@ namespace mgs4e::tool
     }
 
     // --- Actions -------------------------------------------------------------------------
+
+    void MainFrame::ReopenOnLiveFile(const std::string& note)
+    {
+        Settings fresh(*m_Game);
+        fresh.Load(Settings::FileFor(*m_Game, m_GameRoot));
+        MainFrame* next = new MainFrame(*m_Game, m_GameRoot, std::move(fresh), note, "About");
+        next->Show();
+        Close();
+    }
+
+    void MainFrame::OnLatch()
+    {
+        if (Dirty())
+        {
+            const int answer = wxMessageBox("You have unsaved changes. Save them to the shipped settings before latching?\n\n"
+                                            "Yes saves and latches. No latches without saving. Cancel does nothing.",
+                                            "Latch lab mode", wxYES_NO | wxCANCEL | wxICON_QUESTION, this);
+            if (answer == wxCANCEL) { return; }
+            if (answer == wxYES && !Save()) { return; }
+        }
+        if (const std::string error = lablatch::Latch(*m_Game, m_GameRoot); !error.empty())
+        {
+            wxMessageBox(error, "Could not latch lab mode", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        ReopenOnLiveFile("Lab mode latched: editing " + std::string(m_Game->name) + ".lab.settings. Every launch reads it until you press Revert to shipped.");
+    }
+
+    void MainFrame::OnRevert()
+    {
+        if (Dirty())
+        {
+            const int answer = wxMessageBox("You have unsaved changes to the lab settings. Save them before reverting?\n\n"
+                                            "Yes saves and reverts. No reverts without saving. Cancel does nothing.",
+                                            "Revert to shipped", wxYES_NO | wxCANCEL | wxICON_QUESTION, this);
+            if (answer == wxCANCEL) { return; }
+            if (answer == wxYES && !Save()) { return; }
+        }
+        if (const std::string error = lablatch::Revert(*m_Game, m_GameRoot); !error.empty())
+        {
+            wxMessageBox(error, "Could not revert", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        ReopenOnLiveFile("Reverted to shipped: editing " + std::string(m_Game->name) + ".settings. Your lab settings file is kept.");
+    }
 
     bool MainFrame::Save()
     {

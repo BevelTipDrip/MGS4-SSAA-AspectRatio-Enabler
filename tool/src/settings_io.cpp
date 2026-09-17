@@ -1,5 +1,6 @@
 #include "pch.hpp"
 #include "settings_io.hpp"
+#include "lab_latch.hpp"
 
 #include "fields.hpp"
 #include "ini.hpp"
@@ -31,6 +32,13 @@ namespace mgs4e::tool
 
     std::filesystem::path Settings::FileFor(const Game& game, const std::filesystem::path& gameRoot)
     {
+        // Latched lab mode: the tool edits the lab settings file, the same one a Lab plugin reads
+        // on every boot while the latch stands, so the two cannot disagree about which file is live.
+        std::error_code ec;
+        if (std::filesystem::exists(lablatch::LatchFile(game, gameRoot), ec))
+        {
+            return lablatch::LabSettingsFile(game, gameRoot);
+        }
         return gameRoot / (std::string(game.name) + ".settings");
     }
 

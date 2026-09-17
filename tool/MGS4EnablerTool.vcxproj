@@ -59,6 +59,7 @@
     <ClCompile Include="src\settings_io.cpp" />
     <ClCompile Include="src\ui.cpp" />
     <ClCompile Include="src\compat.cpp" />
+    <ClCompile Include="src\lab_latch.cpp" />
     <ClCompile Include="src\mod_config.cpp" />
     <ClCompile Include="src\games.cpp" />
     <ClCompile Include="src\pw\pw_fields.cpp" />
@@ -70,6 +71,7 @@
     <ClInclude Include="src\settings_io.hpp" />
     <ClInclude Include="src\ui.hpp" />
     <ClInclude Include="src\compat.hpp" />
+    <ClInclude Include="src\lab_latch.hpp" />
     <ClInclude Include="src\mod_config.hpp" />
     <ClInclude Include="src\games.hpp" />
     <ClInclude Include="..\shared\pw\identity.hpp" />
