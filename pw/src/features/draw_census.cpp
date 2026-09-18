@@ -11,6 +11,7 @@
 
 #include "game.hpp"
 #include "log.hpp"
+#include "sites.hpp"
 #include "mem.hpp"
 #include "ui_bias.hpp"
 #include "internal_size.hpp"
@@ -478,8 +479,9 @@ namespace
     // the two drift a whole frame apart (about once a second on a 59 Hz panel, every 16 s at
     // 59.94). Frame Pacing = Display sets xmm7 each iteration to k / refresh, k = round(refresh
     // / 60), so the ticker and the display run at the same rate.
-    constexpr uintptr_t kTickerCompare = 0x7604B;   // comisd xmm7, xmm6 (period vs elapsed)
-    constexpr uintptr_t kTickerTick = 0x76080;      // call +17D20 (once per tick)
+    constexpr mgspwe::sites::Signature kTickerCompareSig { "pacing: ticker compare", 0x761CB, "66 0F 2F FE 76 2F B9 01 00 00 00 FF 15 ?? ?? ?? ??", 0 };   // comisd xmm7, xmm6 (period vs elapsed)
+    constexpr mgspwe::sites::Signature kTickerTickSig { "pacing: ticker tick", 0x76200, "E8 ?? ?? ?? ?? F2 48 0F 2C CE E8 ?? ?? ?? ?? 80 3D ?? ?? ?? ?? 00", 0 };   // call +17D20 (once per tick)
+    uintptr_t kTickerCompare = 0, kTickerTick = 0;
     SafetyHookMid g_TickerCompare {}, g_TickerTick {};
     std::atomic<uint64_t> g_Ticks { 0 };
     double g_TickPeriod = 1.0 / 60.0;
@@ -541,6 +543,8 @@ namespace
     void InstallTickerHooks()
     {
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kTickerCompare = mgspwe::sites::Resolve(kTickerCompareSig); kTickerTick = mgspwe::sites::Resolve(kTickerTickSig);
+        if (!kTickerCompare || !kTickerTick) { return; }
         const uint8_t* c = reinterpret_cast<const uint8_t*>(base + kTickerCompare);
         const uint8_t* k = reinterpret_cast<const uint8_t*>(base + kTickerTick);
         if (!(c[0] == 0x66 && c[1] == 0x0F && c[2] == 0x2F && c[3] == 0xFE && k[0] == 0xE8))
@@ -732,7 +736,8 @@ namespace
     // other sleeps through the tick it wanted, a whole frame (sampled 2026-09-14: at every hitch
     // every thread was in a wait). A short timeout on that one wait bounds the loss to the
     // timeout; the loop's counter check does the rest.
-    constexpr uintptr_t kWaitEventWrapper = 0x14AD0;   // bool WaitEvent(HANDLE* slot, DWORD ms /* 0 = INFINITE */)
+    constexpr mgspwe::sites::Signature kWaitEventWrapperSig { "pacing: wait-event wrapper", 0x14AD0, "48 83 EC 28 48 8B 09 85 D2 B8 FF FF FF FF", 0 };   // bool WaitEvent(HANDLE* slot, DWORD ms /* 0 = INFINITE */)
+    uintptr_t kWaitEventWrapper = 0;
     constexpr uintptr_t kVBlankEventSlot = 0x1083E90;
     SafetyHookInline g_WaitEvent {};
     std::atomic<uint64_t> g_VBlankTimeouts { 0 }, g_VBlankWaits2 { 0 };
@@ -913,6 +918,8 @@ namespace
         if (DrawCensus::bVBlankWaitLog) { ReadCpuMhz(); spdlog::info("PW pacing: executed cycles will be reported against a nominal {} MHz.", g_CpuMhz); InstallAlertHooks(); }
         if (DrawCensus::iVBlankWaitTimeout <= 0 && !DrawCensus::bVBlankWaitLog) { return; }
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kWaitEventWrapper = mgspwe::sites::Resolve(kWaitEventWrapperSig);
+        if (!kWaitEventWrapper) { return; }
         const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kWaitEventWrapper);
         if (p[0] == 0x48 && p[1] == 0x83 && p[2] == 0xEC && p[3] == 0x28 && p[4] == 0x48 && p[5] == 0x8B && p[6] == 0x09 && p[7] == 0x85 && p[8] == 0xD2)
         {
@@ -935,13 +942,16 @@ namespace
     // and the render thread is nearly always free; in direct flip (Borderless covering the
     // monitor, exclusive Fullscreen) it blocks to the vblank, and the drop lands every second
     // or so at 60 Hz. Waiting here for the flag to clear, briefly, keeps the frame.
-    constexpr uintptr_t kHandoffCheck = 0x175DF;   // cmp byte ptr [rcx+0x32c0], 0
+    constexpr mgspwe::sites::Signature kHandoffCheckSig { "pacing: handoff check", 0x175DF, "80 B9 C0 32 00 00 00 0F 85 ?? ?? ?? ?? 80 B9 C8 32 00 00 00", 0 };   // cmp byte ptr [rcx+0x32c0], 0
+    uintptr_t kHandoffCheck = 0;
     SafetyHookMid g_HandoffCheck {};
     std::atomic<uint64_t> g_HandoffWaits { 0 }, g_HandoffWaitTicks { 0 }, g_HandoffDrops { 0 };
     void InstallHandoffWait()
     {
         if (DrawCensus::iFrameHandoffWait <= 0) { return; }
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kHandoffCheck = mgspwe::sites::Resolve(kHandoffCheckSig);
+        if (!kHandoffCheck) { return; }
         const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kHandoffCheck);
         if (!(p[0] == 0x80 && p[1] == 0xB9 && p[2] == 0xC0 && p[3] == 0x32 && p[4] == 0x00 && p[5] == 0x00 && p[6] == 0x00))
         {
@@ -971,13 +981,16 @@ namespace
     // (2026-09-14, vblank wait log: every missed tick was a second wait with 0 ms of work).
     // Skipping that one store leaves the game's explicit count (30 fps movies and menus, set at
     // +78070) and the lowering path intact.
-    constexpr uintptr_t kGovernorRaise = 0x78462;   // mov [wait count], edi (6 bytes)
+    constexpr mgspwe::sites::Signature kGovernorRaiseSig { "pacing: governor raise", 0x785E2, "89 3D ?? ?? ?? ?? EB 06 89 15 ?? ?? ?? ?? 48 8B 5C 24 58", 0 };   // mov [wait count], edi (6 bytes)
+    uintptr_t kGovernorRaise = 0;
     SafetyHookMid g_GovernorRaise {};
     std::atomic<uint64_t> g_GovernorRaisesSkipped { 0 };
     void InstallGovernor()
     {
         if (DrawCensus::bFrameSkipGovernor) { return; }
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kGovernorRaise = mgspwe::sites::Resolve(kGovernorRaiseSig);
+        if (!kGovernorRaise) { return; }
         const uint8_t* p = reinterpret_cast<const uint8_t*>(base + kGovernorRaise);
         if (!(p[0] == 0x89 && p[1] == 0x3D))
         {

@@ -11,6 +11,7 @@
 #include "draw_census.hpp"
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "sites.hpp"
 #include "file_prefetch.hpp"
 #include "probe.hpp"
 #include "render_hooks.hpp"
@@ -49,6 +50,7 @@ namespace
 
             // The stutter fix, and the one feature here that is not about what the picture looks
             // like. It ships in both builds: the Lab census only adds a live switch for it.
+            mgspwe::sites::LogBuild();
             BusyWait::Install();
             FilePrefetch::Install();
 

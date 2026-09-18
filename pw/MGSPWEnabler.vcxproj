@@ -77,6 +77,7 @@
     <ClCompile Include="src\core\pw_game.cpp" />
     <ClCompile Include="src\core\config.cpp" />
     <ClCompile Include="src\core\compat.cpp" />
+    <ClCompile Include="src\core\sites.cpp" />
     <!-- The generic core, compiled from the MGS4 tree unchanged (see the note at the top). -->
     <ClCompile Include="..\asi\src\core\game.cpp" />
     <ClCompile Include="..\asi\src\core\log.cpp" />

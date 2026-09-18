@@ -6,6 +6,7 @@
 #include "game.hpp"
 #include "log.hpp"
 #include "mem.hpp"
+#include "sites.hpp"
 #include "canvas.hpp"
 
 
@@ -14,34 +15,38 @@ namespace
     // Every site that turns the -resolution index into the internal size carries both sizes as
     // immediates (the "1" branch first, then the "0" branch). Offsets are of the immediate
     // itself, measured on the live dump of 2026-09-13 (build 1.3.1.0).
-    struct Imm32Site { uintptr_t rva; uint32_t expected; bool isWidth; };
+    struct Imm32Site { uintptr_t rva; uint32_t expected; bool isWidth; bool hudScale; mgspwe::sites::Signature sig; };   // rva resolved from sig at Apply
     // Getter 1 (+16201) is read by the function that creates the post-chain targets (the
     // resolved colour, the HDR target, the post depth: creation stacks +1642D/+1677C/+16801/
     // +16A38 under +23200); it takes the post size. The other sites size and place the scene
     // (HUD scale, resolve, viewport getters) and take the scene size.
-    constexpr Imm32Site kPostImm32[] = {
-        { 0x1620E, 0x780, true }, { 0x16214, 0x440, false }, { 0x1621C, 0x5A0, true }, { 0x16222, 0x330, false },   // target getter 1
+    Imm32Site kPostImm32[] = {   // target getter 1
+        { 0, 0x780, true, false, { "post size: getter 1 w1", 0x1620E, "74 0E 41 BC 80 07 00 00 41 BD 40 04 00 00", 4 } }, { 0, 0x440, false, false, { "post size: getter 1 h1", 0x16214, "41 BC 80 07 00 00 41 BD 40 04 00 00 EB 0C 41 BC A0 05 00 00", 8 } },
+        { 0, 0x5A0, true, false, { "post size: getter 1 w0", 0x1621C, "EB 0C 41 BC A0 05 00 00 41 BD 30 03 00 00", 4 } }, { 0, 0x330, false, false, { "post size: getter 1 h0", 0x16222, "41 BC A0 05 00 00 41 BD 30 03 00 00 8B 05 ?? ?? ?? ??", 8 } },
     };
-    constexpr Imm32Site kImm32[] = {
-        { 0x1AC4B, 0x780, true }, { 0x1AC51, 0x440, false }, { 0x1AC59, 0x5A0, true }, { 0x1AC5F, 0x330, false },   // target getter 3
-        { 0x51ECA, 0x780, true }, { 0x51ECF, 0x440, false }, { 0x51ED6, 0x5A0, true }, { 0x51EDB, 0x330, false },   // target getter 2
-        { 0x56306, 0x780, true }, { 0x56327, 0x5A0, true },                                                         // HUD scale (width only)
+    Imm32Site kImm32[] = {
+        { 0, 0x780, true, false, { "scene size: getter 3 w1", 0x1AC4B, "74 0E 41 B9 80 07 00 00 41 BA 40 04 00 00", 4 } }, { 0, 0x440, false, false, { "scene size: getter 3 h1", 0x1AC51, "41 B9 80 07 00 00 41 BA 40 04 00 00 EB 0C 41 B9 A0 05 00 00", 8 } },   // target getter 3
+        { 0, 0x5A0, true, false, { "scene size: getter 3 w0", 0x1AC59, "EB 0C 41 B9 A0 05 00 00 41 BA 30 03 00 00", 4 } }, { 0, 0x330, false, false, { "scene size: getter 3 h0", 0x1AC5F, "41 B9 A0 05 00 00 41 BA 30 03 00 00 F3 0F 10 2D ?? ?? ?? ??", 8 } },
+        { 0, 0x780, true, false, { "scene size: getter 2 w1", 0x5201A, "74 0C B8 80 07 00 00 BA 40 04 00 00", 3 } }, { 0, 0x440, false, false, { "scene size: getter 2 h1", 0x5201F, "B8 80 07 00 00 BA 40 04 00 00 EB 0A B8 A0 05 00 00", 6 } },   // target getter 2
+        { 0, 0x5A0, true, false, { "scene size: getter 2 w0", 0x52026, "EB 0A B8 A0 05 00 00 BA 30 03 00 00", 3 } }, { 0, 0x330, false, false, { "scene size: getter 2 h0", 0x5202B, "B8 A0 05 00 00 BA 30 03 00 00 F3 0F 10 15 ?? ?? ?? ??", 6 } },
+        { 0, 0x780, true, true, { "scene size: HUD scale w1", 0x56456, "8B 91 6C 29 00 00 B9 80 07 00 00 4C 89 B4 24 C8 00 00 00", 7 } }, { 0, 0x5A0, true, true, { "scene size: HUD scale w0", 0x56477, "75 05 B9 A0 05 00 00 48 8B 9F 40 29 00 00", 3 } },   // HUD scale (width only)
     };
-    struct Imm64Site { uintptr_t rva; uint64_t expected; };
-    constexpr Imm64Site kImm64[] = {
-        { 0x3F509, 0x44000000780ull }, { 0x3F51D, 0x330000005A0ull },   // packed getter
-        { 0x5C22C, 0x44000000780ull }, { 0x5C245, 0x330000005A0ull },   // internal target creation
+    struct Imm64Site { uintptr_t rva; uint64_t expected; mgspwe::sites::Signature sig; };
+    Imm64Site kImm64[] = {
+        { 0, 0x44000000780ull, { "scene size: packed getter 1", 0x3F659, "48 8B 0D ?? ?? ?? ?? 48 B8 80 07 00 00 40 04 00 00", 9 } }, { 0, 0x330000005A0ull, { "scene size: packed getter 0", 0x3F66D, "75 0A 48 B8 A0 05 00 00 30 03 00 00", 4 } },   // packed getter
+        { 0, 0x44000000780ull, { "scene size: target creation 1", 0x5C37C, "41 0F 29 7B A8 48 BB 80 07 00 00 40 04 00 00", 7 } }, { 0, 0x330000005A0ull, { "scene size: target creation 0", 0x5C395, "75 0A 48 BB A0 05 00 00 30 03 00 00", 4 } },   // internal target creation
     };
     // The render-scale getter (+3F530): returns (scaleY << 32 | scaleX) as an immediate per
     // -resolution value; every scene target is the 480x272 canvas times it (4x MSAA on the
     // scene colour target), so it must stay an integer.
-    constexpr Imm64Site kScale[] = { { 0x3F539, 0x400000004ull }, { 0x3F54D, 0x300000003ull } };
+    Imm64Site kScale[] = { { 0, 0x400000004ull, { "render scale: immediate 1", 0x3F689, "48 8B 0D ?? ?? ?? ?? 48 B8 04 00 00 00 04 00 00 00", 9 } }, { 0, 0x300000003ull, { "render scale: immediate 0", 0x3F69D, "75 0A 48 B8 03 00 00 00 03 00 00 00", 4 } } };
     constexpr uintptr_t kOutputTable = 0xD8F1C8;   // four (width, height) int pairs, .rdata
     constexpr int kOutputSlots = 4;
     // Just after the game's picture fit (+1A2B5..+1A360) has written the picture size and
     // offsets into the display object (rsi): picture w/h at +0x2940/+0x2944, x/y offset at
     // +0x2948/+0x294c. With the back buffer at the internal size the picture is the whole buffer.
-    constexpr uintptr_t kAfterFit = 0x1A366;   // mov ecx, 0x11
+    constexpr mgspwe::sites::Signature kAfterFitSig { "window: after fit", 0x1A366, "B9 11 00 00 00 8B 96 78 29 00 00 89 96 7C 29 00 00", 0 };   // mov ecx, 0x11
+    uintptr_t kAfterFit = 0;
     SafetyHookMid g_AfterFit {};
     // Just after the Fullscreen (mode 2) display-mode loop (+1A220..+1A259): the game has
     // walked EnumDisplaySettingsA and kept the largest width (r15d) and height (r14d) of any
@@ -50,19 +55,22 @@ namespace
     // gets the game at 4096x2160, whatever the desktop runs at (a user's report, 2026-09-13).
     // The selected screen resolution replaces the pair, or the desktop's current mode when
     // none is set.
-    constexpr uintptr_t kAfterModeLoop = 0x1A25B;   // mov r9d, [rbp-0x58]
+    constexpr mgspwe::sites::Signature kAfterModeLoopSig { "window: after mode loop", 0x1A25B, "44 8B 4D A8 33 D2 44 8B 45 A4 48 8B 0D ?? ?? ?? ??", 0 };   // mov r9d, [rbp-0x58]
+    uintptr_t kAfterModeLoop = 0;
     SafetyHookMid g_AfterModeLoop {};
     // The two sites that turn the integer scale into a float: the game scaler (+596E5,
     // `cvtsi2ss xmm1, rcx` after the getter; replaced by our value, the instruction skipped) and
     // the render-scale store (+5B015, `addss xmm0, 0.5` then truncation; xmm0 replaced first).
     // Forcing a fraction here reproduces the fractional scale of Afevis's patch on purpose.
-    constexpr uintptr_t kGameScaler = 0x596E5;
-    constexpr uintptr_t kRenderScaleStore = 0x5B015;
+    constexpr mgspwe::sites::Signature kGameScalerSig { "internal size: game scaler", 0x59835, "F3 48 0F 2A C9 EB 03 0F 28 CE 41 8B 46 28", 0 };
+    constexpr mgspwe::sites::Signature kRenderScaleStoreSig { "internal size: render scale store", 0x5B165, "F3 0F 58 05 ?? ?? ?? ?? F3 0F 2C C0 89 41 50 C6 81 F0 00 00 00 01", 0 };
+    uintptr_t kGameScaler = 0, kRenderScaleStore = 0;
     SafetyHookMid g_GameScaler {}, g_RenderScaleStore {};
     // Scene target creation (+89F8D): edi = scale x canvas width, ebx = scale x canvas height,
     // the descriptor in r15 (+0x1c width, +0x18 height in canvas units). Afevis replaces the
     // full-canvas targets' size here with the output size; the experiment does the same.
-    constexpr uintptr_t kSceneCreate = 0x89F8D;
+    constexpr mgspwe::sites::Signature kSceneCreateSig { "internal size: scene create", 0x8A10D, "E8 ?? ?? ?? ?? 48 8B C8 E8 ?? ?? ?? ?? 84 C0 74 34 83 BC 24 A8 00 00 00 01", 0 };
+    uintptr_t kSceneCreate = 0;
     SafetyHookMid g_SceneCreate {};
     // The settings getter (+84D50, a 14-byte leaf: `mov rax,[array]; movsxd rdx,ecx; mov eax,[rax+rdx*4]`)
     // and setter (+85130). The window code reads id 3 (display mode), 4/5 (position), 7/8
@@ -73,8 +81,9 @@ namespace
     // exclusive-fullscreen chain at the display mode Windows offers: on a monitor whose native
     // resolution is 16:9 that is the native mode rather than a 21:9 desktop resolution (a
     // native 21:9 output is fine), so the Lab can pin the mode and logs the saved values once.
-    constexpr uintptr_t kSettingsGet = 0x84D50;
-    constexpr uintptr_t kSettingsSet = 0x85130;
+    constexpr mgspwe::sites::Signature kSettingsGetSig { "window: settings get", 0x84ED0, "48 8B 05 ?? ?? ?? ?? 48 63 D1 8B 04 90 C3 CC CC", 0 };
+    constexpr mgspwe::sites::Signature kSettingsSetSig { "window: settings set", 0x852B0, "8B 05 ?? ?? ?? ?? 41 BA 01 00 00 00 4C 8B 05 ?? ?? ?? ??", 0 };
+    uintptr_t kSettingsGet = 0, kSettingsSet = 0;
     constexpr uintptr_t kSettingsArray = 0x10C58A0;
     SafetyHookInline g_SettingsGet {}, g_SettingsSet {};
     std::atomic<bool> g_SettingsLogged { false };
@@ -120,6 +129,7 @@ namespace
     template <typename T>
     bool PatchChecked(uintptr_t rva, T expected, T value, const char* what)
     {
+        if (!rva) { return false; }   // unresolved in this build (already logged)
         const auto address = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + rva;
         T current {};
         std::memcpy(&current, reinterpret_cast<const void*>(address), sizeof(T));
@@ -140,6 +150,18 @@ namespace InternalSize
 
     void Apply()
     {
+        // Every site by signature first (sites.hpp); an unresolved one leaves its feature off.
+        for (Imm32Site& s : kPostImm32) { s.rva = mgspwe::sites::Resolve(s.sig); }
+        for (Imm32Site& s : kImm32) { s.rva = mgspwe::sites::Resolve(s.sig); }
+        for (Imm64Site& s : kImm64) { s.rva = mgspwe::sites::Resolve(s.sig); }
+        for (Imm64Site& s : kScale) { s.rva = mgspwe::sites::Resolve(s.sig); }
+        kAfterFit = mgspwe::sites::Resolve(kAfterFitSig);
+        kAfterModeLoop = mgspwe::sites::Resolve(kAfterModeLoopSig);
+        kGameScaler = mgspwe::sites::Resolve(kGameScalerSig);
+        kRenderScaleStore = mgspwe::sites::Resolve(kRenderScaleStoreSig);
+        kSceneCreate = mgspwe::sites::Resolve(kSceneCreateSig);
+        kSettingsGet = mgspwe::sites::Resolve(kSettingsGetSig);
+        kSettingsSet = mgspwe::sites::Resolve(kSettingsSetSig);
         // The wide canvas is one switch: off means a plain 16:9 run whatever the units say; on
         // with no units takes the primary display's aspect: wider than 16:9 widens the canvas
         // (650x272 at 21:9), narrower makes it taller (480x360 at 4:3, 480x300 at 16:10). An
@@ -201,8 +223,7 @@ namespace InternalSize
             int ok = 0;
             for (const Imm32Site& s : kImm32)
             {
-                const bool hudSite = (s.rva == 0x56306 || s.rva == 0x56327);
-                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? (hudSite ? hudW : sceneW) : sceneH), "scene size immediate");
+                ok += PatchChecked<uint32_t>(s.rva, s.expected, static_cast<uint32_t>(s.isWidth ? (s.hudScale ? hudW : sceneW) : sceneH), "scene size immediate");
             }
             const uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(sceneH)) << 32) | static_cast<uint32_t>(sceneW);
             for (const Imm64Site& s : kImm64)
@@ -222,7 +243,7 @@ namespace InternalSize
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* a = reinterpret_cast<const uint8_t*>(base + kGameScaler);
             const uint8_t* b = reinterpret_cast<const uint8_t*>(base + kRenderScaleStore);
-            if (a[0] == 0xF3 && a[1] == 0x48 && a[2] == 0x0F && a[3] == 0x2A && b[0] == 0xF3 && b[1] == 0x0F && b[2] == 0x58)
+            if (kGameScaler && kRenderScaleStore && a[0] == 0xF3 && a[1] == 0x48 && a[2] == 0x0F && a[3] == 0x2A && b[0] == 0xF3 && b[1] == 0x0F && b[2] == 0x58)
             {
                 g_GameScaler = safetyhook::create_mid(base + kGameScaler, [](SafetyHookContext& ctx) { ctx.xmm1.f32[0] = g_FloatScale; ctx.rip += 5; });
                 g_RenderScaleStore = safetyhook::create_mid(base + kRenderScaleStore, [](SafetyHookContext& ctx) { ctx.xmm0.f32[0] = g_FloatScale; });
@@ -235,7 +256,7 @@ namespace InternalSize
             g_SceneW = sceneReqW; g_SceneH = sceneReqH;
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* c = reinterpret_cast<const uint8_t*>(base + kSceneCreate);
-            if (c[0] == 0xE8)   // call +17D20
+            if (kSceneCreate && c[0] == 0xE8)   // call +17D20
             {
                 g_SceneCreate = safetyhook::create_mid(base + kSceneCreate, [](SafetyHookContext& ctx)
                 {
@@ -254,7 +275,7 @@ namespace InternalSize
         {
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
             const uint8_t* get = reinterpret_cast<const uint8_t*>(base + kSettingsGet);
-            if (get[0] == 0x48 && get[1] == 0x8B && get[2] == 0x05 && get[7] == 0x48 && get[8] == 0x63 && get[9] == 0xD1)
+            if (kSettingsGet && kSettingsSet && get[0] == 0x48 && get[1] == 0x8B && get[2] == 0x05 && get[7] == 0x48 && get[8] == 0x63 && get[9] == 0xD1)
             {
                 g_SettingsGet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsGet), reinterpret_cast<void*>(&Hooked_SettingsGet));
                 g_SettingsSet = safetyhook::create_inline(reinterpret_cast<void*>(base + kSettingsSet), reinterpret_cast<void*>(&Hooked_SettingsSet));
@@ -270,7 +291,7 @@ namespace InternalSize
             // game fits a 16:9 picture; the wide frame must be fitted at its own aspect).
             const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterFit;
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);
-            if (bytes[0] == 0xB9 && bytes[1] == 0x11)   // mov ecx, 0x11
+            if (kAfterFit && bytes[0] == 0xB9 && bytes[1] == 0x11)   // mov ecx, 0x11
             {
                 g_AfterFit = safetyhook::create_mid(site, [](SafetyHookContext& ctx)
                 {
@@ -309,7 +330,7 @@ namespace InternalSize
         {
             const auto site = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kAfterModeLoop;
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(site);
-            if (bytes[0] == 0x44 && bytes[1] == 0x8B && bytes[2] == 0x4D && bytes[3] == 0xA8 && bytes[4] == 0x33 && bytes[5] == 0xD2)
+            if (kAfterModeLoop && bytes[0] == 0x44 && bytes[1] == 0x8B && bytes[2] == 0x4D && bytes[3] == 0xA8 && bytes[4] == 0x33 && bytes[5] == 0xD2)
             {
                 g_AfterModeLoop = safetyhook::create_mid(site, [](SafetyHookContext& ctx)
                 {

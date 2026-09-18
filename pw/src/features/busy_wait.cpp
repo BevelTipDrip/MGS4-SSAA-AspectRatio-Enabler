@@ -3,14 +3,16 @@
 
 #include "game.hpp"
 #include "log.hpp"
+#include "sites.hpp"
 
 namespace
 {
-    // The three sites, as RVAs against the clean dump C:\mgspf_tools\pw\pw_text.bin. Each is
-    // checked against its own bytes before anything is hooked, and a mismatch installs nothing.
-    constexpr uintptr_t kFrameReadyStore = 0x1768A;   // immediately after mov byte [rbx+0x32c0], 1
-    constexpr uintptr_t kRenderSpin      = 0x17CCF;   // xor ecx, ecx ; call Sleep
-    constexpr uintptr_t kTickerSleep     = 0x76051;   // mov ecx, 1 ; call timeBeginPeriod
+    // The three sites, found by signature (sites.hpp) and then checked against their own bytes
+    // before anything is hooked; a mismatch installs nothing.
+    constexpr mgspwe::sites::Signature kFrameReadyStoreSig { "busy wait: frame ready store", 0x1768A, "44 89 A3 6C 2A 00 00 44 89 A3 B4 2A 00 00", 0 };   // immediately after mov byte [rbx+0x32c0], 1
+    constexpr mgspwe::sites::Signature kRenderSpinSig      { "busy wait: render spin", 0x17CCF, "33 C9 FF 15 ?? ?? ?? ?? 40 38 AF C8 3B 00 00", 0 };   // xor ecx, ecx ; call Sleep
+    constexpr mgspwe::sites::Signature kTickerSleepSig     { "busy wait: ticker sleep", 0x761D1, "B9 01 00 00 00 FF 15 ?? ?? ?? ?? 0F 28 C7", 0 };   // mov ecx, 1 ; call timeBeginPeriod
+    uintptr_t kFrameReadyStore = 0, kRenderSpin = 0, kTickerSleep = 0;
 
     // Load-bearing for shutdown. The render thread's loop only re-reads the quit flag at
     // display+0x3bc8 after its wait returns, so this timeout is what guarantees it wakes when the
@@ -98,6 +100,10 @@ namespace BusyWait
         if (iLevel <= 0) { return; }
 
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kFrameReadyStore = mgspwe::sites::Resolve(kFrameReadyStoreSig);
+        kRenderSpin = mgspwe::sites::Resolve(kRenderSpinSig);
+        kTickerSleep = mgspwe::sites::Resolve(kTickerSleepSig);
+        if (!kFrameReadyStore || !kRenderSpin || !kTickerSleep) { spdlog::warn("PW busy wait: a site was not found in this build; nothing hooked."); return; }
         const auto* store = reinterpret_cast<const uint8_t*>(base + kFrameReadyStore - 7);
         const auto* spin = reinterpret_cast<const uint8_t*>(base + kRenderSpin);
         const auto* tick = reinterpret_cast<const uint8_t*>(base + kTickerSleep);

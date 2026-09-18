@@ -184,3 +184,31 @@ engine's stage-load call from a Lab build, which is a separate experiment.
 no key binding, no launch switch, no global debug variable. Whatever debug tooling existed at
 Kojima Productions was compiled out of the shipped PSP build and the Master Collection port did
 not add any back.
+
+## Game update 2026-09-18 and the move to signatures
+
+Steam replaced the executable at 00:40 on 2026-09-18 (build id 25049520 -> 25294658; the new exe
+is linked 2026-09-13 04:37:52 UTC, `.text` raw size 0x98B800 -> 0x98BA00). The code is the same
+apart from an insertion around `+2A000..+4A000`: nothing moves below `+2A000`, everything from
+about `+3F000` to `+5C000` moves +0x150, everything from `+76000` on moves +0x180. `.rdata` and
+`.data` keep their layout (the output table, the settings array, the vblank slots and the
+display-object pointer are at the same RVAs, confirmed through the new code's displacements).
+Every one of the 52 code sites the two ASIs use is byte-identical at its shifted address; the
+old fixed RVAs simply pointed at the wrong bytes, the byte checks refused them, and the game
+booted to a white screen with nothing patched (PatriotFix was in the same state).
+
+Since then the sites are found by **signature** (`pw/src/core/sites.hpp`): a masked byte pattern
+that starts at an instruction boundary, wildcards rel32 branch targets and RIP-relative
+displacements, is scanned around the last known address first and over the whole `.text` as a
+fallback, and is accepted only when it hits exactly once. Immediates inside an instruction carry
+an offset from the pattern start. The generator (`C:\mgspf_tools\pw\siggen.py`) anchors on
+boundaries from the exe's `.pdata` and the nearest padding run (decoding backwards guessed
+wrong twice), and proves each pattern unique in both builds' dumps before it is used; the table
+is `signatures.txt` beside it. The log's first PW line names the build (link timestamp) and any
+site that moved from its hint is logged with the distance.
+
+**Procedure for the next update:** launch the game once with the ASIs off, `textdump.ps1` at
+the title (update `$Sections` from the new PE header), keep the previous dump as
+`pw_text_old_<buildid>.bin`, run `siggen.py`, read `signatures.txt`: sites that resolve need
+nothing (the hints in the sources can be refreshed at leisure); a NOT UNIQUE or missing site is
+a real code change and needs reading.
