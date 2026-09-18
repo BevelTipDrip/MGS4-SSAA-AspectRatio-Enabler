@@ -217,3 +217,37 @@ Different, because the engines are:
 | world-pinned labels | node strcode, group-translated | not measured yet (item pickup markers are Afevis's `+FEE61`) |
 
 The public tree says only that the module exists; this file is the description.
+
+## 8. RenderDoc captures: the identity tuple, read from frames (Measured, 2026-09-17)
+
+Seven frames captured by the user in the first mission (stock render size 1440x816, no
+MGSPWEnabler loaded; PatriotFix present) and exported with `C:\mgspf_tools\pw\rdoc\`
+(`rdc_export.ps1` -> one TSV row per draw: event id, UI-ortho flag, translation row, texture on
+pixel slot 0, quad rectangle, viewport, target). The pipeline replaces the census for
+identification: the user clicks a pixel in RenderDoc (pixel history), reads the event id, and
+the row for that id is the register entry. 7,833 draws a frame, 331 on the UI ortho, 291 of
+them on the main target; export takes 24 s.
+
+What the frames settle:
+
+- **The register's rows are real and stable.** `(8, -12)` (life, gauges, glyphs), `(-6, 6/12/32/38)`
+  (the item and weapon boxes at the right edge), `(112, 4)` and `(133, 58)` / `(113, 85)` at 0.75
+  and 0.70 scale (gauges), `(454.75, 65.5)`: identical translation rows in all seven frames.
+- **The item/weapon "slide" is a list scroll on the translation row, not new geometry.** With
+  the selector open, one frame carries the same widget (rects `336..368 x 137..153` and
+  `336..368 x 197..261`, textures 256x128 / 512x512 / 512x128) at `tx = base - 30*i`: entries at
+  a 30-unit pitch, and `base` animating through fractional values (`-1.5`, `-0.5`, `-10.44`,
+  `19.56`, `-130.44`). Quad rectangles never change between frames; only the translation row
+  moves. The selected box's gauge row also glides (`(133,58)` -> `128.94` -> `118.62`).
+- **Consequence for the fix:** a bias matched on the exact translation row ("within 0.5", the
+  `tbias` rule of section 3) misses every sliding entry. For the selector family the identity
+  must be `(ty, texture, rectangle)` with `tx` free, and the bias a constant dx applied
+  whatever `tx` is: the scroll then carries the edge offset with it, which is the rigid
+  translation the design wants. Steady groups can keep the exact-row match.
+- Groups with `ty = 182 / 200` at `tx = 222 / 209` appear only in the frames with the selector
+  closed (an info panel), so presence itself distinguishes selector-open from closed frames.
+
+Not yet captured with our ASI loaded: the Release ASI makes the game exit 1.4 s after device
+creation under RenderDoc (twice; with the ASI renamed off the game runs). Suspect the context
+vtable rewrite on RenderDoc's wrapper object; a settings bisect over a few launches is pending.
+Ultrawide captures (the wide canvas) wait on that.
