@@ -212,3 +212,14 @@ the title (update `$Sections` from the new PE header), keep the previous dump as
 `pw_text_old_<buildid>.bin`, run `siggen.py`, read `signatures.txt`: sites that resolve need
 nothing (the hints in the sources can be refreshed at leisure); a NOT UNIQUE or missing site is
 a real code change and needs reading.
+
+**White screen on the new build, resolved 2026-09-18 01:30.** With PatriotFix off the Release ASI
+renders at 16:9 and 21:9 (screen checked, not just the log). The Lab build went white because its
+frame-pacing instrumentation (`Pacing Log`, `VBlank Wait Log`: inline hooks on
+`ntdll!RtlSleepConditionVariableSRW/CS` and `RtlWaitOnAddress`, import hooks on the wait
+functions) deadlocks this build: a cdb thread dump showed the render thread inside NvPresent64
+waiting on an SRW lock right after Present and the game thread inside EnterCriticalSection, both
+in the hooked ntdll paths, and the log carried two access-violation faults at the moment those
+hooks were written. With the two toggles off the same Lab build renders (120 frames/s, no
+faults). Those logs served the frame-pacing work, which is finished. PatriotFix still carries
+the old build's offsets and has to stay off until it is updated.
