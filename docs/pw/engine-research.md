@@ -164,6 +164,22 @@ context pointed at) contained none of the common codes (`pos`, `rot`, `model`, `
 layout guess (`C4 <code> 5x`) is void. Not pursued further: the arguments live inside the stage
 script data, and enumerating them would only list what stage scripts set, not a hidden menu.
 
+**The scripts themselves (2026-09-17, late).** In the sibling games the dev menu lives in the
+stage scripts, not the executable (MGS2 PC: swap `scenario.gcx`; MGS3 MC: a save that makes the
+script open it), so the exe-only search above could not have seen one. All 92 Peace Walker
+stage scripts were extracted from a copy of `009645fa.PDT` (= `STAGEDAT.PDT`; pipeline and
+gotchas in `C:\mgspf_tools\pw\gcl\README.md`) and scanned at the token level: 408k command
+tokens, 399k strcode arguments (22,920 distinct), 46k string literals including the developers'
+EUC-JP `print` comments. Commands resolve to `if command switch load print return trap`; no
+argument hash resolves to any debug/dev/cheat/menu name; `debug` occurs once, as a per-object
+argument in `w04s06b`; every `dev` literal is Xbox "device change" plumbing; the Japanese hits
+are pause-menu restart messages. So the script layer holds no developer menu either.
+
+One curiosity: `nht_sound_test` is a complete stage in the shipped STAGEDAT (script, qar, rlc)
+that no other script references by name or hash: an orphan sound-test room. Whether the port
+can still run it is untested; forcing it would mean substituting the stage name at the
+engine's stage-load call from a Lab build, which is a separate experiment.
+
 **Conclusion.** No evidence of a hidden developer menu in Peace Walker's executable: no menu id,
 no key binding, no launch switch, no global debug variable. Whatever debug tooling existed at
 Kojima Productions was compiled out of the shipped PSP build and the Master Collection port did
