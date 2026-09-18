@@ -251,3 +251,28 @@ Not yet captured with our ASI loaded: the Release ASI makes the game exit 1.4 s 
 creation under RenderDoc (twice; with the ASI renamed off the game runs). Suspect the context
 vtable rewrite on RenderDoc's wrapper object; a settings bisect over a few launches is pending.
 Ultrawide captures (the wide canvas) wait on that.
+
+### 8.1 Wide-canvas captures with the fix loaded (Measured, 2026-09-17, 3440x1440, canvas 650x272, scale 16)
+
+Nine frames (`C:\mgspf_tools\pw\rdoc\captures\wide_*.rdc`, ~0.9 GB each at the 10400x4352 render
+size; export 80 s each). Against the stock 16:9 frames:
+
+- **The registered HUD group moved exactly as designed:** `(8, -12)` reads `(-77, -12)` in every
+  wide frame, delta -85 = the UI offset the canvas logs (`UI offset (85, 0)`). The other exact-row
+  groups (`(-6, 6/12/32/38)`, the gauges) show the same delta.
+- **The selector family did not move:** its entries sit at `tx = -2, -32, -62, -92` (base -2,
+  pitch 30, `ty = 0`) with no -85 applied, because the exact-row match never sees an animating
+  `tx`. Confirms section 8: that family needs the `(ty, texture, rectangle)` match with `tx` free.
+- **Masking data.** The dim the game draws behind the item/weapon selector is one untextured quad
+  on the UI ortho, translation `(0, 0)`, rectangle `0,0..480,272`, vertex colour `00 00 00`,
+  alpha `0x77` (119/255), every vertex the same. At 21:9 it covers canvas units 85..565 and the
+  world shows uncovered in the two side strips. The full fade to black in the transition frame is
+  already a `650x272` quad (`000000ff`), i.e. one of the module's canvas-sized overlay fixups, so
+  fades need nothing; the 480-wide translucent dims are the gap. Since their identity is exact
+  (untextured, full 480x272 rectangle, UI constant buffer), the same vertex rewrite the fade
+  fixups use can widen them to `-85..565` at upload, and because the game animates their alpha,
+  the widened dim fades in and out in step with the menu by construction. Frame 3542 (a list menu)
+  also shows white `ffffff3f` highlight quads; those are content, not masks.
+- Frame classes captured: 6314/6411/6507 HUD + selector; 10727/11177 HUD; 2686/4694 no HUD
+  (cutscene or transition); 3542 a list menu (39 scrolled groups); 4271 a 47-draw fade frame.
+  The exporter now also writes the first vertex's RGBA and the alpha range per quad.
