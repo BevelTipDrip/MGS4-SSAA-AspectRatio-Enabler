@@ -163,8 +163,10 @@ on pixel slot 0, quad rectangle, viewport, target; ~25 s for an 8k-draw frame), 
 `qrenderdoc.exe --python` (Windows ships no standalone module).
 
 Launch for capture with `renderdoccmd capture --working-dir mgspw --opt-hook-children <exe>`
-plus the launcher's arguments (`docs/pw/engine-research.md`). Two constraints found the first
-evening: the Lab build must not be deployed (its device/context hooks are unconditional), and
-even the Release ASI makes the game exit ~1.4 s after device creation under RenderDoc, while
-with the ASI renamed off it runs. That conflict is not yet bisected; until it is, captures are
-of the stock game, which is enough for identity work but not for wide-canvas frames.
+plus the launcher's arguments (`docs/pw/engine-research.md`). One constraint found the first evening: under RenderDoc the game receives wrapper contexts of
+one class, so the immediate and deferred contexts share a vtable, and both the Release render
+hooks and the Lab census patched it twice, recording our own `Hooked_Map` as the original and
+recursing until the stack was gone (a clean-looking exit 1.4 s after device creation; found with
+cdb attached on the log line "Initialisation complete", exception c00000fd in `Hooked_Map`).
+Fixed 2026-09-17 (the second install aliases the first when the vtable is the same); either
+build now runs under RenderDoc, so wide-canvas captures with the fix loaded are possible.
