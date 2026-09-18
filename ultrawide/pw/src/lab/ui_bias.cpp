@@ -55,8 +55,9 @@ namespace
     // xmm2 at +8EBB1 (`movaps xmm6, xmm2`, stored to [rcx+0x254] and used for the projection and
     // the culling). Widening the aspect alone stretches the world horizontally (Hor+ at the same
     // horizontal FOV would be Vert-); dividing the FOV by the widening keeps the vertical FOV.
-    constexpr uintptr_t kCameraAspect = 0x8EE22;
-    constexpr uintptr_t kCameraFov = 0x8EBB1;
+    // (unused since the canvas module took the camera over; kept as the 2026-09-18 build's addresses)
+    constexpr uintptr_t kCameraAspect = 0x8EFA2;
+    constexpr uintptr_t kCameraFov = 0x8ED31;
     SafetyHookMid g_CameraAspect {}, g_CameraFov {};
     int g_WideUnits = 0, g_WideScale = 0;
     std::atomic<uint32_t> g_DrawCalls { 0 }, g_ElementDraws { 0 }, g_Narrowed { 0 }, g_WideOrthoShifted { 0 };

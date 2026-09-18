@@ -5,6 +5,7 @@
 #include "lab.hpp"
 #include "log.hpp"
 #include "mem.hpp"
+#include "sites.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -23,27 +24,30 @@ namespace
     struct Site
     {
         const char* name;
-        uintptr_t rva;
+        uintptr_t rva;       // the site in the build the signature was made on (2026-09-18, build 25294658): the hint
         const char* bytes;   // expected bytes at the hook address (hex, spaces), a short prefix
+        const char* pattern; // the signature that finds the site in any build (sites.hpp); offset below
+        size_t offset;
     };
 
-    // Every site is Afevis's pattern hit plus his offset (pw/tools/afevis_sites.py, clean dump 2026-09-12).
-    constexpr Site kCameraConfig  { "camera config",       0x8EA17,  "4D 8B 13" };            // mov r10, [r11]
-    constexpr Site kAspectRatio   { "aspect ratio",        0x8EE22,  "0F 28 DA F3 0F 5E 9B" }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]
-    constexpr Site kHudScaler     { "HUD scaler",          0x563E3,  "F3 0F 59 96" };          // mulss xmm2, [rsi+..]
-    constexpr Site kHudOffset     { "HUD offset",          0x8EDE3,  "F3 0F 5E C2" };          // divss xmm0, xmm2
-    constexpr Site kFov           { "FOV",                 0x8EBC8,  "F3 0F 11 B9" };          // movss [rcx+0x268], xmm7
-    constexpr Site kCullingFov    { "culling FOV",         0x8EE94,  "48 8D BB" };             // lea rdi, [rbx+0x1e0]
-    constexpr Site kScissoring    { "scissoring",          0x5A31F,  "89 9F" };                // mov [rdi+0x380], ebx
-    constexpr Site kLoading       { "loading screens",     0x78609,  "E8" };                   // call (rdx, r8 = viewport centre)
-    constexpr Site kMovies        { "movies",              0x440FAB, "C7 44 24" };             // mov [rsp+..], imm
-    constexpr Site kColorFilter   { "colour filter",       0x2EF2C8, "66 89 85" };             // mov [rbp+..], ax
-    constexpr Site kGlare         { "glare",               0x19469B, "0F 28 CB" };             // movaps xmm1, xmm3
-    constexpr Site kHalfGlare     { "half glare",          0x194A5A, "0F 28 CE" };             // movaps xmm1, xmm6
-    constexpr Site kPickupMarkers { "item pickup markers", 0xFEECA,  "" };                     // pattern + 105 (no fixed prefix)
-    constexpr Site kDamageOverlay { "damage overlay",      0x491F0B, "0F 10 41" };             // movups xmm0, [rcx+..]
-    constexpr Site kGrenadeArc    { "grenade arc",         0x6C3E28, "F3 0F 59 15" };          // mulss xmm2, [rip+..]
-    constexpr Site kHitMarkers    { "hit markers",         0x6C1890, "F3 0F 11 46" };          // movss [rsi+..], xmm0
+    // Every site is Afevis's pattern hit plus his offset (pw/tools/afevis_sites.py, clean dump 2026-09-12),
+    // now found by signature (C:\mgspf_tools\pw\siggen.py, proven unique in the builds of 09-13 and 09-18).
+    constexpr Site kCameraConfig  { "camera config",       0x8EB97, "4D 8B 13", "4D 8B 13 49 39 72 08 4D 8D 5A 08 0F 85 ?? ?? ?? ??", 0 };            // mov r10, [r11]
+    constexpr Site kAspectRatio   { "aspect ratio",        0x8EFA2, "0F 28 DA F3 0F 5E 9B", "0F 28 DA F3 0F 5E 9B 50 02 00 00 48 8B CF", 0 }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]
+    constexpr Site kHudScaler     { "HUD scaler",          0x56533, "F3 0F 59 96", "F3 0F 59 96 54 03 00 00 0F 28 DE 48 8B 0D ?? ?? ?? ??", 0 };          // mulss xmm2, [rsi+..]
+    constexpr Site kHudOffset     { "HUD offset",          0x8EF63, "F3 0F 5E C2", "F3 0F 5E C2 F3 0F 5C C1 F3 0F 11 83 90 01 00 00", 0 };          // divss xmm0, xmm2
+    constexpr Site kFov           { "FOV",                 0x8ED48, "F3 0F 11 B9", "F3 0F 11 B9 68 02 00 00 44 0F 29 40 B8", 0 };          // movss [rcx+0x268], xmm7
+    constexpr Site kCullingFov    { "culling FOV",         0x8F014, "48 8D BB", "48 8D BB E0 01 00 00 F3 44 0F 10 1D ?? ?? ?? ??", 0 };             // lea rdi, [rbx+0x1e0]
+    constexpr Site kScissoring    { "scissoring",          0x5A46F, "89 9F", "89 9F 80 03 00 00 89 87 7C 03 00 00", 0 };                // mov [rdi+0x380], ebx
+    constexpr Site kLoading       { "loading screens",     0x78789, "E8", "E8 ?? ?? ?? ?? BA 10 07 00 00 48 8D 0D ?? ?? ?? ?? 44 8D 42 68", 0 };                   // call (rdx, r8 = viewport centre)
+    constexpr Site kMovies        { "movies",              0x44112B, "C7 44 24", "C7 44 24 20 01 00 00 00 E8 ?? ?? ?? ?? 48 89 83 80 00 00 00", 0 };             // mov [rsp+..], imm
+    constexpr Site kColorFilter   { "colour filter",       0x2EF448, "66 89 85", "66 89 85 FC 00 00 00 F3 0F 11 85 A4 00 00 00", 0 };             // mov [rbp+..], ax
+    constexpr Site kGlare         { "glare",               0x19481B, "0F 28 CB", "0F 28 CB F3 41 0F 5C C9 0F 2F CF 72 04", 0 };             // movaps xmm1, xmm3
+    constexpr Site kHalfGlare     { "half glare",          0x194BDA, "0F 28 CE", "0F 28 CE 41 0F BF C4 F3 44 0F 5C DD", 0 };             // movaps xmm1, xmm6
+    constexpr Site kPickupMarkers { "item pickup markers", 0xFF04A, "", "F3 41 0F 11 58 04 48 83 C4 38 C3 CC CC CC CC CC CC CC CC CC CC CC 40 55", 0 };                     // pattern + 105 (no fixed prefix)
+    constexpr Site kDamageOverlay { "damage overlay",      0x49208B, "0F 10 41", "0F 10 41 78 0F 11 81 A0 00 00 00 8D 57 02", 0 };             // movups xmm0, [rcx+..]
+    constexpr Site kGrenadeArc    { "grenade arc",         0x6C3FA8, "F3 0F 59 15", "F3 0F 59 15 ?? ?? ?? ?? F3 0F 5C CC F3 0F 59 05 ?? ?? ?? ??", 0 };          // mulss xmm2, [rip+..]
+    constexpr Site kHitMarkers    { "hit markers",         0x6C1A10, "F3 0F 11 46", "F3 0F 11 46 40 0F 57 C0 F3 0F 11 4E 44", 0 };          // movss [rsi+..], xmm0
 
     SafetyHookMid g_Hooks[16] {};
     int g_HookCount = 0, g_HookFailures = 0;
@@ -65,8 +69,9 @@ namespace
     template <typename F>
     void Hook(const Site& site, F&& fn)
     {
-        const auto address = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + site.rva;
-        if (!BytesMatch(address, site.bytes))
+        const uintptr_t rva = mgspwe::sites::Resolve({ site.name, site.rva, site.pattern, site.offset });
+        const auto address = reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + rva;
+        if (!rva || !BytesMatch(address, site.bytes))
         {
             g_HookFailures++;
             spdlog::warn("PW canvas: the {} site does not look as expected; that fixup is off.", site.name);
@@ -76,7 +81,7 @@ namespace
         slot = safetyhook::create_mid(address, std::forward<F>(fn));
         if (!slot) { g_HookFailures++; spdlog::warn("PW canvas: the {} hook could not be installed.", site.name); }
 #if MGS4E_LAB_BUILD
-        else { spdlog::info("PW canvas: {} hooked at +{:X}.", site.name, site.rva); }
+        else { spdlog::info("PW canvas: {} hooked at +{:X}.", site.name, rva); }
 #endif
     }
 
