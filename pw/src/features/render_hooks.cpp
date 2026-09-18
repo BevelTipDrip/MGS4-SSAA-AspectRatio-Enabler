@@ -118,6 +118,15 @@ namespace
             { kCtxUnmap, reinterpret_cast<void*>(Hooked_Unmap) },
             { kCtxResolveSubresource, reinterpret_cast<void*>(Hooked_ResolveSubresource) },
         };
+        // Under a wrapping layer (RenderDoc) the immediate and deferred contexts are one class with one
+        // vtable. Patching it twice would record our own hooks as the "original" and recurse until the
+        // stack is gone, so the second set just aliases the first.
+        if (&h != &g_Immediate && g_Immediate.vtable == vtable)
+        {
+            h = g_Immediate;
+            spdlog::info("PW render: the {} context shares the immediate context's vtable; hooks shared.", name);
+            return;
+        }
         h.vtable = vtable;
         DWORD old = 0;
         if (!VirtualProtect(vtable, kCtxSlotCount * sizeof(void*), PAGE_READWRITE, &old))

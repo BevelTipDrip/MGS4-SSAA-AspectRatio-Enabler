@@ -2021,6 +2021,15 @@ namespace
             { kCtxCSSetUnorderedAccessViews, reinterpret_cast<void*>(Hooked_CSSetUnorderedAccessViews) },
             { kCtxCSSetShader, reinterpret_cast<void*>(Hooked_CSSetShader) },
         };
+        // Under a wrapping layer (RenderDoc) the immediate and deferred contexts share one vtable; a second
+        // install would record our own hooks as the originals and recurse. Alias the first set instead.
+        if (&h != &g_Immediate && g_Immediate.vtable == vtable)
+        {
+            h = g_Immediate;
+            h.name = name;
+            spdlog::info("PW census: the {} context shares the immediate context's vtable; hooks shared.", name);
+            return;
+        }
         h.vtable = vtable;
         h.name = name;
         DWORD old = 0;
