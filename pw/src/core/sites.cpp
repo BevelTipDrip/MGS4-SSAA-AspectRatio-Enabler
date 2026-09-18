@@ -9,11 +9,11 @@
 
 namespace
 {
-    struct Text { uintptr_t rva = 0; size_t size = 0; uint32_t timestamp = 0; };
+    struct Text { uintptr_t rva = 0; size_t size = 0; uint32_t timestamp = 0; std::vector<uint8_t> snapshot; };
 
-    const Text& TextSection()
+    Text& TextSection()
     {
-        static const Text text = []
+        static Text text = []
         {
             Text t {};
             const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
@@ -25,6 +25,10 @@ namespace
             {
                 if (std::memcmp(sec[i].Name, ".text", 5) == 0) { t.rva = sec[i].VirtualAddress; t.size = sec[i].Misc.VirtualSize; break; }
             }
+            // Scanned against a copy taken before any hook lands: a signature may span bytes another
+            // site's hook has since replaced with a jump (the ticker compare pattern covers the
+            // ticker sleep site, and busy wait hooks that first). The copy is released by Forget().
+            if (t.size) { t.snapshot.assign(reinterpret_cast<const uint8_t*>(base + t.rva), reinterpret_cast<const uint8_t*>(base + t.rva) + t.size); }
             return t;
         }();
         return text;
@@ -50,8 +54,9 @@ namespace
     std::vector<uintptr_t> Find(const Pattern& p, uintptr_t rva, size_t size, size_t cap)
     {
         std::vector<uintptr_t> hits;
-        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-        const auto* hay = reinterpret_cast<const uint8_t*>(base + rva);
+        const Text& text = TextSection();
+        if (text.snapshot.empty() || rva < text.rva || rva + size > text.rva + text.snapshot.size()) { return hits; }
+        const uint8_t* hay = text.snapshot.data() + (rva - text.rva);
         const size_t n = p.bytes.size();
         if (size < n) { return hits; }
         // the first literal byte drives the outer scan
@@ -73,6 +78,7 @@ namespace mgspwe::sites
     {
         const Text& text = TextSection();
         if (!text.size) { spdlog::warn("PW sites: no .text section found; {} unresolved.", s.name); return 0; }
+        if (text.snapshot.empty()) { spdlog::warn("PW sites: the code snapshot was released before {} was looked up; unresolved.", s.name); return 0; }
         const Pattern p = Parse(s.pattern);
         if (p.bytes.empty()) { spdlog::warn("PW sites: {} has an empty pattern.", s.name); return 0; }
         const uintptr_t textEnd = text.rva + text.size;
@@ -88,6 +94,12 @@ namespace mgspwe::sites
         if (rva != s.hint) { spdlog::info("PW sites: {} at +{:X} (hint +{:X}, moved {}{:#x}).", s.name, rva, s.hint, rva > s.hint ? "+" : "-", rva > s.hint ? rva - s.hint : s.hint - rva); }
         else if (mgs4e::log::Verbose()) { spdlog::info("PW sites: {} at +{:X}.", s.name, rva); }
         return rva;
+    }
+
+    void Forget()
+    {
+        Text& text = TextSection();
+        std::vector<uint8_t>().swap(text.snapshot);
     }
 
     void LogBuild()

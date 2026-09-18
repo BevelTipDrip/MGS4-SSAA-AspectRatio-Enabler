@@ -24,6 +24,10 @@ namespace mgspwe::sites
     // moved from their hint are logged with the distance.
     uintptr_t Resolve(const Signature& s);
 
-    // Logs the executable's link timestamp and .text extent once, so a report names the build.
+    // Logs the executable's link timestamp and .text extent once, so a report names the build. Also
+    // takes the pristine copy of .text that every Resolve scans; call it before any hook is installed.
     void LogBuild();
+
+    // Releases the copy of .text once every site has been resolved.
+    void Forget();
 }

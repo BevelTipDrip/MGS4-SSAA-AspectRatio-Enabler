@@ -66,6 +66,7 @@ namespace
             InternalSize::Apply();
 
             AspectRatio::ApplyFixes();
+            mgspwe::sites::Forget();   // every site is resolved by now; drop the copy of .text
 
             spdlog::info("Initialisation complete.");
         });
