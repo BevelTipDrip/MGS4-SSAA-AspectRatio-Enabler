@@ -152,3 +152,19 @@ only; the lab settings and their knobs are kept. Unsaved changes prompt before e
 A latched Lab boot logs `LAB MODE: research instrumentation latched by the Config Tool; every boot
 reads MGSPWEnabler.lab.settings until Revert to shipped is pressed.` The MGS4 plugin does not have
 the latch yet (user's call: later); the tool side is written once for both games.
+
+## RenderDoc captures (2026-09-17)
+
+For identifying UI draws, a RenderDoc frame beats the census: the user clicks the pixel
+(pixel history) and reads an event id; `C:\mgspf_tools\pw\rdoc\rdc_export.ps1 -Capture x.rdc`
+turns the capture into one TSV row per draw (event id, UI-ortho flag, translation row, texture
+on pixel slot 0, quad rectangle, viewport, target; ~25 s for an 8k-draw frame), and
+`compare_frames.py` diffs the HUD groups across captures. The scripts run inside
+`qrenderdoc.exe --python` (Windows ships no standalone module).
+
+Launch for capture with `renderdoccmd capture --working-dir mgspw --opt-hook-children <exe>`
+plus the launcher's arguments (`docs/pw/engine-research.md`). Two constraints found the first
+evening: the Lab build must not be deployed (its device/context hooks are unconditional), and
+even the Release ASI makes the game exit ~1.4 s after device creation under RenderDoc, while
+with the ASI renamed off it runs. That conflict is not yet bisected; until it is, captures are
+of the stock game, which is enough for identity work but not for wide-canvas frames.
