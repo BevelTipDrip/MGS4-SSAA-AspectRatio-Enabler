@@ -99,7 +99,9 @@ namespace
         { -17.5f,   -2.5f,   6.0f, +1, +1 },   //   ... (-6, 6), (-3, 6), (-17, 6)
         { -17.5f,   -5.5f,   7.0f, +1, +1 },
         { -17.5f,   -5.5f,  12.0f, +1, +1 },
-        {  -4.5f,    0.5f,   4.0f, +1, +1 },   //   ... the weapon-menu star (-4 at rest, sliding in from 0; verified by elimination 2026-09-13)
+        {  -8.5f,    4.5f,   4.0f, +1, +1 },   //   ... the weapon-menu star (-4 at rest, sliding in from 0). RenderDoc frames of
+                                              //   2026-09-17 caught it at +0.44 mid-slide and the user saw it pop 85 units for a
+                                              //   frame or two: the slide overshoots the old 0..-4 window, so it has margin both ways
         { -17.5f,   -5.5f,   0.0f, +1, +1 },   // the "N/A" box and the weapon star (-6 at rest, sliding to -17 in a menu)
         { 111.5f,  112.5f,   4.0f, +1, -1 },   // top-right gauge
         { 454.3f,  455.3f,  65.5f, +1, -1 },   // gauge percentage
