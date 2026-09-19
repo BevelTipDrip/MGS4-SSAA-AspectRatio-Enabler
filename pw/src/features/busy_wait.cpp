@@ -5,6 +5,9 @@
 #include "log.hpp"
 #include "sites.hpp"
 
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+
 namespace
 {
     // The three sites, found by signature (sites.hpp) and then checked against their own bytes
@@ -26,6 +29,17 @@ namespace
     std::atomic<int> g_Level { 0 };
     HANDLE g_FrameReady = nullptr;
     HANDLE g_Timer = nullptr;
+    bool g_PeriodHeld = false;   // timeBeginPeriod(1) for the life of the process, as MGSHDFix does
+
+    // The process timer resolution the kernel is actually granting, in milliseconds.
+    double TimerResolutionMs()
+    {
+        using Fn = LONG(NTAPI*)(PULONG, PULONG, PULONG);
+        static const auto fn = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryTimerResolution"));
+        ULONG mn = 0, mx = 0, cur = 0;
+        if (!fn || fn(&mn, &mx, &cur) != 0) { return 0; }
+        return cur / 10000.0;
+    }
     safetyhook::MidHook g_HandoffSignal, g_RenderSpin, g_TickerSpin;
     safetyhook::InlineHook g_PeekMessage;
     using PeekMessageFn = BOOL(WINAPI*)(LPMSG, HWND, UINT, UINT, UINT);
@@ -62,9 +76,9 @@ namespace
         if (!g_Report.compare_exchange_strong(last, now)) { return; }
         const uint64_t w = g_FrameWaits.exchange(0), to = g_FrameWaitTimeouts.exchange(0), wt = g_FrameWaitTicks.exchange(0);
         const uint64_t s = g_TickSleeps.exchange(0), st = g_TickTicks.exchange(0);
-        spdlog::info("PW busy wait: level {}; handoff waits {} ({:.2f} ms each, {} timed out), ticker sleeps {} ({:.2f} ms each), pump waits {}.",
+        spdlog::info("PW busy wait: level {}; handoff waits {} ({:.2f} ms each, {} timed out), ticker sleeps {} ({:.2f} ms each), pump waits {}; timer resolution {:.2f} ms{}.",
             g_Level.load(), w, w ? TicksToMs(static_cast<int64_t>(wt)) / w : 0.0, to,
-            s, s ? TicksToMs(static_cast<int64_t>(st)) / s : 0.0, g_PumpWaits.exchange(0));
+            s, s ? TicksToMs(static_cast<int64_t>(st)) / s : 0.0, g_PumpWaits.exchange(0), TimerResolutionMs(), g_PeriodHeld ? " (held at 1 ms)" : "");
     }
 
     // A Sleep(1) cannot be woken by an arriving message, so the window stays unresponsive for the
@@ -119,6 +133,11 @@ namespace BusyWait
 
         g_FrameReady = CreateEventW(nullptr, FALSE, FALSE, nullptr);   // auto-reset
         g_Timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        // The game only asks for 1 ms timer resolution around its own ticker sleep, which the
+        // ticker hook turns into a few microseconds a tick; every other timed wait in the process
+        // (the driver's polling inside Present among them) then runs at the default ~15.6 ms. Hold
+        // the resolution for the whole run instead, as MGSHDFix does for MGS2/3 (busy_loop_fix.cpp).
+        if (iLevel >= 2 && timeBeginPeriod(1) == TIMERR_NOERROR) { g_PeriodHeld = true; }
         if (!g_FrameReady)
         {
             spdlog::warn("PW busy wait: no event could be created; the render thread keeps spinning.");
