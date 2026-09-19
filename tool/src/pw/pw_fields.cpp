@@ -172,6 +172,22 @@ namespace mgs4e::tool::pw
             "throws the fraction away, always toward slower: up to 8% of a slow movement at low sensitivity.\n\n"
             "On: the fraction is kept and added to the next frame, so the same hand distance is always the same "
             "angle. You are unlikely to feel it with a high-DPI mouse; turn it off if you prefer the original.";
+        constexpr const char* kHelp_StickLateSample =
+            "Controller only. The game reads the pad, then waits out the frame, and only then turns the "
+            "camera, so the stick is always a frame behind - the same fault the mouse had.\n\n"
+            "On: the pad is read again through Steam Input right before the camera uses it. A stick is a "
+            "position rather than a movement, so nothing can be counted twice. Off by default until it has "
+            "been tested more widely: if any button ever double-fires with this on, turn it off and say so.";
+        constexpr const char* kHelp_StickLookDeadZone =
+            "Controller aim dead zone, in stick units out of 127. The game uses 48, so the first 38% of the "
+            "stick's travel does nothing at all when you aim.\n\n"
+            "Lower it for finer aim; the speed at full deflection stays exactly as it is, because the gain "
+            "after the dead zone is rescaled to match. 48 is the game's own value. Does not affect the mouse.";
+        constexpr const char* kHelp_StickMoveDeadZone =
+            "Controller movement dead zone, in stick units out of 127. The game ignores both axes together "
+            "unless one of them leaves a band of about 47, so a gentle diagonal is dropped entirely.\n\n"
+            "Only lowering is offered: the keyboard reports exactly 48.31 units, so a wider band would stop "
+            "WASD working. 47 is the game's own value.";
         constexpr const char* kHelp_MouseVerticalSensitivity =
             "How fast the mouse looks up and down, as a percentage of how fast it looks sideways. 100 is the "
             "same on both axes; many players prefer a little less, 70 to 85. Applies to the normal camera and "
@@ -297,6 +313,11 @@ namespace mgs4e::tool::pw
                         F::Bool(G, K::MouseFractionCarry, kHelp_MouseFractionCarry, true),
                         F::Bool(G, K::MouseUniformRail, kHelp_MouseUniformRail, false),
                         F::Int(G, K::MouseVerticalSensitivity, kHelp_MouseVerticalSensitivity, 100, 25, 400),
+                    }},
+                    { "Controller", {
+                        F::Bool(G, K::StickLateSample, kHelp_StickLateSample, false),
+                        F::Int(G, K::StickLookDeadZone, kHelp_StickLookDeadZone, 48, 0, 48),
+                        F::Int(G, K::StickMoveDeadZone, kHelp_StickMoveDeadZone, 47, 0, 47),
                     }},
                 }},
                 { "Lab", {

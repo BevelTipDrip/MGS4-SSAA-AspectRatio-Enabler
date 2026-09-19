@@ -25,6 +25,10 @@ namespace MouseAim
     inline bool bFractionCarry = true;
     inline bool bLateSample = true;
 
+    // The look-input hook is shared with StickInput (it calls StickInput::OnLookInput first),
+    // so it has to be installed when either feature wants it.
+    bool WantsLookHook();
+
     //   bUniformRail     In the free camera, vertical movement is not a rotation: it slides the
     //                    camera along a rail between four presets (distance, height, look-at height
     //                    at +F8F8B8), so the view's elevation changes by 0.011 to 0.038 degrees a
