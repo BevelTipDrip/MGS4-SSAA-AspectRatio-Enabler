@@ -2679,7 +2679,7 @@ namespace
                             for (DWORD i = 0; i < needed / sizeof(HMODULE) && i < 512; i++)
                             {
                                 char path[MAX_PATH] {}; GetModuleFileNameA(mods[i], path, MAX_PATH);
-                                std::string n = path; if (const auto sl = n.find_last_of("\/"); sl != std::string::npos) { n = n.substr(sl + 1); }
+                                std::string n = path; if (const auto sl = n.find_last_of("\\/"); sl != std::string::npos) { n = n.substr(sl + 1); }
                                 for (auto& c : n) { c = static_cast<char>(tolower(c)); }
                                 if (n.find("overlay") != std::string::npos || n.find("rtss") != std::string::npos || n.find("nvspcap") != std::string::npos || n.find("steam") != std::string::npos || n.find("encoder") != std::string::npos || n.find("discord") != std::string::npos || n.find("reshade") != std::string::npos || n.find("nvngx") != std::string::npos || n.find("dxgi") != std::string::npos) { list += (list.empty() ? "" : ", ") + n; }
                             }
