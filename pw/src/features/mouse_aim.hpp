@@ -5,8 +5,8 @@
 
 // Mouse aim fixes (docs/pw/mouse-input.md). The game already reads the mouse through Raw Input
 // and already turns the camera linearly with the counts. Two things in that chain are wrong, and
-// each has a switch here. Lab switches for now: nothing ships until the user has judged it on a
-// Release build.
+// each has a switch here. Settings in both builds since 2026-09-19 (Config Tool, Performance), after
+// the user judged each one live in the Lab build.
 //
 //   bFractionCarry   Each frame's turn is truncated to a whole 16-bit angle unit (cvttss2si at
 //                    +4042B6 for the free camera's yaw, +885C5E / +885C6F and +8894A3 / +8894B8 in
@@ -22,8 +22,19 @@
 //                    counted twice.
 namespace MouseAim
 {
-    MGS4E_LAB_SWITCH(bool, bFractionCarry, false);
-    MGS4E_LAB_SWITCH(bool, bLateSample, false);
+    inline bool bFractionCarry = true;
+    inline bool bLateSample = true;
+
+    //   bUniformRail     In the free camera, vertical movement is not a rotation: it slides the
+    //                    camera along a rail between four presets (distance, height, look-at height
+    //                    at +F8F8B8), so the view's elevation changes by 0.011 to 0.038 degrees a
+    //                    count depending on where the camera is, with a jump of three times at
+    //                    each preset, against a constant 0.0239 horizontally (docs/pw/mouse-input.md
+    //                    2j). On: the step along the rail is chosen so that one count changes the
+    //                    view's elevation by fVerticalRatio times what it turns the yaw, everywhere
+    //                    on the rail. The game's own clamp of the rail position still applies.
+    inline bool bUniformRail = false;   // changes how the free camera's vertical axis feels: the user's choice, off until asked for
+    inline float fVerticalRatio = 1.0f;
 
     // The probe wants the numbers whether or not a fix is on.
     MGS4E_LAB_SWITCH(bool, bTelemetry, false);
@@ -52,6 +63,19 @@ namespace MouseAim
         int64_t ticks = 0;          // QPC ticks the whole thing took
     };
     const LateSample& LastLate();
+
+    // The free camera's rail this frame: where it was, the step the game wanted, the step taken,
+    // and what the pose routine then interpolated from the presets.
+    struct RailSample
+    {
+        uint64_t serial = 0, poseSerial = 0;
+        bool mouse = false, adjusted = false;
+        float position = 0, minimum = 0, maximum = 0, speed = 0;   // cam + 0x374, + 0xB8, + 0xBC, + 0xA0
+        float stepGame = 0, stepTaken = 0;                         // change of the rail position the game computed / the one applied
+        float elevationBefore = 0, elevationTarget = 0;            // degrees, from the presets
+        float poseDistance = 0, poseHeight = 0, poseLookAt = 0;    // what the pose routine interpolated
+    };
+    const RailSample& LastRail();
 
     void Install();
 }

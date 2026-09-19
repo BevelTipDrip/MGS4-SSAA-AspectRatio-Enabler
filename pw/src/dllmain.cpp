@@ -12,11 +12,11 @@
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
 #include "vrr_compat.hpp"
+#include "mouse_aim.hpp"
 #include "sites.hpp"
 #include "file_prefetch.hpp"
 #include "probe.hpp"
 #include "input_probe.hpp"
-#include "mouse_aim.hpp"
 #include "render_hooks.hpp"
 
 namespace
@@ -64,11 +64,11 @@ namespace
             // census owns the Direct3D hooks and applies the same policy as the Release hooks.
             Probe::Run();
             InputProbe::Install();
-            MouseAim::Install();   // after the probe, which switches its telemetry on
             DrawCensus::Install();
 #else
             RenderHooks::Install();
 #endif
+            MouseAim::Install();   // after the Lab probe, which switches its telemetry on
             InternalSize::Apply();
 
             AspectRatio::ApplyFixes();

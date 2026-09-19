@@ -183,7 +183,7 @@ namespace BusyWait
             ctx.xmm6.f64[0] = ctx.xmm7.f64[0];
         });
 
-        if (bPromptPump || MGS4E_LAB_BUILD)   // in a Lab build the switch is live (F9), so the hook has to be there
+        if (bPromptPump || MGS4E_LAB_BUILD)   // in a Lab build the switch is live (F8), so the hook has to be there
         {
             // The pump loop's Sleep(1): call [Sleep] with ecx = 1, then the jump back to PeekMessageA.
             constexpr mgspwe::sites::Signature kPumpSleepSig { "busy wait: pump Sleep(1)", 0x777E2, "FF 15 ?? ?? ?? ?? EB A6 44 38 25 ?? ?? ?? ??", 0 };

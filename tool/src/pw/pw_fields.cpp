@@ -156,15 +156,30 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_Probe =
             "One-off log lines at start-up: the loaded modules, the code decryption timing, the command line.";
 
-        constexpr const char* kHelp_MouseFractionCarry =
-            "The game truncates each frame's mouse turn to a whole angle unit and throws the fraction away\n"
-            "(up to 28% of a slow movement at the lowest sensitivity). On: the remainder is carried to the next frame.";
         constexpr const char* kHelp_MouseLateSample =
-            "The game reads the mouse, then waits out the frame, then turns the camera: the turn is always a frame old.\n"
-            "On: the mouse is sampled again right before the camera input is computed, and nothing is counted twice.";
+            "Lower mouse latency. The game reads the mouse, then waits out the frame, and only then turns the "
+            "camera, so the camera always moves by what your hand did a frame ago.\n\n"
+            "On: the mouse is read again right before the camera uses it, and nothing is counted twice. "
+            "Measured: about 15 ms sooner (24 ms down to 9 from your hand moving to the camera starting to turn).";
         constexpr const char* kHelp_MousePromptPump =
-            "The game's mouse thread sleeps a millisecond or more on every pass, so movement reaches the game in\n"
-            "clumps 4 to 8 ms apart. On: a message is handled the moment it arrives. Needs Busy Wait Fix = Everything.";
+            "Less mouse jitter, most of all with a high polling rate mouse. The game's mouse thread handles one "
+            "message and then sleeps, every pass, so fast movement reaches the game in clumps and the turn speed "
+            "wobbles from frame to frame.\n\n"
+            "On: each message is handled the moment it arrives. Measured with an 8000 Hz mouse: frame-to-frame "
+            "jitter from about 25% down to about 6%. It only takes effect with Busy Wait Fix set to Everything.";
+        constexpr const char* kHelp_MouseFractionCarry =
+            "Accuracy for slow aiming. Each frame the game cuts the camera's turn down to a whole angle unit and "
+            "throws the fraction away, always toward slower: up to 8% of a slow movement at low sensitivity.\n\n"
+            "On: the fraction is kept and added to the next frame, so the same hand distance is always the same "
+            "angle. You are unlikely to feel it with a high-DPI mouse; turn it off if you prefer the original.";
+        constexpr const char* kHelp_MouseUniformRail =
+            "Changes how looking up and down feels in the normal third-person camera. There, vertical movement "
+            "does not tilt the view directly: it slides the camera along a rail between four preset positions, so "
+            "the same hand movement tilts the view by very different amounts depending on where the camera is "
+            "(it jumps by three times at two points).\n\n"
+            "On: one count of vertical movement always tilts the view by the same amount as it turns it "
+            "sideways. Aiming down the sights is not affected; it already behaves this way. Off by default, "
+            "because it takes some getting used to.";
         constexpr const char* kHelp_InputProbeWatch =
             "With Input Probe: hardware breakpoints on the camera actions' values, logging whatever reads them.\n"
             "Each access costs an exception; leave off when measuring.";
@@ -272,6 +287,12 @@ namespace mgs4e::tool::pw
                         F::Choice(G, K::AudioPrefetch, kHelp_AudioPrefetch, K::AudioPrefetch_Off,
                             { K::AudioPrefetch_Off, K::AudioPrefetch_OnOpen, K::AudioPrefetch_All }),
                     }},
+                    { "Mouse", {
+                        F::Bool(G, K::MouseLateSample, kHelp_MouseLateSample, true),
+                        F::Bool(G, K::MousePromptPump, kHelp_MousePromptPump, true),
+                        F::Bool(G, K::MouseFractionCarry, kHelp_MouseFractionCarry, true),
+                        F::Bool(G, K::MouseUniformRail, kHelp_MouseUniformRail, false),
+                    }},
                 }},
                 { "Lab", {
                     { "Fullscreen fixes (both builds)", {
@@ -313,11 +334,6 @@ namespace mgs4e::tool::pw
                         F::Bool(G, K::LogLoadedModules, kHelp_Probe, false),
                         F::Bool(G, K::MouseInputProbe, kHelp_InputProbe, false),
                         F::Bool(G, K::InputProbeWatch, kHelp_InputProbeWatch, false),
-                    }},
-                    { "Mouse aim (both fixes are Lab-only for now)", {
-                        F::Bool(G, K::MouseFractionCarry, kHelp_MouseFractionCarry, false),
-                        F::Bool(G, K::MouseLateSample, kHelp_MouseLateSample, false),
-                        F::Bool(G, K::MousePromptPump, kHelp_MousePromptPump, false),
                     }},
                 }},
                 { "Troubleshooting", {

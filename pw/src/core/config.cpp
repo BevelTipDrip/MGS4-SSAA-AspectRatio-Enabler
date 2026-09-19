@@ -11,12 +11,12 @@
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
 #include "vrr_compat.hpp"
+#include "mouse_aim.hpp"
 #include "file_prefetch.hpp"
 #include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "input_probe.hpp"
-#include "mouse_aim.hpp"
 #include "draw_census.hpp"
 #endif
 
@@ -233,6 +233,18 @@ namespace mgspwe::config
             }
             Read(ini, Graphics, NvidiaFastSync, VrrCompat::bFastSync);
             Report(Graphics, NvidiaFastSync, VrrCompat::bFastSync);
+            // Mouse aim (docs/pw/mouse-input.md). An absent key keeps the built-in default.
+            Read(ini, Graphics, MouseLateSample, MouseAim::bLateSample);
+            Report(Graphics, MouseLateSample, MouseAim::bLateSample);
+            Read(ini, Graphics, MousePromptPump, BusyWait::bPromptPump);
+            Report(Graphics, MousePromptPump, BusyWait::bPromptPump);
+            Read(ini, Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
+            Report(Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
+            Read(ini, Graphics, MouseUniformRail, MouseAim::bUniformRail);
+            Report(Graphics, MouseUniformRail, MouseAim::bUniformRail);
+            Read(ini, Graphics, MouseVerticalRatio, MouseAim::fVerticalRatio);
+            MouseAim::fVerticalRatio = std::clamp(MouseAim::fVerticalRatio, 0.1f, 4.0f);
+            Report(Graphics, MouseVerticalRatio, MouseAim::fVerticalRatio);
             Read(ini, Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Report(Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
@@ -257,12 +269,6 @@ namespace mgspwe::config
             Report(Graphics, MouseInputProbe, InputProbe::bEnabled);
             Read(ini, Graphics, InputProbeWatch, InputProbe::bWatchActions);
             Report(Graphics, InputProbeWatch, InputProbe::bWatchActions);
-            Read(ini, Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
-            Report(Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
-            Read(ini, Graphics, MousePromptPump, BusyWait::bPromptPump);
-            Report(Graphics, MousePromptPump, BusyWait::bPromptPump);
-            Read(ini, Graphics, MouseLateSample, MouseAim::bLateSample);
-            Report(Graphics, MouseLateSample, MouseAim::bLateSample);
             Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);

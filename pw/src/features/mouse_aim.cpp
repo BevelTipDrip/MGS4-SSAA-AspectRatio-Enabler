@@ -25,6 +25,19 @@ namespace
     constexpr mgspwe::sites::Signature kTruncateASig { "mouse: camera A turn truncation", 0x885C5E, "F3 0F 2C C6 48 8D 54 24 28 C7 44 24 2C 00 00 00 00", 0 };
     constexpr mgspwe::sites::Signature kTruncateBSig { "mouse: camera B turn truncation", 0x8894A3, "F3 0F 2C 8B BC 00 00 00 48 8D 54 24 20", 0 };
 
+    // The free camera's vertical control (+4039F0): p -= lookY * table * (1/128) * (1/36) * [cam+0xA0],
+    // hooked at the last multiply, where xmm1 still lacks the [cam+0xA0] factor and rbx is the camera.
+    constexpr mgspwe::sites::Signature kRailStepSig { "mouse: free camera vertical step", 0x403A5F, "F3 0F 59 8B A0 00 00 00 F3 0F 5C C1", 0 };
+    // The pose routine right after it has interpolated the presets: xmm8 distance, xmm7 height, xmm6 look-at height.
+    constexpr mgspwe::sites::Signature kRailPoseSig { "mouse: free camera pose, presets interpolated", 0x404DA4, "F3 0F 58 BB EC 00 00 00 F3 0F 58 B3 E8 00 00 00", 0 };
+    // lea r9, [preset table]: four rows of three floats.
+    constexpr mgspwe::sites::Signature kRailTableSig { "mouse: free camera preset table", 0x404CEA, "4C 8D 0D ?? ?? ?? ?? 48 63 81 78 03 00 00", 0 };
+    constexpr size_t kRailPosition = 0x374, kRailSpeed = 0xA0, kRailMinimum = 0xB8, kRailMaximum = 0xBC;
+    // Yaw degrees per unit of rail position for the same look value: the yaw turns by
+    // L * (1/128) * 341.333 * 2 * A0 angle units (360 / 65536 degrees each) where the rail moves by
+    // L * (1/128) * (1/36) * A0, and 341.333 = 65536 / 192, so the ratio is exactly 2 * 36 * 360 / 192.
+    constexpr float kYawDegreesPerRailUnit = 135.0f;
+
     constexpr size_t kPlayerIsMouse = 0x9B2;
     constexpr size_t kCameraPitch = 0xA0, kCameraYaw = 0xA2, kCameraVelocityYaw = 0xBC;
     constexpr size_t kFreeCameraYaw = 0x36C, kFreeCameraIsMouse = 0x348;
@@ -35,7 +48,10 @@ namespace
 
     using LookupFn = float* (*)(void* manager, uint32_t group, uint32_t name, int player);
 
-    SafetyHookMid g_LookInput, g_TruncateFree, g_TruncateA, g_TruncateB;
+    SafetyHookMid g_LookInput, g_TruncateFree, g_TruncateA, g_TruncateB, g_RailStep, g_RailPose;
+    struct Preset { float distance, height, lookAt; };
+    const Preset* g_Presets = nullptr;
+    MouseAim::RailSample g_Rail;
     LookupFn g_Lookup = nullptr;
     void** g_Manager = nullptr;
     float* g_AccumX = nullptr;
@@ -90,6 +106,87 @@ namespace
     }
 
     uint16_t Word(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
+    float Float(const uint8_t* p) { float v; std::memcpy(&v, p, 4); return v; }
+
+    constexpr float kDegrees = 57.29577951f;
+
+    // The view's elevation at a rail position: the camera sits `distance` behind and `height`
+    // above the point it looks at, so it looks along atan2(-height, distance). Degrees, up positive.
+    float PresetElevation(const Preset& a) { return std::atan2(-a.height, a.distance) * kDegrees; }
+
+    bool RailUsable()
+    {
+        if (!g_Presets) { return false; }
+        for (int i = 0; i < 4; i++) { if (!(g_Presets[i].distance > 1.0f) || !std::isfinite(g_Presets[i].height)) { return false; } }
+        // The inversion below needs the elevation to fall all the way along the rail, as it does in the shipped table.
+        for (int i = 0; i < 3; i++) { if (!(PresetElevation(g_Presets[i]) > PresetElevation(g_Presets[i + 1]) + 0.5f)) { return false; } }
+        return true;
+    }
+
+    float RailElevation(float position)
+    {
+        const float s = std::clamp(position * 3.0f, 0.0f, 2.999999f);
+        const int i = static_cast<int>(s);
+        const float f = s - static_cast<float>(i);
+        const Preset& a = g_Presets[i]; const Preset& b = g_Presets[i + 1];
+        return std::atan2(-(a.height + f * (b.height - a.height)), a.distance + f * (b.distance - a.distance)) * kDegrees;
+    }
+
+    // The rail position whose view elevation is `degrees`: within a segment distance and height are
+    // linear in the fraction f, so tan(elevation) = -(h + f dh) / (d + f dd) solves for f directly.
+    float RailPositionFor(float degrees)
+    {
+        degrees = std::clamp(degrees, PresetElevation(g_Presets[3]), PresetElevation(g_Presets[0]));
+        for (int i = 0; i < 3; i++)
+        {
+            const Preset& a = g_Presets[i]; const Preset& b = g_Presets[i + 1];
+            if (degrees > PresetElevation(a) || degrees < PresetElevation(b)) { continue; }
+            const float t = std::tan(degrees / kDegrees);
+            const float denominator = (b.height - a.height) + (b.distance - a.distance) * t;
+            if (std::fabs(denominator) < 1e-6f) { continue; }
+            const float f = std::clamp(-(a.height + a.distance * t) / denominator, 0.0f, 1.0f);
+            return (static_cast<float>(i) + f) / 3.0f;
+        }
+        return degrees >= PresetElevation(g_Presets[0]) ? 0.0f : 1.0f;
+    }
+
+    // Before `mulss xmm1, [cam + 0xA0]`: xmm1 * speed is what the game is about to subtract from
+    // the rail position.
+    void OnRailStep(const uint8_t* camera, float& stepWithoutSpeed)
+    {
+        const float position = Float(camera + kRailPosition), speed = Float(camera + kRailSpeed);
+        const bool mouse = camera[kFreeCameraIsMouse] != 0;
+        const float stepGame = -stepWithoutSpeed * speed;
+        float stepTaken = stepGame;
+        bool adjusted = false;
+        float before = 0, target = 0;
+        const bool usable = RailUsable();
+        if (usable) { before = target = RailElevation(position); }
+        if (MouseAim::bUniformRail && mouse && usable && speed != 0 && stepGame != 0)
+        {
+            // Up the rail is down in elevation. The turn owed is what the same movement would turn the yaw, times the ratio.
+            const float owed = std::fabs(stepGame) * kYawDegreesPerRailUnit * MouseAim::fVerticalRatio;
+            target = before + (stepGame > 0 ? -owed : owed);
+            const float wanted = RailPositionFor(target);
+            stepTaken = wanted - position;
+            stepWithoutSpeed = -stepTaken / speed;
+            adjusted = true;
+        }
+        if (MouseAim::bTelemetry)
+        {
+            g_Rail.serial++;
+            g_Rail.mouse = mouse;
+            g_Rail.adjusted = adjusted;
+            g_Rail.position = position;
+            g_Rail.minimum = Float(camera + kRailMinimum);
+            g_Rail.maximum = Float(camera + kRailMaximum);
+            g_Rail.speed = speed;
+            g_Rail.stepGame = stepGame;
+            g_Rail.stepTaken = stepTaken;
+            g_Rail.elevationBefore = before;
+            g_Rail.elevationTarget = target;
+        }
+    }
 
     // The game latches the mouse (device update, +3A850) and only then runs the frame, whose wait
     // comes before the player's look-input routine: measured 16.3 ms between the latch and the
@@ -150,10 +247,11 @@ namespace
 
 const MouseAim::CameraSample& MouseAim::LastCamera() { return g_Camera; }
 const MouseAim::LateSample& MouseAim::LastLate() { return g_Late; }
+const MouseAim::RailSample& MouseAim::LastRail() { return g_Rail; }
 
 void MouseAim::Install()
 {
-    if (!bFractionCarry && !bLateSample && !bTelemetry) { return; }
+    if (!bFractionCarry && !bLateSample && !bUniformRail && !bTelemetry) { return; }
     const uintptr_t base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
     if (bLateSample || bTelemetry)   // with the probe on, F9 switches the fixes live, so the hook has to be there
@@ -191,6 +289,37 @@ void MouseAim::Install()
             bLateSample ? "ON" : "off", look, g_LookInput ? "hooked" : "FAILED", lookup,
             g_AccumX ? reinterpret_cast<uintptr_t>(g_AccumX) - base : 0, g_AccumY ? reinterpret_cast<uintptr_t>(g_AccumY) - base : 0,
             g_Manager ? reinterpret_cast<uintptr_t>(g_Manager) - base : 0);
+    }
+
+    if (bUniformRail || bTelemetry)
+    {
+        const uintptr_t step = mgspwe::sites::Resolve(kRailStepSig);
+        const uintptr_t pose = mgspwe::sites::Resolve(kRailPoseSig);
+        const uintptr_t table = mgspwe::sites::Resolve(kRailTableSig);
+        if (step && table)
+        {
+            int32_t displacement = 0;
+            std::memcpy(&displacement, reinterpret_cast<const uint8_t*>(base + table) + 3, 4);   // 4C 8D 0D disp32
+            g_Presets = reinterpret_cast<const Preset*>(base + table + 7 + displacement);
+            g_RailStep = safetyhook::create_mid(base + step, [](SafetyHookContext& ctx) { OnRailStep(reinterpret_cast<const uint8_t*>(ctx.rbx), ctx.xmm1.f32[0]); });
+        }
+        if (pose && bTelemetry)
+        {
+            g_RailPose = safetyhook::create_mid(base + pose, [](SafetyHookContext& ctx)
+            {
+                g_Rail.poseSerial++;
+                g_Rail.poseDistance = ctx.xmm8.f32[0];
+                g_Rail.poseHeight = ctx.xmm7.f32[0];
+                g_Rail.poseLookAt = ctx.xmm6.f32[0];
+            });
+        }
+        if (g_Presets)
+        {
+            spdlog::info("PW mouse: uniform rail {} (vertical ratio {:.2f}): step +{:X} {}, pose +{:X} {}, presets at +{:X}: {:.0f}/{:.0f}/{:.0f}, {:.0f}/{:.0f}/{:.0f}, {:.0f}/{:.0f}/{:.0f}, {:.0f}/{:.0f}/{:.0f}; usable {}.",
+                bUniformRail ? "ON" : "off", fVerticalRatio, step, g_RailStep ? "hooked" : "FAILED", pose, g_RailPose ? "hooked" : "-", reinterpret_cast<uintptr_t>(g_Presets) - base,
+                g_Presets[0].distance, g_Presets[0].height, g_Presets[0].lookAt, g_Presets[1].distance, g_Presets[1].height, g_Presets[1].lookAt,
+                g_Presets[2].distance, g_Presets[2].height, g_Presets[2].lookAt, g_Presets[3].distance, g_Presets[3].height, g_Presets[3].lookAt, RailUsable() ? "yes" : "NO");
+        }
     }
 
     if (bFractionCarry || bTelemetry)

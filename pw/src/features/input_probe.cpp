@@ -39,6 +39,7 @@ namespace
     SafetyHookMid g_LookStore;
     uint64_t g_LookSerial = 0, g_LookSerialSeen = 0, g_CameraSerialSeen = 0, g_LateSerialSeen = 0;
     float g_LookY = 0;
+    uint64_t g_RailSerialSeen = 0, g_RailPoseSerialSeen = 0;
     // When inside the tick the raw mouse handler runs: milliseconds since the last latch, 1 ms bins
     // (the last bin takes everything later), and on which threads.
     std::array<std::atomic<uint32_t>, 24> g_HandlerBins {};
@@ -329,6 +330,18 @@ namespace
                 spdlog::info("PW input: f={} actions (current/reported):{}", g_Frame, actions);
             }
         }
+        {
+            const MouseAim::RailSample& rail = MouseAim::LastRail();
+            if (rail.serial != g_RailSerialSeen && g_QuietFrames <= 45 && g_Lines < kMaxLines)
+            {
+                g_Lines++;
+                spdlog::info("PW input: f={} rail: p={:.5f} range=[{:.3f},{:.3f}] speed={:.4f} mouse={} step game={:.6f} taken={:.6f} {} elev={:.3f}->{:.3f}; pose {} d={:.1f} h={:.1f} look={:.1f}; look Y={:.5f}",
+                    g_Frame, rail.position, rail.minimum, rail.maximum, rail.speed, rail.mouse ? 1 : 0, rail.stepGame, rail.stepTaken, rail.adjusted ? "UNIFORM" : "game",
+                    rail.elevationBefore, rail.elevationTarget, rail.poseSerial != g_RailPoseSerialSeen ? "ran" : "-", rail.poseDistance, rail.poseHeight, rail.poseLookAt, g_LookY);
+            }
+            g_RailSerialSeen = rail.serial;
+            g_RailPoseSerialSeen = rail.poseSerial;
+        }
         g_LookSerialSeen = g_LookSerial;
         g_CameraSerialSeen = MouseAim::LastCamera().serial;
         // Thirty frames of movement are logged with the action values, then the breakpoints take over.
@@ -350,7 +363,7 @@ namespace
 
     // Live switches, so one session compares states at the same spot. A beep says what happened
     // without a look at the log: high = on, low = off; one, two or three beeps = which fix.
-    //   F6 fraction carry   F7 late sample   F8 prompt pump   F9 all three   F10 histograms
+    //   F5 uniform rail   F6 fraction carry   F7 late sample   F8 prompt pump   F9 the three input fixes   F10 histograms
     void Announce(int beeps, bool on)
     {
         std::thread([beeps, on] { for (int i = 0; i < beeps; i++) { Beep(on ? 1400 : 500, 70); Sleep(60); } }).detach();
@@ -366,8 +379,14 @@ namespace
 
     void PollHotkeys()
     {
-        static bool d6 = false, d7 = false, d8 = false, d9 = false, d10 = false;
+        static bool d5 = false, d6 = false, d7 = false, d8 = false, d9 = false, d10 = false;
         bool changed = false;
+        if (Pressed(VK_F5, d5))
+        {
+            MouseAim::bUniformRail = !MouseAim::bUniformRail;
+            Announce(5, MouseAim::bUniformRail);
+            spdlog::info("PW input: F5 at f={}: uniform rail {}.", g_Frame, MouseAim::bUniformRail ? "ON" : "off");
+        }
         if (Pressed(VK_F6, d6)) { MouseAim::bFractionCarry = !MouseAim::bFractionCarry; Announce(1, MouseAim::bFractionCarry); changed = true; }
         if (Pressed(VK_F7, d7)) { MouseAim::bLateSample = !MouseAim::bLateSample; Announce(2, MouseAim::bLateSample); changed = true; }
         if (Pressed(VK_F8, d8)) { BusyWait::bPromptPump = !BusyWait::bPromptPump; Announce(3, BusyWait::bPromptPump); changed = true; }

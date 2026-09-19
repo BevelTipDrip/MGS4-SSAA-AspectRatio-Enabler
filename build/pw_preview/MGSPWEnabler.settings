@@ -60,6 +60,27 @@ Busy Wait Fix = Everything
 ; touches a Fast setting you made yourself in the NVIDIA Control Panel.
 NVIDIA Fast Sync = false
 
+; Mouse. The game already reads the mouse through Raw Input and turns the camera in proportion to
+; your hand; these correct what is wrong on the way.
+; Mouse Late Sample: the game reads the mouse, then waits out the frame, then turns the camera,
+; so the camera always moves by what your hand did a frame ago. true reads the mouse again right
+; before the camera uses it (nothing is counted twice): about 15 ms less latency.
+Mouse Late Sample = true
+; Mouse Prompt Pump: the game's mouse thread handles one message and then sleeps, every pass, so
+; fast movement arrives in clumps and the turn speed wobbles, most of all with a high polling rate
+; mouse. true handles each message as it arrives. Needs Busy Wait Fix = Everything.
+Mouse Prompt Pump = true
+; Mouse Fraction Carry: each frame the game cuts the turn down to a whole angle unit and throws the
+; fraction away (up to 8% of a slow movement at low sensitivity). true keeps the fraction.
+Mouse Fraction Carry = true
+; Mouse Uniform Rail: in the normal third-person camera, looking up and down slides the camera
+; along a rail of four presets, so the same hand movement tilts the view by very different amounts
+; depending on where the camera is. true makes one count tilt the view as much as it turns it
+; sideways, everywhere. Off by default: it changes the feel. Aiming is not affected.
+Mouse Uniform Rail = false
+; Mouse Vertical Ratio: with Mouse Uniform Rail, vertical speed as a multiple of horizontal (0.1 to 4).
+Mouse Vertical Ratio = 1.0
+
 ; State Object Cache: the game asks the device to create the same handful of blend, depth-stencil,
 ; rasterizer and sampler state objects hundreds of times a frame, and a whole session only ever
 ; uses 42 distinct ones. They are immutable, so the one it asked for last time is handed back.

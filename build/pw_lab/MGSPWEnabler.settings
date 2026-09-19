@@ -92,6 +92,32 @@ Waitable Swap Chain = false
 ; states hundreds of times a frame, and every call takes the Direct3D device lock that the render
 ; thread holds inside Present. Serving them from a cache keeps the game thread off that lock.
 State Object Cache = false
+
+; Mouse. The game already reads the mouse through Raw Input and turns the camera in proportion to
+; your hand; these correct what is wrong on the way.
+; Mouse Late Sample: the game reads the mouse, then waits out the frame, then turns the camera,
+; so the camera always moves by what your hand did a frame ago. true reads the mouse again right
+; before the camera uses it (nothing is counted twice): about 15 ms less latency.
+Mouse Late Sample = true
+; Mouse Prompt Pump: the game's mouse thread handles one message and then sleeps, every pass, so
+; fast movement arrives in clumps and the turn speed wobbles, most of all with a high polling rate
+; mouse. true handles each message as it arrives. Needs Busy Wait Fix = Everything.
+Mouse Prompt Pump = true
+; Mouse Fraction Carry: each frame the game cuts the turn down to a whole angle unit and throws the
+; fraction away (up to 8% of a slow movement at low sensitivity). true keeps the fraction.
+Mouse Fraction Carry = true
+; Mouse Uniform Rail: in the normal third-person camera, looking up and down slides the camera
+; along a rail of four presets, so the same hand movement tilts the view by very different amounts
+; depending on where the camera is. true makes one count tilt the view as much as it turns it
+; sideways, everywhere. Off by default: it changes the feel. Aiming is not affected.
+Mouse Uniform Rail = false
+; Mouse Vertical Ratio: with Mouse Uniform Rail, vertical speed as a multiple of horizontal (0.1 to 4).
+Mouse Vertical Ratio = 1.0
+
+; Input Probe (Lab): one line per frame with mouse activity (counts, latch, look value, camera turn,
+; rail position), and live switches with a beep (high = on): F5 uniform rail, F6 fraction carry,
+; F7 late sample, F8 prompt pump, F9 those three together, F10 logs the mouse thread's histograms.
+Input Probe = false
 ; Swap Chain Buffers: 0 the game's (2), else the flip chain's buffer count.
 Swap Chain Buffers = 0
 ; One-off log lines at start-up.

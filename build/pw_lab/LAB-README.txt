@@ -49,3 +49,21 @@ What to send
 
 The aspect-ratio work in this plugin is a private component with a credit-required licence:
 free to use; credit BevelTipDrip directly and visibly if you redistribute or build on it.
+
+
+MOUSE AIM (added 2026-09-19)
+
+The four mouse settings (Mouse Late Sample, Mouse Prompt Pump, Mouse Fraction Carry, Mouse
+Uniform Rail) are ordinary settings in this build too. With "Input Probe = true" in the settings
+file this Lab build also switches them LIVE, with a beep (high = on, low = off):
+
+  F5  Mouse Uniform Rail    (five beeps)   normal third-person camera, looking up and down
+  F6  Mouse Fraction Carry  (one beep)
+  F7  Mouse Late Sample     (two beeps)    latency
+  F8  Mouse Prompt Pump     (three beeps)  jitter
+  F9  F6 + F7 + F8 together (four beeps)
+  F10 writes the mouse thread's timing histograms to the log
+
+Give each switch a second or two before judging: the moment of switching itself causes a
+one-frame step. Tell us, per switch, what you feel (latency, jitter, drift, jumps), your mouse's
+polling rate and DPI, and send logs\MGSPWEnabler_Game.log from that session.

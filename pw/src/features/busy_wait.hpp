@@ -31,14 +31,14 @@ namespace BusyWait
     // it. Turning it down is the documented response to a compatibility problem.
     inline int iLevel = 3;
 
-    // Lab switch for now (docs/pw/mouse-input.md 2h). The pump is also where the mouse is read, on its
+    // docs/pw/mouse-input.md 2h. The pump is also where the mouse is read, on its
     // own thread: PeekMessageA, one message handled (plus a bulk read of pending raw input), then
     // Sleep(1), every pass, message or not. With level 3 the hook waits when the queue is empty, but it
     // then returned "no message", so the message that ended the wait sat through one more Sleep(1).
     // Measured with a clean 1000 Hz source: the handler runs in clumps 4 to 8 ms apart. On: the hook
     // fetches the message that woke it, and the loop's Sleep(1) becomes Sleep(0); the hook's own wait
     // keeps the thread from spinning. Only with level 3, since that wait is what makes it safe.
-    MGS4E_LAB_SWITCH(bool, bPromptPump, false);
+    inline bool bPromptPump = true;
 
     void Install();
 

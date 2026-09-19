@@ -353,6 +353,68 @@ Its case is slow movement, low DPI and low sensitivity (7.9% in 2g), not feel.
   frames (a transition, for one: the user reported the crosshair jumping about on entering aim) is
   not known.
 
+## 2j. Vertical against horizontal (the user: "up and down feels like the old behaviour")
+
+**Aiming (`camB`): the two axes are treated identically.** On the user's own movement: 1.39 units
+per count on both axes (12341 of 12550 horizontal frames, 3777 of 3829 vertical), a turn of zero
+in 1.7% and 1.4% of frames, and at the same speed band (10 to 40 counts a frame) the vertical
+counts are no more uneven than the horizontal ones (residual 1.2 to 3.1 counts against 3.9 to
+6.9). Both axes get the late sample and the carry.
+
+**Free camera: vertical is not a rotation at all.** `+4039F0` moves a float `p` (`cam + 0x374`,
+clamped to `[cam + 0xB8, cam + 0xBC]`) by `look Y * table * (1/128) * (1/36) * [cam + 0xA0]`, and
+`cam + 0x378 = (int)(p * 3)`. The pose routine (`+404CC0`) then **interpolates the camera's offset
+between four presets** at `+F8F8B8`, three floats a level (values from the dump):
+
+| level | | | |
+| --- | --- | --- | --- |
+| 0 | 1000 | -1400 | 900 |
+| 1 | 2000 | -1000 | 900 |
+| 2 | 3700 | 950 | 500 |
+| 3 | 2250 | 5500 | 0 |
+
+(the first two read as distance and height; not verified), with `p * 3 - level` as the fraction:
+a rail from a low camera to an overhead one, in three straight segments of very different length,
+so the same mouse distance changes the view's elevation by very different amounts along it. And a
+second routine (`+4046CB .. +404769`) eases a value derived from `p` above 2/3
+(`obj + 0x8C += (1 - pow(0.3, dt)) * (target - obj + 0x8C)`, 70% a frame). So horizontal is an
+angle that follows the counts, and vertical is a position on a rail, non-uniform, clamped, and at
+least partly eased. That is the game's PSP camera, not a leftover of the defects fixed above; what
+else smooths the camera's position has not been read.
+
+**The rail in numbers** (computed from the table and the measured yaw scale, not yet measured in
+the running game; the harness has the chart: `C:\mgspf_tools\pw\mouse\plot\rail_plot.html`). The
+pose routine shows what the three columns are: column 1 is the horizontal distance behind the
+player (rotated by the yaw, `+404F4D .. +404F72`), column 2 is added to the camera's height
+(`+404F80`), column 3 lifts the look-at point (`+404EF6 .. +404F43`). The view's elevation is
+therefore `atan2(-height, distance)`: **+54.5, +26.6, -14.4 and -67.8 degrees** at the four
+presets. One count moves `p` by `1.767e-4` at the lowest sensitivity step (5659 counts for the
+whole rail, if the clamp leaves all of it; the same 5659 counts turn the yaw 135 degrees). Because
+distance and height are interpolated linearly and the angle is not linear in them, **the view
+turns by 0.011 to 0.038 degrees a count depending on where the camera is on the rail, 0.46x to
+1.59x the horizontal 0.0239, and it jumps by a factor of three at each preset** (0.011 -> 0.034
+crossing preset 1, 0.012 -> 0.038 crossing preset 2).
+
+Options, none built: (1) make the rail uniform: scale the step by the inverse of the elevation's
+slope at `p`, so that a count is a constant change of view elevation; (2) remove the easing on the
+values the rail drives; (3) a true orbit pitch in place of the rail, which is a camera redesign
+(collision and the presets' distances included), not a patch.
+
+## 2k. Run 12 (16:35): the rail measured, the uniform rail verified, and the four fixes shipped as settings
+
+Measured with slow full vertical sweeps (`mouseail_test.ps1`, `analyze_rail.py`): the rail position
+is clamped to [0, 1], the whole rail is 5657 counts (5659 computed), the view goes from +54.4 to
+-67.7 degrees, and one count is worth 0.011 to 0.038 degrees along it: the computed chart was
+right. **With `Mouse Uniform Rail` on: 0.02372 to 0.02401 degrees a count everywhere (max / min
+1.01), mean 0.02386, exactly the horizontal value**, over 5110 counts end to end. The user: "feels
+different, maybe better, will take some getting used to".
+
+Since 2026-09-19 the four are ordinary settings in both builds (Config Tool, Performance tab,
+"Mouse"): `Mouse Late Sample`, `Mouse Prompt Pump` and `Mouse Fraction Carry` default on,
+`Mouse Uniform Rail` defaults off (it changes the feel), `Mouse Vertical Ratio` 1.0. The Lab
+build keeps the live switches (F5 to F10, with `Input Probe`) and the telemetry; a Release build
+carries neither.
+
 ## 3. Not known yet
 
 Everything that is felt is downstream of the getter and has not been read: the sensitivity scale,

@@ -49,6 +49,13 @@ What is new in this preview, and what to watch for
     frames a second, and the game cannot run slower than 60. The option sets Vertical sync to
     "Fast" for this game only, in the driver's own per-game profile, and unticking it puts back
     what was there. It does nothing on AMD or Intel. Please report whether it cleared the hitch.
+  - MOUSE, new in this build (Config Tool, Performance tab, "Mouse"). Three are on by default:
+    "Mouse Late Sample" (about 15 ms less mouse latency), "Mouse Prompt Pump" (much less jitter,
+    most of all with a 4000 or 8000 Hz mouse) and "Mouse Fraction Carry" (slow aiming no longer
+    loses part of the movement). "Mouse Uniform Rail" is off by default: it makes looking up and
+    down in the normal third-person camera as even as looking sideways, and changes the feel.
+    Please try each on and off and report: latency, jitter, anything that drifts, jumps or
+    double-counts, and whether Uniform Rail feels better or worse to you after a while.
   - "State Object Cache" saves roughly one frame's worth of processor work in twelve. It should
     change nothing you can see; report anything that looks wrong while it is on.
   - "Audio Prefetch" is EXPERIMENTAL and off by default. It targets the single-frame hitch at
