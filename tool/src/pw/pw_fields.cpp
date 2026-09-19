@@ -78,6 +78,22 @@ namespace mgs4e::tool::pw
             "messages, which is the only part that touches other programs, so turn it down a step if an "
             "overlay misbehaves.";
 
+        constexpr const char* kHelp_NvidiaFastSync =
+            "NVIDIA graphics cards only. It does nothing on AMD or Intel.\n\n"
+            "With G-SYNC (or any variable refresh display) on a 60 Hz mode and V-Sync on, the NVIDIA driver "
+            "holds the game to 59 frames a second. The game's clock cannot slow down from 60, so one frame "
+            "a second is dropped: a regular hitch, once a second. With Vertical sync set to Fast the same "
+            "driver paces at 60 and the hitch is gone, with G-SYNC left on.\n\n"
+            "On sets Vertical sync to Fast for this game only, in the driver's own per-game profile (the one "
+            "under NVIDIA Control Panel > Manage 3D settings > Program Settings). It is applied when the game "
+            "starts. Off puts back whatever was there before, and never touches a Fast setting you made "
+            "yourself. Leave it off if you do not use G-SYNC or do not see the hitch.";
+
+        constexpr const char* kHelp_NvidiaPacingReport =
+            "NVIDIA only. Logs what the driver says about the game's device at device creation and 46, 106 and\n"
+            "180 s in: low latency mode, variable refresh, the V-Sync override and its sleep interval inside\n"
+            "Present (16,948 us = 59 a second is the G-SYNC hitch; 16,666 us = 60 is healthy).";
+
         constexpr const char* kHelp_AudioPrefetch =
             "EXPERIMENTAL, off by default. Whenever a new voice line starts, the game reads it from a large archive on the main thread and "
             "waits for the disk. On a cold archive that wait was about ten milliseconds, which is the single "
@@ -233,6 +249,7 @@ namespace mgs4e::tool::pw
                     { "Performance", {
                         F::Choice(G, K::BusyWaitFix, kHelp_BusyWaitFix, "Everything",
                             { "Off", "Render thread", "Render thread and ticker", "Everything" }),
+                        F::Bool(G, K::NvidiaFastSync, kHelp_NvidiaFastSync, false),
                         F::Bool(G, K::StateObjectCache, kHelp_StateObjectCache, true),
                         F::Choice(G, K::AudioPrefetch, kHelp_AudioPrefetch, K::AudioPrefetch_Off,
                             { K::AudioPrefetch_Off, K::AudioPrefetch_OnOpen, K::AudioPrefetch_All }),
@@ -254,6 +271,7 @@ namespace mgs4e::tool::pw
                         F::Int(G, K::PresentSync, kHelp_PresentSync, -1, -1, 4),
                         F::Int(G, K::SwapChainBuffers, kHelp_SwapChainBuffers, 0, 0, 8),
                         F::Bool(G, K::AllowTearing, kHelp_AllowTearing, false),
+                        F::Bool(G, K::NvidiaPacingReport, kHelp_NvidiaPacingReport, false),
                     }},
                     { "Draw census", {
                         F::Int(G, K::DrawCensusAtSeconds, kHelp_Census, 0, 0, 3600),

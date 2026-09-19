@@ -10,6 +10,7 @@
 
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "vrr_compat.hpp"
 #include "file_prefetch.hpp"
 #include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
@@ -228,6 +229,10 @@ namespace mgspwe::config
                 }
                 Report(Graphics, BusyWaitFix, BusyWait::iLevel);
             }
+            Read(ini, Graphics, NvidiaFastSync, VrrCompat::bFastSync);
+            Report(Graphics, NvidiaFastSync, VrrCompat::bFastSync);
+            Read(ini, Graphics, NvidiaPacingReport, VrrCompat::bReport);
+            Report(Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Report(Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);
             Read(ini, Graphics, FullscreenRefreshFix, InternalSize::bFullscreenRefreshFix);

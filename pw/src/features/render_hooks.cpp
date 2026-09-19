@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "render_policy.hpp"
 #include "state_cache.hpp"
+#include "vrr_compat.hpp"
 
 #include <mutex>
 #include <unordered_map>
@@ -218,6 +219,7 @@ namespace
         static bool hooked = false;
         if (hooked || !device) { return; }
         hooked = true;
+        VrrCompat::OnDevice(device);
         void** dv = *reinterpret_cast<void***>(device);
         Device_CreateTexture2D_hook = safetyhook::create_inline(dv[kDevCreateTexture2D], reinterpret_cast<void*>(Hooked_CreateTexture2D));
         Device_CreateSamplerState_hook = safetyhook::create_inline(dv[kDevCreateSamplerState], reinterpret_cast<void*>(Hooked_CreateSamplerState));

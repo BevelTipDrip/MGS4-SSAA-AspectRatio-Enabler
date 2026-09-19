@@ -32,12 +32,23 @@ Notes
     the weapon menu's white column highlight starts its slide further right than at 16:9.
 
 What is new in this preview, and what to watch for
+  - Works with the game update of 2026-09-18 (Ver. 1.3.2) and with the version before it. The
+    plugin now finds its places in the game by signature instead of by fixed address, so a game
+    update that only moves code no longer breaks it. The first lines of the log name the game
+    build it found ("PW sites: executable linked ..."); a line saying a site was "not found in
+    this build" means that one feature stayed off, please report it.
   - "Busy Wait Fix" is the reason the game no longer stutters at 60 Hz. The game spins instead
     of waiting, which costs about a whole processor core. Please report your frame time graph,
     and your processor usage before and after, if you are able.
   - Its top setting, "Everything", also lets the game's window sleep between messages. That is
     the only part that can affect other programs, so if an overlay (Steam, RivaTuner, Discord)
     misbehaves, step it down to "Render thread and ticker" and say so.
+  - "NVIDIA Fast Sync" is for NVIDIA cards with G-SYNC (or any variable refresh display) at 60 Hz.
+    If you still see one hitch a second with "Busy Wait Fix" on, and it goes away when you switch
+    G-SYNC off, tick this. With G-SYNC and V-Sync together the NVIDIA driver holds the game to 59
+    frames a second, and the game cannot run slower than 60. The option sets Vertical sync to
+    "Fast" for this game only, in the driver's own per-game profile, and unticking it puts back
+    what was there. It does nothing on AMD or Intel. Please report whether it cleared the hitch.
   - "State Object Cache" saves roughly one frame's worth of processor work in twelve. It should
     change nothing you can see; report anything that looks wrong while it is on.
   - "Audio Prefetch" is EXPERIMENTAL and off by default. It targets the single-frame hitch at

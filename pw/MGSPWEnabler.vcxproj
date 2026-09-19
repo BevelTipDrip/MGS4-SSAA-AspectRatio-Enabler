@@ -86,6 +86,8 @@
     <ClCompile Include="src\features\draw_census.cpp" Condition="'$(Configuration)'=='Lab'" />
     <ClCompile Include="src\features\internal_size.cpp" />
     <ClCompile Include="src\features\busy_wait.cpp" />
+    <ClCompile Include="src\features\vrr_compat.cpp" />
+    <ClCompile Include="src\features\nv_profile.cpp" />
     <ClCompile Include="src\features\file_prefetch.cpp" />
     <ClCompile Include="src\features\state_cache.cpp" />
     <ClCompile Include="src\features\render_policy.cpp" />
@@ -133,6 +135,8 @@
     <ClInclude Include="src\features\ui_bias.hpp" />
     <ClInclude Include="src\features\canvas.hpp" />
     <ClInclude Include="src\features\busy_wait.hpp" />
+    <ClInclude Include="src\features\vrr_compat.hpp" />
+    <ClInclude Include="src\features\nv_profile.hpp" />
     <ClInclude Include="src\features\file_prefetch.hpp" />
     <ClInclude Include="src\features\state_cache.hpp" />
     <ClInclude Include="src\features\render_policy.hpp" />

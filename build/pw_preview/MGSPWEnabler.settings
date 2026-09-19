@@ -51,6 +51,15 @@ Anisotropic Filtering = true
 ; turning it down keeps the part that matters. Turn it down if another overlay misbehaves.
 Busy Wait Fix = Everything
 
+; NVIDIA Fast Sync (NVIDIA graphics cards only; does nothing on AMD or Intel). With G-SYNC or any
+; variable refresh display on a 60 Hz mode and V-Sync on, the NVIDIA driver holds the game to 59
+; frames a second. The game's clock cannot slow down from 60, so one frame a second is dropped: a
+; regular hitch once a second. With Vertical sync = Fast the same driver paces at 60, G-SYNC left
+; on. true sets that for this game only, in the driver's own per-game profile, when the game
+; starts; false puts back what it replaced (recorded in MGSPWEnabler.nvidia.state) and never
+; touches a Fast setting you made yourself in the NVIDIA Control Panel.
+NVIDIA Fast Sync = false
+
 ; State Object Cache: the game asks the device to create the same handful of blend, depth-stencil,
 ; rasterizer and sampler state objects hundreds of times a frame, and a whole session only ever
 ; uses 42 distinct ones. They are immutable, so the one it asked for last time is handed back.

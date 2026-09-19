@@ -11,6 +11,7 @@
 #include "draw_census.hpp"
 #include "internal_size.hpp"
 #include "busy_wait.hpp"
+#include "vrr_compat.hpp"
 #include "sites.hpp"
 #include "file_prefetch.hpp"
 #include "probe.hpp"
@@ -53,6 +54,7 @@ namespace
             mgspwe::sites::LogBuild();
             BusyWait::Install();
             FilePrefetch::Install();
+            VrrCompat::ApplyProfile();   // before the Direct3D device: the driver reads its profile as it loads
 
 #if MGS4E_LAB_BUILD
             // A Lab build always runs its research features; their keys (from the user's settings

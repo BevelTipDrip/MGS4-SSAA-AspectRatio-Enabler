@@ -87,6 +87,8 @@ namespace mgspwe::keys
     constexpr const char* BusyWaitFix_Render = "Render thread";
     constexpr const char* BusyWaitFix_Ticker = "Render thread and ticker";
     constexpr const char* BusyWaitFix_All = "Everything";
+    constexpr const char* NvidiaFastSync = "NVIDIA Fast Sync";   // NVIDIA only: Vertical sync = Fast in the driver's profile for this game, put back when switched off (the G-SYNC + V-Sync 59-per-second pacing, docs/pw/frame-pacing.md)
+    constexpr const char* NvidiaPacingReport = "NVIDIA Pacing Report";   // NVIDIA only, diagnostic: log what the driver says about the game's device (low latency mode, VRR, its sleep interval)
     constexpr const char* YieldLockBeforePresent = "Yield Lock Before Present";   // ms of margin: the display lock is given up until shortly before the flip is due, then taken back so Present still does the pacing
     constexpr const char* VBlankOutsideLock = "Wait For VBlank Outside The Lock";   // the vsync wait is done on the display's vertical blank with the game's display lock released, then the lock is taken back and Present is called
     constexpr const char* FreeLockDuringPresent = "Free Lock During Present";   // the render thread holds the game's display critical section across Present; released around the wait so the game thread can record the next frame
