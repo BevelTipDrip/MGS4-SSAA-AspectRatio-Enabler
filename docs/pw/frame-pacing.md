@@ -518,6 +518,162 @@ the hitch are told to switch on "Voice archives at start".
 the game's designed 30 fps for those screens (the explicit wait count at `+78070`), not a stutter.
 Gameplay windows in the same session read 60, 60, 61, 60 frames a second.
 
+## 5.8 NVIDIA variable refresh holds the game to 59 a second (found 2026-09-19)
+
+**Symptom.** One 33 ms doubled frame a second at 60 Hz, back on 2026-09-18 with every fix above
+still on and working (the busy wait fix still took the processor from a full core to a quarter).
+It looked exactly like the original stutter. It is a different cause, and only on this machine:
+the same preview build on a second PC (Radeon RX 6900 XT, 5800X3D) was flat, even with
+`Busy Wait Fix` off.
+
+**Cause, confirmed by the driver itself and by the user's A/B.** With G-SYNC (variable refresh)
+active on a 60 Hz mode and V-Sync on, whether the game's own or the control panel's, the NVIDIA
+driver paces `Present`. `NvAPI_D3D_GetSleepStatus` on the game's device reports:
+
+| State | low latency mode | VRR | driver sleep interval | frames a second |
+| --- | --- | --- | --- | --- |
+| G-SYNC on, V-Sync (game or control panel) | **ON** | active | **16,948 us** | **59.00** |
+| G-SYNC on, Vertical sync = **Fast** | ON | active | 16,666 us | 60.00 |
+| G-SYNC off, the game's V-Sync | ON | not active | 16,666 us | 60.00, refresh steady at 16.667 ms |
+
+59.00 is the driver's variable refresh ceiling, `refresh - refresh^2 / 3600`: 59 at 60 Hz, 116 at
+120 Hz, 224 at 240 Hz. The game's simulation is a fixed 60.000 Hz and cannot run slower, so at 60 Hz
+one frame a second has nowhere to go: the handoff drops it (the 33 ms frame) and the display holds
+one refresh open to about 20.3 ms (the panel's adaptive-sync maximum frame interval read 20,583 us).
+At 120 Hz and above the ceiling is far over 60 and never bites, which is why section 1's table
+says a higher refresh rate "fixes" it: it only masks it. The "low latency mode ON" is the driver's
+own state; the control panel's Low Latency Mode was off throughout. It is ON in all three rows,
+variable refresh or not, so the driver paces this game regardless: the only thing that changes is
+the interval, and only variable refresh together with V-Sync selects the 59 ceiling.
+
+**What does not fix it.**
+
+- `NvAPI_D3D_SetSleepMode` with low latency off and no minimum interval, from the plugin, at device
+  creation and again whenever the driver was seen with low latency on. The call is accepted and
+  ignored: the interval stayed 16,948 us.
+- Removing `Maximum pre-rendered frames` from the game's driver profile. No profile or global
+  setting was found that switches the ceiling off while variable refresh and V-Sync are both on.
+- Everything in the list below, each excluded by its own test before the driver was asked.
+
+**What fixes it.** G-SYNC off for the game, or Vertical sync = Fast with G-SYNC left on (the user:
+"feels good and runs well"). AMD's FreeSync shows no such ceiling. The shipped option is
+**`NVIDIA Fast Sync`** (Config Tool, Performance; off by default; `pw/src/features/nv_profile.cpp`
+and `vrr_compat.cpp`):
+
+- At start-up, before the game creates its device, the plugin finds the driver profile that matches
+  the running exe (`NvAPI_DRS_FindApplicationByName` with the full path), or makes one named
+  "METAL GEAR SOLID PEACE WALKER (MGSPWEnabler)", and sets Vertical sync (`0x00A879CF`) to Fast
+  (`0x18888888`) in that profile only. The global setting is never written.
+- What it replaced is recorded in `MGSPWEnabler.nvidia.state` next to the settings file. Off with
+  that file present puts the value back (or removes it, and removes a profile made from here if it
+  holds nothing else) and deletes the file. Off with no such file returns before `nvapi64.dll` is
+  even loaded, so a Fast value the user set themselves is never touched. If the value is no longer
+  Fast when it is switched off, it was changed elsewhere and is left alone.
+- `nvapi64.dll` is loaded from System32 at run time, by `nvapi_QueryInterface` ids, no SDK. On AMD
+  and Intel the load fails and nothing else happens. A translation layer that answers the query but
+  lacks the profile entry points is treated the same way.
+- Cost: about 135 ms once at start-up while the option is on (loading the driver's settings store);
+  nothing per frame.
+- With the option on, the log carries the driver's own status at device creation and 46 s in
+  (`PW vrr:` lines). 16,666 us means the driver took it for that start. `NVIDIA Pacing Report`
+  (Lab tab, both builds) logs the same lines without the option, plus 106 s and 180 s.
+- `nv_profile.cpp` uses nothing of the plugin, so it also builds into a console test that runs a
+  **dry run** against the real driver: everything happens inside a settings session that is
+  discarded instead of saved. The profile creation path was verified that way (the exe with no
+  profile returns -166, a profile is made, the value reads back as the profile's own, and the exe
+  is found again in the same profile), without touching the store and without starting the game.
+
+**Excluded on 2026-09-18 and 09-19, each by test, so none is retried:** the Steam update to 1.3.2
+(a verified 1.3.1 copy from DepotDownloader stutters the same, with the current plugin and with the
+2026-09-16 plugin); the port of the sites to signatures; MGSPatriotFix and its launcher patch;
+render and output resolution; window mode; a reboot; the GPU power state (pinned at full clocks,
+about 30% load); the NVIDIA and Steam overlays, RTSS, FanControl; Windows' graphics toggles;
+RenderDoc (it left no registry key; the only key written on 09-16 was removed the same day);
+a Defender exclusion; processor affinity and the all-core burst at launch; the busy wait level
+(0, 1, 3: amplitude changes, the once-a-second beat does not); the frame-skip governor (off: the
+hitch stays, smaller); a clock mismatch between the game and the display (both read 60.000).
+
+**Not explained.** G-SYNC was on and the graph was flat for days before 2026-09-18. Nothing the
+user did changed that night besides the game update, which is excluded. The NVIDIA app updated
+itself in the background at 09-17 23:33, 09-18 01:11 and 01:47; whether that changed the driver's
+behaviour is unproven. The driver went 616.56 to 616.92 on 09-18 at 23:22, after the onset.
+
+**The per-game route works on the launch that writes it (2026-09-19 11:21).** With the global
+Vertical sync back at "Use the 3D application setting", the plugin wrote Fast to the game's profile
+at start-up and the driver reported 16,666 us with variable refresh active 46 s later, in the same
+process. No second start is needed. The user's graph was flat. Switching it off was verified the
+same way at 11:57: the next start logged "put back to not set (follows the global setting)" and
+the state file was gone.
+
+**Fast Sync does not buffer or discard anything here (PresentMon 2.5.1, whole session, Release
+build, 2026-09-19 11:35; `C:\mgspf_tools\pw\presentmon`, `capture.ps1` and `analyze.py`).** 104 s of
+gameplay, 6240 presents:
+
+| Measure | Value |
+| --- | --- |
+| Presents, shown, dropped | 60.010 a second, all 6240 shown, **0 dropped** |
+| Present to screen | mean 6.38 ms, 4.8 to 8.3 ms |
+| Present to GPU finished | mean 6.38 ms: **the same number**, frame by frame |
+| Between display changes | mean 16.667 ms, 15.4 to 17.7 ms, none over 25 ms |
+| Inside `Present` | mean 0.77 ms, max 1.1 ms |
+| Mode as PresentMon sees it | Hardware: Independent Flip, sync interval 0, tearing allowed |
+
+Every frame reaches the screen the moment the GPU finishes it, so nothing waits in a queue: a
+three-frame buffer would read 33 to 50 ms. Nothing is discarded because the game never renders
+faster than the display: Fast Sync only throws frames away when the application outruns the
+refresh, and this one is held to 60 by its own clock. What Fast Sync changes is that the game's
+`Present(1)` reaches the system as an immediate present (the game's own value, sync interval 1
+without tearing, is what PresentMon recorded during the few seconds the window was composed), and
+with variable refresh active the panel follows each frame as it arrives. The 60 comes from the
+driver's 16,666 us sleep and the game's tick, not from waiting for a refresh.
+
+In the same session: a 4.3 s stretch of "Composed: Flip" (351 to 355 s) in which 248 of 254 frames
+were reported dropped and the rest took 31 ms to the screen: the user had alt-tabbed. Menus and
+loading ran at 30 a second as usual.
+
+**Baseline, same day 11:57: G-SYNC off, the game's own V-Sync, Fast Sync unticked** (49 s of
+gameplay, 2940 presents; the user's graph: stable 60). Neither mode buffers and neither drops:
+
+| Measure | Fast Sync + G-SYNC | V-Sync, G-SYNC off |
+| --- | --- | --- |
+| Presents a second, dropped | 60.010, 0 | 60.021, 0 |
+| Mode as PresentMon sees it | independent flip, sync 0, tearing allowed | independent flip, sync 1 |
+| Inside `Present` | 0.77 ms | 0.13 ms |
+| Present to GPU finished | 6.38 ms | 6.12 ms |
+| Present to screen | 6.38 ms (4.8 to 8.3) | 10.85 ms (9.5 to 12.1) |
+| Finished frame waits for the refresh | 0 ms: the panel follows the frame | 4.73 ms (2.7 to 7.7) |
+| Between display changes | 16.667 ms, 15.4 to 17.7 | 16.666 ms, 16.48 to 16.85 |
+
+So the user's reading holds: with a game that cannot outrun the display, Fast Sync has nothing to
+buffer or discard, and it behaves as "present at once and let variable refresh show it", about
+4.5 ms sooner than waiting for a fixed refresh. Under plain V-Sync a frame is still shown at the
+first refresh after the GPU finishes it; there is no queue there either.
+
+**Why this game has no V-Sync cushion, in any mode.** The usual picture of V-Sync (two or three
+frames queued, the oldest shown, so a late frame is covered by an older one) is what happens when a
+game renders as fast as it can and is throttled by `Present` blocking: the queue fills in the first
+few frames and stays full. Peace Walker is not throttled by `Present`. Its game thread runs off its
+own 60.000 Hz timer, so production equals consumption and the queue keeps the depth it started
+with, which is empty. The baseline shows it: 0.13 ms inside `Present` (it never blocks, so the
+queue is never full) and 10.8 ms from `Present` to the screen (under one refresh; one or two older
+frames ahead would read 27 to 45 ms). The title sequence of the same run, where `Present` does
+block (9.9 ms inside, 17 ms to the screen), is still only one refresh deep. So a frame that misses
+its refresh is always a visible repeat here; that is the engine's design, not something a sync mode
+changes. The same arithmetic explains the 59-a-second hitch: 16.948 - 16.667 = 0.281 ms a frame,
+the 0.27 ms a frame by which `Present`'s return was measured creeping, and after about 59 frames it
+is one whole frame that a fixed-rate game cannot absorb, so the handoff drops it.
+
+One more number from the baseline: present-to-screen fell steadily through the whole session, 18 ms
+at 70 s to 9.4 ms at 230 s, a straight line of 53 us a second (53 parts per million between the
+game's tick and the panel's fixed refresh: 60.000 against about 59.997). That is far too small to
+be the once-a-second hitch (section 5.5 stands), but it means that on a fixed refresh the margin
+between "GPU finished" and "refresh" runs out about every 315 s, and one frame should then be shown
+twice. **Predicted from the slope, not observed:** the run ended with 2.7 ms of margin left. With
+variable refresh there is no grid to drift against.
+
+PresentMon's `--terminate_on_proc_exit` exited about five minutes after the game, and it holds the
+CSV locked until then. It runs elevated with no window, so it cannot be stopped from the harness.
+
 ## 6. The Lab instrumentation
 
 All keys under `[Graphics]`, Lab build only unless noted, all off by default.
@@ -581,6 +737,16 @@ waitable swap chain: do not block inside something that holds a resource others 
   thread's own running mean, which also keeps the 30 fps menus from qualifying.
 - **`GetThreadTimes` was doubted and turned out to be right.** `QueryThreadCycleTime` agreed with
   it. The cycle counter is still the better instrument, because it cannot be dismissed.
+- **A saw-tooth on the frame-time graph has only ever been seen with a Lab build in the scripts
+  folder (2026-09-19, and once before).** With variable refresh off, about one `Present` in five or
+  six blocked until the next refresh and the overlay drew a regular comb; it came and went within a
+  session and was not felt in motion (the game thread stayed on schedule, one frame per refresh).
+  The Lab build of that night logged a line, flushed to disk, for every `Present` over 8 ms on the
+  render thread, and hooks every context call. An explanation by launch phase (the block length
+  equalled the distance from `Present` to the next refresh: 7.5 to 9.3 ms in the run with the comb,
+  0.3 ms and about 0 ms in two flat runs) was drawn from three launches and is **unproven**. Rule:
+  do not judge pacing by eye, or build a fix for a pacing artefact, while a Lab build is deployed;
+  confirm on the Release build first.
 
 ### 8.y The start-up crash: solved with a debugger, 2026-09-16
 
@@ -669,6 +835,8 @@ after hours of in-process probing had failed.
   `MGSPWEnabler.settings` before every launch and change only the key under test. A stale lab file
   once produced a run with no supersampling that the user had to diagnose from the picture.
 - Check in with the user before launching and before closing while they are testing.
+- Every launch needs the user's go for that launch, Release or Lab. A run with nobody at the PC (or
+  the monitor off, which switches variable refresh off) is not data.
 - `tasklist` truncates the game's image name: match on `METAL GEAR`.
 - Compare within one session and one spot in the game. Cross-session comparisons leave room for
   scene differences, which is how the first Fast Sync comparison nearly went wrong.
