@@ -685,6 +685,51 @@ validation cases fall through to the existing `Int` ones. `Row::control` is a si
 so a slider plus a numeric readout needs either a second `Row` member or a sizer passed to
 `grid->Add` (`wxFlexGridSizer::Add` takes a sizer, so no extra panel is needed).
 
+### 2m.1 What the recon changed about the MOUSE (and two open questions it may answer)
+
+- **Frames with mouse counts but no turn (open since 2i) now have a candidate cause.** The
+  dead-zone block is gated on `player+0x9B2` ("input is mouse"), but that byte is **cleared at
+  `+73EA4A`, a few instructions before the gate reads it**, on a path whose conditions are not yet
+  known. A mouse-sourced look value is about 0.03 to 0.09 stick units; the dead zone is 48. So on
+  any frame that takes that path the mouse contributes **exactly zero**, which is what was measured
+  (74 of 2700 free-camera frames, 209 of 12550 aiming). Testable in one Lab run: log the flag and
+  the pre/post dead-zone value on zero-turn frames.
+- **A 60-frame look lock-out exists** (`+10A5674`, written at `+73E970`, `+73E9B8`, `+73E9FF`,
+  counted down at `+73EA0B`): after certain states the look input is suppressed for up to a second.
+  That is a candidate for the crosshair settling on entering aim (2g), which the mouse chain itself
+  could not explain.
+- **The movement stick is folded into the look axes** at `+73EA1E` behind a gate (a movement axis
+  non-zero, an allow flag from three state tests, and the countdown above). For a keyboard-and-mouse
+  player that means WASD movement can add to the look value in some states: aim bending while
+  moving, from a path that has nothing to do with the mouse.
+- **`player+0x9A2` is not the look direction.** The atan2 to 16-bit at `+73E73C..+73E767` belongs to
+  the movement block. Do not read that field as a look angle.
+- **The in-game mouse sensitivity is per camera context, not per axis:** bytes `+8` and `+9` of the
+  dword at `[+10C58A0]+8` each scale **both** axes, which is why the plugin's vertical sensitivity
+  has nothing in the game to fight with. The options record is deliberately cloaked (a 0x2000-byte
+  pseudo-random fill at `+10C3880` with the 0x400-byte record placed inside it), so reading the
+  player's in-game value to compose with it is possible but not casual.
+- **The fast-turn test (0.9 at `+9C191C`) fires on mouse flicks too** — it is not mouse-gated, and
+  it divides both velocities by the per-camera maximum turn. What the flag it sets then does is
+  not established.
+
+### 2m.2 The in-game "Rotation speed" options: where they probably live
+
+The menu text is not in the executable (it is in the language archives), so the options themselves
+were not found. The machinery they drive almost certainly is: each camera reads **four config words**
+at `[cam+0x310]` (camA) / `[cam+0x2D0]` (camB), `+0x3A` / `+0x3C` / `+0x3E` / `+0x40`, scaled by
+1/256, as **two pairs selected by a condition** at `+88556E` against `+885598` — the shape of
+"normal view" and a second view, each with its own speed. They feed the per-frame maximum turn
+(with the weight 0.7 and offset 0.3 at `+885681` / `+8856B7`). Since the game applies no sensitivity
+scaler at all to pad input, these words are the only thing that can be the controller's camera
+speed, which fits a menu item named "Rotation speed" exactly.
+
+Two consequences, both unverified: a "rotation speed" change should move those words, and while the
+mouse skips the stick's speed clamp it **shares** the fast-turn test that divides by the same
+maximum, so the setting may still change when a mouse flick trips that flag. One Lab run settles
+both: log the four words per frame, change the menu setting, and see which move. The generic options
+accessor is `+84ED0` (`[+10C58A0] + index*4`), which is where to look for the stored value.
+
 ### What to implement, in order
 
 Each step is small enough to judge on its own, and each says what would show it works.
