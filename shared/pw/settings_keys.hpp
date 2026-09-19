@@ -103,9 +103,6 @@ namespace mgspwe::keys
     constexpr const char* MouseFractionCarry = "Mouse Fraction Carry";   // keep the fraction of each frame's mouse turn instead of truncating it away (docs/pw/mouse-input.md 2e)
     constexpr const char* MouseLateSample = "Mouse Late Sample";          // sample the mouse right before the look-input routine uses it instead of a frame earlier (docs/pw/mouse-input.md 2f)
     constexpr const char* MouseUniformRail = "Mouse Uniform Rail";        // free camera, one count changes the view's elevation by the same amount everywhere on its rail (docs/pw/mouse-input.md 2j)
-    constexpr const char* StickLateSample = "Stick Late Sample";         // controller: re-poll Steam Input right before the camera uses it, about a frame less latency
-    constexpr const char* StickLookDeadZone = "Stick Look Dead Zone";    // controller aim dead zone in stick units of 127; the game's is 48
-    constexpr const char* StickMoveDeadZone = "Stick Move Dead Zone";    // controller movement dead zone, same units; the game's is 47 and only lowering is offered
     constexpr const char* MouseVerticalSensitivity = "Mouse Vertical Sensitivity";   // percent of the horizontal, 25..400, every camera, mouse only
     constexpr const char* MouseVerticalRatio = "Mouse Vertical Ratio";   // older spelling of the same thing as a multiple (1.0); still read    // with Mouse Uniform Rail, vertical degrees per count as a multiple of the horizontal (1.0 = the same)
     constexpr const char* MousePromptPump = "Mouse Prompt Pump";          // the mouse thread handles a message the moment it arrives instead of after one or two Sleep(1) (needs Busy Wait Fix = Everything)

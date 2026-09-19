@@ -13,7 +13,6 @@
 #include "busy_wait.hpp"
 #include "vrr_compat.hpp"
 #include "mouse_aim.hpp"
-#include "stick_input.hpp"
 #include "sites.hpp"
 #include "file_prefetch.hpp"
 #include "probe.hpp"
@@ -70,7 +69,6 @@ namespace
             RenderHooks::Install();
 #endif
             MouseAim::Install();   // after the Lab probe, which switches its telemetry on
-            StickInput::Install();
             InternalSize::Apply();
 
             AspectRatio::ApplyFixes();

@@ -1,4 +1,29 @@
 #include "pch.hpp"
+
+// WITHDRAWN 2026-09-19, the same day it was written: it broke the game for the user and the dead
+// zones did not work. NOT in the project file, NOT installed, kept only so the next attempt starts
+// from the faults rather than repeating them. docs/pw/mouse-input.md 2n has the account.
+//
+// THREE KNOWN DEFECTS, all in this file:
+//
+//  1. The two dead-zone hooks could never work. A safetyhook mid-hook runs the callback and THEN
+//     the original instruction, so setting xmm0 at +73EA7E is immediately overwritten by the very
+//     `movss xmm0, [48.0]` that was hooked, and the same for xmm1 at +73EAC3. The codebase pattern
+//     for replacing what a load produces is internal_size.cpp's: set the register AND advance
+//     `ctx.rip` past the load (there `ctx.rip += 5`; these loads are 8 bytes). The alternative is
+//     to hook the four consumers instead, where the value is read rather than written.
+//  2. The late sample corrupts the input source. It recomputes the four look actions but leaves
+//     their source-kind fields (+0x1C / +0x20) as the game's own update left them, and the look
+//     routine derives player+0x9B2 ("input is mouse") from exactly those fields at +73E92B. A
+//     mouse frame can therefore be taken for a pad frame, which sends the mouse through the pad's
+//     48-unit dead zone and silences it, since a mouse look value is well under one unit.
+//  3. Re-entering SteamInputWork::Update from inside the actor scheduler was never established to
+//     be safe: it re-reads sixteen digital actions as well as the two sticks, and nothing here
+//     checks what that does to button edges.
+//
+// Before trying again: fix 1 mechanically, then prove 2 with a Lab run that logs the source kinds
+// and player+0x9B2 with the late sample on, and settle 3 by polling only the analog half.
+
 #include "stick_input.hpp"
 
 #include "game.hpp"

@@ -115,22 +115,6 @@ Mouse Uniform Rail = false
 ; (25 to 400; 100 = the same). Every camera, aiming included. Mouse only.
 Mouse Vertical Sensitivity = 100
 
-; Controller (analog stick). The pad reaches the game through Steam Input only, and the game
-; applies no sensitivity setting of any kind to it.
-; Stick Late Sample: the game reads the pad, then waits out the frame, then turns the camera, so
-; the stick is always a frame behind. true re-reads the pad right before the camera uses it. A
-; stick is a position rather than a movement, so nothing is counted twice. Off by default until
-; it has been tested more widely: if a button ever double-fires with this on, turn it off.
-Stick Late Sample = false
-; Stick Look Dead Zone: the controller aim dead zone in stick units of 127. The game uses 48, so
-; the first 38% of the stick's travel does nothing when you aim. Lower it for finer aim; the speed
-; at full deflection is unchanged, because the gain after the dead zone is rescaled to match.
-Stick Look Dead Zone = 48
-; Stick Move Dead Zone: the controller movement dead zone, same units. The game ignores both axes
-; together unless one leaves a band of about 47, so a gentle diagonal is dropped entirely. Only
-; lowering is offered: the keyboard reports exactly 48.31 units and a wider band would stop WASD.
-Stick Move Dead Zone = 47
-
 ; Input Probe (Lab): one line per frame with mouse activity (counts, latch, look value, camera turn,
 ; rail position), and live switches with a beep (high = on): F5 uniform rail, F6 fraction carry,
 ; F7 late sample, F8 prompt pump, F9 those three together, F10 logs the mouse thread's histograms.

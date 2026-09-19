@@ -12,7 +12,6 @@
 #include "busy_wait.hpp"
 #include "vrr_compat.hpp"
 #include "mouse_aim.hpp"
-#include "stick_input.hpp"
 #include "file_prefetch.hpp"
 #include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
@@ -251,15 +250,6 @@ namespace mgspwe::config
             }
             MouseAim::fVerticalRatio = std::clamp(MouseAim::fVerticalRatio, 0.25f, 4.0f);
             Report(Graphics, MouseVerticalSensitivity, MouseAim::fVerticalRatio);
-            // Controller (docs/pw/mouse-input.md 2m).
-            Read(ini, Graphics, StickLateSample, StickInput::bLateSample);
-            Report(Graphics, StickLateSample, StickInput::bLateSample);
-            Read(ini, Graphics, StickLookDeadZone, StickInput::iLookDeadZone);
-            StickInput::iLookDeadZone = std::clamp(StickInput::iLookDeadZone, 0, 48);
-            Report(Graphics, StickLookDeadZone, StickInput::iLookDeadZone);
-            Read(ini, Graphics, StickMoveDeadZone, StickInput::iMoveDeadZone);
-            StickInput::iMoveDeadZone = std::clamp(StickInput::iMoveDeadZone, 0, 47);
-            Report(Graphics, StickMoveDeadZone, StickInput::iMoveDeadZone);
             Read(ini, Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Report(Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);

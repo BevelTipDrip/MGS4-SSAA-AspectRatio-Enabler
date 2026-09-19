@@ -3,7 +3,6 @@
 
 #include "game.hpp"
 #include "sites.hpp"
-#include "stick_input.hpp"
 
 namespace
 {
@@ -252,8 +251,6 @@ namespace
     }
 }
 
-bool MouseAim::WantsLookHook() { return bLateSample || bTelemetry || StickInput::bLateSample; }
-
 const MouseAim::CameraSample& MouseAim::LastCamera() { return g_Camera; }
 const MouseAim::LateSample& MouseAim::LastLate() { return g_Late; }
 const MouseAim::RailSample& MouseAim::LastRail() { return g_Rail; }
@@ -261,10 +258,10 @@ const MouseAim::RailSample& MouseAim::LastRail() { return g_Rail; }
 void MouseAim::Install()
 {
     const bool ratio = fVerticalRatio != 1.0f;
-    if (!bFractionCarry && !bLateSample && !bUniformRail && !ratio && !bTelemetry && !StickInput::bLateSample) { return; }
+    if (!bFractionCarry && !bLateSample && !bUniformRail && !ratio && !bTelemetry) { return; }
     const uintptr_t base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
-    if (WantsLookHook())
+    if (bLateSample || bTelemetry)   // with the probe on, F9 switches the fixes live, so the hook has to be there
     {
         const uintptr_t handler = mgspwe::sites::Resolve(kRawMouseSig);
         const uintptr_t look = mgspwe::sites::Resolve(kLookInputSig);
@@ -292,11 +289,7 @@ void MouseAim::Install()
                 GetModuleInformation(GetCurrentProcess(), mgs4e::game::Module(), &info, sizeof(info));
                 g_ImageStart = base;
                 g_ImageEnd = base + info.SizeOfImage;
-                g_LookInput = safetyhook::create_mid(base + look, [](SafetyHookContext&)
-                {
-                    StickInput::OnLookInput();               // the pad first: a state, re-polled
-                    if (MouseAim::bLateSample) { SampleLate(); }   // then the mouse's accumulated movement on top
-                });
+                g_LookInput = safetyhook::create_mid(base + look, [](SafetyHookContext&) { if (MouseAim::bLateSample) { SampleLate(); } });
             }
         }
         spdlog::info("PW mouse: late sample {}: look input +{:X} {}, lookup +{:X}, accumulators +{:X} / +{:X}, manager at +{:X}.",

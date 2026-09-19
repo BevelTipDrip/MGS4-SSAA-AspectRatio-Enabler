@@ -772,6 +772,42 @@ Each step is small enough to judge on its own, and each says what would show it 
 - Sensitivity as one slider with a separate vertical percentage (as the mouse has), or independent
   X and Y?
 
+## 2n. The first controller attempt, withdrawn the same day (2026-09-19)
+
+`Stick Late Sample`, `Stick Look Dead Zone` and `Stick Move Dead Zone` were built, shipped as
+commit `4ef722f`, tried by the user, and **reverted** (`git revert`, so `mouse_aim.cpp` is
+byte-for-byte what it was). The user's report: "it seemed to mess up a lot of things, and the
+deadzones aren't working properly". The source is kept at `pw/src/features/stick_input.{hpp,cpp}`,
+**not in the project file and not installed**, with the faults written at the top of both.
+
+**1. The dead-zone hooks could never have worked.** A safetyhook mid-hook runs the callback and
+then the original instruction. The hooks were placed on the two *loads* (`+73EA7E` fills xmm0 with
+48.0, `+73EAC3` fills xmm1 with 1.6), so the callback wrote the register and the relocated load
+immediately overwrote it. The right shape is `internal_size.cpp`'s: set the register **and**
+advance `ctx.rip` past the load (there `ctx.rip += 5`; these are 8-byte loads). Hooking the four
+consumers instead also works, since they read the register rather than write it. Choosing the one
+load site to save four hooks looked elegant and was simply wrong; a single Lab log line of the
+value actually used would have caught it before it shipped.
+
+**2. The late sample corrupts the input source, which is the likely "messed up a lot of things".**
+It recomputed the four look actions from their bindings but left the source-kind fields
+(`+0x1C` / `+0x20`) as the game's own update had set them, and the look routine derives
+`player+0x9B2` ("input is mouse") from exactly those fields at `+73E92B`. A mouse frame taken for
+a pad frame goes through the pad's 48-unit dead zone, and a mouse look value is well under one
+unit, so the mouse is silenced. Anything that recomputes an action must recompute its source with
+it.
+
+**3. Re-entering `SteamInputWork::Update` from inside the actor scheduler was never established to
+be safe.** It re-reads sixteen digital actions as well as the two sticks, and nothing checked what
+that does to button edges. It shipped behind an off-by-default switch, which is not the same as
+knowing.
+
+The reverse engineering in 2m still stands: the sites, the constants and the Steam Input structure
+were all verified independently. What failed was the hooking mechanics and an unchecked assumption
+about the source fields. Next attempt, in order: fix the mid-hook shape, prove the dead zone with a
+logged before-and-after value on one axis, and only then look at the late sample, polling the
+analog half alone.
+
 ## 3. Not known yet
 
 Everything that is felt is downstream of the getter and has not been read: the sensitivity scale,
