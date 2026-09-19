@@ -15,6 +15,8 @@
 #include "state_cache.hpp"
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
+#include "input_probe.hpp"
+#include "mouse_aim.hpp"
 #include "draw_census.hpp"
 #endif
 
@@ -251,6 +253,16 @@ namespace mgspwe::config
             Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
             Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
             Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
+            Read(ini, Graphics, MouseInputProbe, InputProbe::bEnabled);
+            Report(Graphics, MouseInputProbe, InputProbe::bEnabled);
+            Read(ini, Graphics, InputProbeWatch, InputProbe::bWatchActions);
+            Report(Graphics, InputProbeWatch, InputProbe::bWatchActions);
+            Read(ini, Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
+            Report(Graphics, MouseFractionCarry, MouseAim::bFractionCarry);
+            Read(ini, Graphics, MousePromptPump, BusyWait::bPromptPump);
+            Report(Graphics, MousePromptPump, BusyWait::bPromptPump);
+            Read(ini, Graphics, MouseLateSample, MouseAim::bLateSample);
+            Report(Graphics, MouseLateSample, MouseAim::bLateSample);
             Read(ini, Graphics, DrawCensusAtSeconds, DrawCensus::iCensusAtSeconds);
             Read(ini, Graphics, DrawCensusFrames, DrawCensus::iCensusFrames);
             Read(ini, Graphics, LiveCommands, DrawCensus::bLiveCommands);

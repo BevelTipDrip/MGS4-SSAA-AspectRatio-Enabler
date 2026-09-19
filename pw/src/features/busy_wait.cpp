@@ -42,6 +42,7 @@ namespace
     }
     safetyhook::MidHook g_HandoffSignal, g_RenderSpin, g_TickerSpin;
     safetyhook::InlineHook g_PeekMessage;
+    safetyhook::MidHook g_PumpSleep;
     using PeekMessageFn = BOOL(WINAPI*)(LPMSG, HWND, UINT, UINT, UINT);
 
     std::atomic<uint64_t> g_FrameWaits { 0 }, g_FrameWaitTimeouts { 0 }, g_FrameWaitTicks { 0 };
@@ -87,11 +88,13 @@ namespace
     // MGS3 verbatim, including the timeout.
     BOOL WINAPI Hooked_PeekMessageA(LPMSG msg, HWND wnd, UINT first, UINT last, UINT remove)
     {
-        const BOOL got = g_PeekMessage.call<BOOL>(msg, wnd, first, last, remove);
+        BOOL got = g_PeekMessage.call<BOOL>(msg, wnd, first, last, remove);
         if (!got && g_Level.load(std::memory_order_relaxed) >= 3)
         {
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
             g_PumpWaits.fetch_add(1);
+            // What ended the wait is handled now rather than one Sleep(1) later.
+            if (BusyWait::bPromptPump) { got = g_PeekMessage.call<BOOL>(msg, wnd, first, last, remove); }
         }
         return got;
     }
@@ -179,6 +182,20 @@ namespace BusyWait
             g_TickSleeps.fetch_add(1);
             ctx.xmm6.f64[0] = ctx.xmm7.f64[0];
         });
+
+        if (bPromptPump || MGS4E_LAB_BUILD)   // in a Lab build the switch is live (F9), so the hook has to be there
+        {
+            // The pump loop's Sleep(1): call [Sleep] with ecx = 1, then the jump back to PeekMessageA.
+            constexpr mgspwe::sites::Signature kPumpSleepSig { "busy wait: pump Sleep(1)", 0x777E2, "FF 15 ?? ?? ?? ?? EB A6 44 38 25 ?? ?? ?? ??", 0 };
+            if (const uintptr_t site = mgspwe::sites::Resolve(kPumpSleepSig))
+            {
+                g_PumpSleep = safetyhook::create_mid(base + site, [](SafetyHookContext& ctx)
+                {
+                    if (BusyWait::bPromptPump && g_PeekMessage && g_Level.load(std::memory_order_relaxed) >= 3) { ctx.rcx = 0; }
+                });
+                spdlog::info("PW busy wait: prompt pump {}: pump sleep +{:X} {}.", bPromptPump ? "ON" : "off", site, g_PumpSleep ? "hooked" : "FAILED");
+            }
+        }
 
         // The pump lives in user32, so the hook goes there rather than on an import: the game
         // imports PeekMessageA, but so do the overlays, and only the level gate decides who waits.

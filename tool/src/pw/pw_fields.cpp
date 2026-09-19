@@ -156,6 +156,24 @@ namespace mgs4e::tool::pw
         constexpr const char* kHelp_Probe =
             "One-off log lines at start-up: the loaded modules, the code decryption timing, the command line.";
 
+        constexpr const char* kHelp_MouseFractionCarry =
+            "The game truncates each frame's mouse turn to a whole angle unit and throws the fraction away\n"
+            "(up to 28% of a slow movement at the lowest sensitivity). On: the remainder is carried to the next frame.";
+        constexpr const char* kHelp_MouseLateSample =
+            "The game reads the mouse, then waits out the frame, then turns the camera: the turn is always a frame old.\n"
+            "On: the mouse is sampled again right before the camera input is computed, and nothing is counted twice.";
+        constexpr const char* kHelp_MousePromptPump =
+            "The game's mouse thread sleeps a millisecond or more on every pass, so movement reaches the game in\n"
+            "clumps 4 to 8 ms apart. On: a message is handled the moment it arrives. Needs Busy Wait Fix = Everything.";
+        constexpr const char* kHelp_InputProbeWatch =
+            "With Input Probe: hardware breakpoints on the camera actions' values, logging whatever reads them.\n"
+            "Each access costs an exception; leave off when measuring.";
+
+        constexpr const char* kHelp_InputProbe =
+            "Mouse aim research. Logs one line per frame that had mouse movement: the raw counts that arrived,\n"
+            "what the game latched, what its 0..255 input getter answered for each direction, and once per\n"
+            "distinct caller, who asked. Stamped with the performance counter to line up with mouse_move.ps1.";
+
         constexpr const char* kHelp_AspectRatio =
             "The shape of the picture. 16:9 is the game's own layout. Any other shape widens or heightens the\n"
             "PSP canvas to it (650x272 units at 21:9, 480x360 at 4:3): the world fills the display at correct\n"
@@ -293,6 +311,13 @@ namespace mgs4e::tool::pw
                         F::Bool(G, K::LogDecryptTiming, kHelp_Probe, false),
                         F::Bool(G, K::LogCommandLine, kHelp_Probe, false),
                         F::Bool(G, K::LogLoadedModules, kHelp_Probe, false),
+                        F::Bool(G, K::MouseInputProbe, kHelp_InputProbe, false),
+                        F::Bool(G, K::InputProbeWatch, kHelp_InputProbeWatch, false),
+                    }},
+                    { "Mouse aim (both fixes are Lab-only for now)", {
+                        F::Bool(G, K::MouseFractionCarry, kHelp_MouseFractionCarry, false),
+                        F::Bool(G, K::MouseLateSample, kHelp_MouseLateSample, false),
+                        F::Bool(G, K::MousePromptPump, kHelp_MousePromptPump, false),
                     }},
                 }},
                 { "Troubleshooting", {

@@ -15,6 +15,8 @@
 #include "sites.hpp"
 #include "file_prefetch.hpp"
 #include "probe.hpp"
+#include "input_probe.hpp"
+#include "mouse_aim.hpp"
 #include "render_hooks.hpp"
 
 namespace
@@ -61,6 +63,8 @@ namespace
             // file, or the lab file when the marker is present) decide what each one does. Its
             // census owns the Direct3D hooks and applies the same policy as the Release hooks.
             Probe::Run();
+            InputProbe::Install();
+            MouseAim::Install();   // after the probe, which switches its telemetry on
             DrawCensus::Install();
 #else
             RenderHooks::Install();
