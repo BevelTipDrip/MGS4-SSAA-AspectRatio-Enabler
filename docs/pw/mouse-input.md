@@ -476,6 +476,108 @@ Steps, in order, each measured before the next:
 7. Same rules as the mouse work: Lab switches with live toggles first, numbers before feel, the
    user judges on a Release build, nothing on by default that changes the feel.
 
+### 2l.1 The controller arrives through Steam Input (the user, 2026-09-19)
+
+The game is played with a DualSense through Steam Input, so whatever is done here applies to any
+controller Steam Input presents. Consistent with the imports: no XInput, only
+`SteamInternal_FindOrCreateUserInterface` and friends, through which an `ISteamInput` interface
+can be fetched at run time (not yet confirmed in the code). Two consequences for the work:
+**Steam's own per-game controller configuration sits in front of the game** (its dead zone,
+response curve and sensitivity are applied before the game sees the stick), so measurements and
+tester reports must state those settings, and the honest baseline is Steam's dead zone set to
+none; and the pad is a polled state (`GetAnalogActionData` style), which is the easy case for a
+late re-poll (step 3).
+
+### 2l.2 Every known value in the stick's path (RVAs of build 25294658; values read from the dump)
+
+Most of these constants live in `.rdata` and are **shared by unrelated code** (127, 1/128, 0.7, 5
+and so on are used all over the executable). Never patch the constant: hook the instruction that
+loads it, as the mouse fixes do. "Site" is the instruction to hook.
+
+**Look-input routine `+73D37E .. +73EC50`** (stick and keys to `pad + 0x998 / 0x99C`)
+
+| what | value | constant | site |
+| --- | --- | --- | --- |
+| action value to stick units | `v / 255 * 127`, clamped +-127 | `+E14A10` 255.0, `+E14A04` 127.0, `+E14A94` -127.0 | `+4FC50` (leaf, called at `+73E7C9`, `+73E824`, `+73E56F`, `+73E581`) |
+| sum of actions and the pad's stick, clamp | +-127 | `+E14A94` -127.0 (xmm9), 127 / 128 in xmm12 | `+73EA1E .. +73EA46` |
+| **look dead zone** | **48.0** of 127 | `+9C0C0C` | loaded at `+73EA7E`, applied X `+73EA88 / +73EAA7`, Y `+73EAD2 / +73EAED` |
+| whole-number truncation after the dead zone | `cvttss2si` | | X `+73EA90 / +73EAAC`, Y `+73EAD9 / +73EAF1` |
+| **gain after the dead zone** | **1.6** ((127 - 48) * 1.6 = 126.4) | `+D26B0C` | loaded `+73EAC3`, applied X `+73EACB`, Y `+73EB02` |
+| stored magnitude floor | the 0..255 magnitude is zeroed under **0x30** (48) | immediate | `+73EBAC` (`cmp eax, 0x30`) |
+| magnitude scale | `length / 127 * 255` | `+E14A10` 255.0 | `+73EB95 .. +73EBA8` |
+| look angle, 16-bit | `atan2 * 32768 / pi` | `+9C0604` 32768.0, `+990A18` (double) | `+73E73C .. +73E767` |
+| look lock-out after certain states | **60** frames | `+10A5674` (int, `.data`) | written `+73E970`, `+73E9B8`, `+73E9FF`; counted down `+73EA0B` |
+| movement stick: same kind of block | centre 128, range check `0x51 .. 0xAF` | `+E14A08` 128.0, `+D27B64` -128.0 | `+73E586 .. +73E5E5`; angle and magnitude to `pad + 0x98E / 0x994` at `+73E76A` |
+| mouse-as-button value (second set, toggle `0x3D11EB`) | 97.0 | `+D72BBC` | `+73E502` |
+| digital binding threshold | analog under **96** of 255 = not pressed | `+E149F8` | `+2D32E` (binding evaluate `+2D300`) |
+| outputs | `pad + 0x998` look X, `+0x99C` look Y (floats, stick units), `+0x9A8` magnitude, `+0x9A0` magnitude 0..255 (word), `+0x9A2` angle (word), `+0x9B2` is-mouse (byte), `+0x98C / 0x98E / 0x994` movement | | stored `+73EBD2 .. +73EC3D` |
+
+**Aimed cameras `camA +885360`, `camB +888D77`** (rate control; `cam + 0xB8 / 0xBC` velocities, `+0xC0 / 0xC4` ramps)
+
+| what | value | constant | site (camA; camB has the same shape) |
+| --- | --- | --- | --- |
+| stick magnitude normalised | `abs(x) * 1/128`, clamped 0..1 | `+E14894` 0.0078125 | `+88568D`, `+8856E1` |
+| speed band, normal | **1.7 .. 12.0** | `+D24644`, `+D2687C` | `+885624 .. +88562C` |
+| speed band, other state (`player + 0x14CC` bit 25) | **5.0 .. 38.0** | `+E149A4`, `+9C3EB4` | `+885612 .. +88561A` |
+| blend of the band | 0.7 and 0.3 | `+9C0BDC`, `+98F738` | `+885681`, `+8856B7` |
+| maximum turn, degrees to angle units | **182.039** (65536 / 360) | `+990F4C` | `+885703`, `+8858F1`, `+885AB7` |
+| per-camera speed words | `[[cam + 0x310] + 0x3A / 0x3C / 0x3E / 0x40] * 1/256` | `+E14890` 0.00390625 | `+8854F9 .. +8855BB` |
+| drag divisor | **300.0** | `+E14A18` | `+885841`, `+885A14` |
+| ramp | `ramp = max(0, ramp + x * k)`, `velocity = (ramp + x) * sign` | | yaw `+8859A3 .. +8859CD`, pitch `+885B55 .. +885B79` |
+| speed clamp (stick only) | +- the maximum turn (r14w) | | yaw `+8859DE .. +885A11`, pitch `+885B8A .. +885BBD` |
+| "fast turn" flag | abs(velocity) / maximum > **0.9** | `+9C191C` | `+885BC8 .. +885C47` |
+| turn truncation | `cvttss2si`, `add word [cam + 0xA0 / 0xA2]` | | `+885C5E / +885C6F`; camB `+8894A3 / +8894B8` |
+
+**Free camera** (`cam + 0x338 / 0x33C` look copy, `+0x348` is-mouse, `+0x36C` yaw, `+0x374` rail)
+
+| what | value | constant | site |
+| --- | --- | --- | --- |
+| look copy from the pad | | | `+401B6D`, `+401B7A`, flag `+401C69` |
+| yaw gain | `x * 1/128 * 341.333 * [cam + 0xA0] * 2` | `+E14894`, `+D27C40` 341.333 | `+404294 .. +4042AD` |
+| yaw smoothing (computed, then overwritten) | `1 - pow(0.5, dt)` | `+E148B0` 0.5; dt = `+E9C23C` (int 1) * `+E9C278` (1.0) | `+4041F3 .. +40426D` |
+| camera speed factor | `[cam + 0xA0]` = **0.5875** measured | field | |
+| yaw truncation | `cvttss2si`, `add word [cam + 0x36C]` | | `+4042B6`, `+4042CA` |
+| yaw limit against the player's facing | **0x3FFF** | immediate | `+4042FA .. +40432D` |
+| auto-centre | 0.0104167, 0.01, 0.015625, pi/2, 1.3, 5 | `+D27C18`, `+98FCF4`, `+D27C1C`, `+E14910`, `+D24D34`, `+E149A4` | `+404020 .. +4041A0` |
+| rail step | `y * 1/128 * 1/36 * [cam + 0xA0]` | `+D27C24` 0.0277778 | `+403A47 .. +403A67` (our hook at `+403A5F`) |
+| rail clamp | `[cam + 0xB8, cam + 0xBC]` = [0, 1] measured | fields | `+403AB7 .. +403ACF` |
+| rail levels | `(int)(p * 3)`; the keyboard steps by 1/3 | `+E14990` 3.0, `+E148A4` 0.333333 | `+403AD7 .. +403AE3`, `+403A77 .. +403AAF` |
+| rail presets | 4 x (distance, height, look-at height) | `+F8F8B8` (`.data`) | read `+404CEA .. +404D9D` |
+| rail easing | `obj + 0x8C += (1 - pow(0.3, dt)) * (target - obj + 0x8C)`, for p over 0.666667 | `+9C0BDC` 0.7, `+D27C2C`, `+E148A4` | `+4046BC .. +404769` |
+
+**Sensitivity settings** (object at `[+10C58A0]`)
+
+| byte | getter | table | use |
+| --- | --- | --- | --- |
+| `+8` | `+84E80` | `+D95610`, 50 floats 712.5 .. 3775 in steps of 62.5 | mouse, free camera (`+50950`) |
+| `+9` | `+84E90` | `+D95540`, the same 50 values | mouse, aimed cameras (`+509B0`) |
+| `+10` | `+84EB0` | `+D94578`, 10 floats 0.5 .. 2.0 in steps of 1/6, after a fixed x4 (`+E149A0`) | `+50A10`: not the mouse; very likely the stick's camera speed (unverified) |
+
+**Input layer** (shared by every device): key repeat in the action update `+2C720` (step
+`[+E9C238]` = 5 a frame, first repeat after 18 frames, then every 6: `+2C833 .. +2C853`); the
+input update `+2ACB0` called at `+77261`, before the scheduler `+79850` whose wait precedes the
+player's actor (the frame of latency).
+
+### 2l.3 Settings: every stick value a slider (the user's requirement)
+
+All of it goes in the Config Tool as sliders, including the parts of the feel that are wanted, so
+that players can tune it; each defaults to the game's own value, so an untouched install plays
+exactly as shipped. The tool's numeric field is an integer (`F::Int`, a spin box today; a real
+slider control is a tool change to make with this work), so values are percentages or stick
+units. Proposed set, to be pruned or extended once step 2's measurements are in:
+
+| slider | range | default (= the game) | replaces |
+| --- | --- | --- | --- |
+| Stick Look Dead Zone | 0 .. 64 stick units | 48 | `+9C0C0C` at `+73EA7E`, with the gain recomputed as `127 / (127 - dz)` so full deflection stays full |
+| Stick Move Dead Zone | 0 .. 64 | the game's (to be read) | the movement block `+73E586 ..` |
+| Stick Look Sensitivity X / Y | 25 .. 400 % | 100 | a multiplier on `pad + 0x998 / 0x99C` when the input is not the mouse |
+| Stick Response Curve | 50 .. 300 (exponent x 100) | 100 (linear) | applied to the normalised magnitude after the dead zone |
+| Stick Turn Speed, minimum / maximum | 25 .. 400 % | 100 | the 1.7 .. 12 (and 5 .. 38) band |
+| Stick Acceleration (ramp) | 0 .. 400 % | 100 | the ramp term `x * k` |
+| Stick Drag | 0 .. 400 % | 100 | the term divided by 300 |
+| Stick Fraction Carry | off / on | off | the truncation sites, for non-mouse frames |
+| Stick Late Sample | off / on | off | a re-poll in the `+73E78A` hook |
+
 ## 3. Not known yet
 
 Everything that is felt is downstream of the getter and has not been read: the sensitivity scale,
