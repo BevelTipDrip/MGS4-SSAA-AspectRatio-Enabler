@@ -578,6 +578,155 @@ units. Proposed set, to be pruned or extended once step 2's measurements are in:
 | Stick Fraction Carry | off / on | off | the truncation sites, for non-mouse frames |
 | Stick Late Sample | off / on | off | a re-poll in the `+73E78A` hook |
 
+## 2m. The controller path, established (2026-09-19, static analysis; stopped early for budget)
+
+Seven parallel investigations of the dump, each claim then adversarially re-derived by an
+independent agent: 104 claims, 34 verified before the run was stopped (30 confirmed, 4 corrected).
+The raw material is kept at `C:\mgspf_tools\pw\mouse\controller_recon_partial.json`. Nothing here
+has been measured in a running game yet; everything is read from the executable.
+
+### What the controller path is
+
+**Steam Input is the only gamepad source.** No XInput, no DirectInput, no delay-loads, no other
+gamepad strings. `ISteamInput006` is reached through the SDK's inlined accessor (init thunk
+`+2A340`, context array `+1063900`, live interface pointer `+1063910`). Exactly three functions
+use it: `+2A370` (start-up: `RestartAppIfNecessary(2492660)`, `SteamAPI_Init`, `ISteamInput::Init`),
+`+2A3D0` (shutdown) and **`+65740` = `Input::SteamInputWork::Update`**, the per-frame poll.
+
+**The pad is a once-a-frame state poll on the main-loop thread**, not events:
+
+```
+main loop +77261 -> input manager update +2ACB0
+                      +2AD91  Input::KMInputWork::Update      (keyboard and mouse)
+                      +2AD9E  Input::SteamInputWork::Update   (+65740: RunFrame(true),
+                                GetConnectedControllers, GetAnalogActionData x2, digital x16)
+                      +2ADC4  per-player action update        (+2C720)
+                 -> actor scheduler +79850 (+77266) -> ... -> the look-input routine
+```
+
+`SteamInputWork` (vtable `+DAD018`, RTTI `.?AVSteamInputWork@Input@@`, instance in the global
+`+1596E38`, 0x780 bytes, created with `KMInputWork` at `+4AF10`) holds 16 pad records of 100 bytes
+from `inst+0x08` (a connected byte then 24 floats). The action set is **"CommonSet"** with two
+analog actions, **`stick_l`** (handle at `inst+0x750`) and **`stick_r`** (`inst+0x758`), and
+sixteen digital actions. Every pad axis read funnels through one static function, `+4B120`, called
+by the binding evaluate `+2D300`. `Input::ControllerType`: 0 = SteamInputWork (pad), 1 =
+KMInputWork (keyboard and mouse), 2 = none.
+
+**A "Stick Late Sample" is therefore possible and needs no new Steam call:** a hook at `+73E78A`
+can call `SteamInputWork::Update` through the global and re-read the actions, exactly as the mouse
+late sample does. The pad is a state, so there is nothing to double-count.
+
+**The game applies no sensitivity setting at all to pad input.** All 25 call sites of the four
+sensitivity scalers (`+50950`, `+509B0`, `+50A10`, `+50A60`) are gated on the input being the
+mouse (`[ptr+0x1C]==1 && [ptr+0x20]==1`, i.e. ControllerType == 1). The options record at
+`+10C58A0` contains no controller float or axis field. So a plugin stick-sensitivity slider is
+purely additive, with nothing in the game to compose with. (`+50A10` is the mouse **zoom step**,
+not the pad's camera speed: the recorded guess in 2l.2 is wrong.)
+
+Corrected while verifying (2l.2 said otherwise):
+
+- **The term folded in at `+73EA1E` is not a separate pad-stick read.** It is the **movement (left)
+  stick**, computed earlier in the same routine from four more actions in group `0x1512DE`
+  (`0x68F387` / `0x983784` X, `0x942735` / `0x94619E` Y), folded into the look axes behind a gate:
+  at least one movement axis non-zero, an "allow" flag from three state tests, and a countdown at
+  scratch `+0x??` (the 60-frame lock-out). So the look block is fed by **actions only**; it never
+  touches `SteamInputWork` directly. The strcodes resolve to names: group `0x1512DE` = "ingame".
+- **The dead-zone block `+73EA7A..+73EB02` is skipped when `player+0x9B2` (input is mouse) is set**,
+  so it is the pad-and-keyboard path. But that flag is *cleared* at `+73EA4A` a few instructions
+  before the gate reads it, so "this can never affect the mouse" is **not** safe as a blanket
+  statement: a hook here must re-derive the source itself rather than trust the flag.
+- **1.7 / 12.0 and 5.0 / 38.0 are not turn speeds.** They are the low and high limits of a band
+  applied to a player state scalar (`player+0x8B0`); the alternate band needs
+  `(byte[player+0x14E0] & 7) == 0` **and** `(dword[player+0x14CC] & 0x02000000) != 0`.
+  **0.7 and 0.3 are a weight and an offset** on the per-camera turn value, not a blend of the band.
+- **The 300.0 drag term is a dead store on most frames.**
+- **The four per-camera words** at `[cam+0x310]` (camA) / `[cam+0x2D0]` (camB) have **two** roles,
+  not one.
+- **The stick already has a response curve**: `g(m) = 0.005 + 0.145 * m^2`, a 2-point table at
+  `+D90010` evaluated with the t^2 ease-in handler. The ramp coefficient is a **2-point step**
+  (table `+D90030`, `-100.0` below the threshold), not a smooth curve.
+- **camB (aim down sights) has no band at all**, and the **free camera has none of this
+  machinery**: no band, no per-camera words, no ramp, no clamp, no curve; its stick yaw is a single
+  linear term.
+- **The fast-turn flag (0.9 at `+9C191C`) is NOT mouse-gated** and touches both paths: a hook there
+  would change mouse behaviour.
+
+### Hook sites that survived verification
+
+Each is 4 to 9 bytes, none is a branch target, and each was checked for being reached only on the
+path claimed. Every constant involved is shared with unrelated code, so the rule stands: hook the
+loading instruction, never the constant.
+
+| tunable | site | what is live there |
+| --- | --- | --- |
+| look dead zone X | `+73EA88` `subss xmm8, xmm0` (F3 44 0F 5C C0) and `+73EAA7` `addss xmm8, xmm0` | xmm8 = look X, xmm0 = 48.0 |
+| look dead zone Y | `+73EAD2` / `+73EAED` (same shape, xmm6) | xmm6 = look Y |
+| look gain X | `+73EACB` `mulss xmm8, xmm1` (F3 44 0F 59 C1) | xmm8 = post-dead-zone X, xmm1 = 1.6 |
+| look gain Y | `+73EB02` | xmm6 |
+| per-axis sensitivity, curve | `+73EB06` `comiss xmm8, xmm7` (4 bytes) — the common tail, after the dead zone and gain, before the clamp and the stores | xmm8 = X, Y in memory; `rbx+0x9B2` distinguishes pad from mouse |
+| last chance before publish | `+73EBD2` (9 bytes) | xmm8 = final look X; Y at `[rdi+0x70]` |
+| magnitude floor 0x30 | `+73EBAC` | eax = magnitude 0..255 |
+| late sample | `+73E78A` (already used by the mouse fix) | call `SteamInputWork::Update` via `+1596E38` |
+| turn truncation (pad) | `+885C5E` / `+885C6F`, camB `+8894A3` / `+8894B8` | already hooked for the mouse carry |
+
+Not hookable safely, or not what 2l.2 assumed: the speed band (it is a state scalar, not a speed),
+the drag (dead store), the fast-turn flag (shared with the mouse), `+4FC50` (a shared converter
+called from both blocks), and the 60-frame lock-out (its state bits are unknown without a live run).
+
+### The Config Tool needs a Slider kind
+
+The tool has exactly three field kinds (`Field::Type { Bool, Int, Choice }`, `tool/src/fields.hpp:16`),
+each mapped to one control in `MainFrame::AddRow` (`tool/src/ui.cpp:483-505`): a checkbox, a
+`wxSpinCtrl`, a `wxChoice`. Adding `Slider` means the enum, a factory beside `Field::Int`, and a
+case in **eight** branch sites (`fields.cpp:279`, `fields.cpp:296`, `ui.cpp:352`, `489`, `633`,
+`660`, `696`, `728`); eleven sites branch on the kind in total, and `settings_io.cpp:16` / `:27`
+and `ui.cpp:527` also test it. If `Slider` reuses `defaultInt` / `min` / `max`, the defaults and
+validation cases fall through to the existing `Int` ones. `Row::control` is a single `wxWindow*`,
+so a slider plus a numeric readout needs either a second `Row` member or a sizer passed to
+`grid->Add` (`wxFlexGridSizer::Add` takes a sizer, so no extra panel is needed).
+
+### What to implement, in order
+
+Each step is small enough to judge on its own, and each says what would show it works.
+
+1. **Stick Look Dead Zone** (0 to 48, default 48 = the game). Mid-hook the four dead-zone
+   instructions; write the slider's value into xmm0 and rescale the gain at `+73EACB` / `+73EB02`
+   to `127 / (127 - dz)` so full deflection still reaches full output. Evidence: a Lab log line of
+   the value before and after per frame, and the stick moving the camera at a deflection that does
+   nothing today.
+2. **Stick Look Sensitivity X and Y** (25 to 400%, default 100). One mid-hook at `+73EB06`,
+   pad-only. Evidence: the logged look values scale by the set factor and the mouse's do not.
+3. **Stick Response Curve** (50 to 300, default 100 = as shipped). Same hook, applied to the
+   magnitude. Evidence: the logged curve of output against deflection.
+4. **Stick Late Sample** (off by default). `SteamInputWork::Update` through `+1596E38` at
+   `+73E78A`. Evidence: the same start-of-movement measurement as the mouse, 24 ms to about 9 ms.
+5. **Stick Fraction Carry** (off by default): extend the existing carry to non-mouse frames.
+6. **Stick Move Dead Zone**, once the movement block's gate is understood; it shares the block with
+   the keyboard, so it needs the source check.
+7. The Config Tool `Slider` kind, so all of the above are sliders rather than spin boxes.
+
+### Risks
+
+- **Shared sites.** The fast-turn flag and `+4FC50` touch the mouse path; they are excluded above.
+  At `+73EB06` the pad-or-mouse decision must be re-derived, not read from `player+0x9B2`, because
+  that byte is cleared a few instructions earlier.
+- **Steam Input sits in front of the game.** Steam's own per-game dead zone, curve and sensitivity
+  are applied before the game sees `stick_l` / `stick_r`. Every measurement and tester report must
+  state them; the baseline is Steam's dead zone set to none.
+- **The options record is saved** to `../mgspw_savedata_win/<steamID64>/usersv` (`+85330` builds the
+  path, `+849C0` packs it): the plugin must never write it, and no setting here touches it.
+- **A game update moves these RVAs.** Every hook goes in by byte signature with the site's own
+  sanity check, as the mouse hooks do.
+
+### Open questions for the user
+
+- Default dead zone: leave at the game's 48 (so an untouched install is unchanged) or ship a lower
+  default? Modern games use about 8 to 12 of 127; worn sticks drift, so 0 is not a sane default.
+- Should any stick slider change the shipped feel by default, or should all of them default to the
+  game's own values?
+- Sensitivity as one slider with a separate vertical percentage (as the mouse has), or independent
+  X and Y?
+
 ## 3. Not known yet
 
 Everything that is felt is downstream of the getter and has not been read: the sensitivity scale,
