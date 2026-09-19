@@ -19,6 +19,7 @@
 #include "post_scale.hpp"
 #include "busy_wait.hpp"
 #include "state_cache.hpp"
+#include "vrr_compat.hpp"
 #include <typeinfo>
 
 #include <unordered_set>
@@ -393,7 +394,10 @@ namespace
         std::atomic<uint32_t> sleeps { 0 }, waits { 0 };
         std::atomic<uint64_t> sleepTicks { 0 }, waitTicks { 0 };
         std::atomic<uintptr_t> sleepCaller { 0 }, waitCaller { 0 };
-        void Reset() { textures = 0; texturesLarge = 0; buffers = 0; maps = 0; mapWaits = 0; logLines = 0; textureTicks = 0; mapTicks = 0; bufferTicks = 0; sleeps = 0; waits = 0; sleepTicks = 0; waitTicks = 0; }
+        // FinishCommandList this frame (the game thread's hand-off to the render thread): count, total and longest.
+        std::atomic<uint32_t> lists { 0 };
+        std::atomic<uint64_t> listTicks { 0 }, listMaxTicks { 0 };
+        void Reset() { textures = 0; texturesLarge = 0; buffers = 0; maps = 0; mapWaits = 0; logLines = 0; textureTicks = 0; mapTicks = 0; bufferTicks = 0; sleeps = 0; waits = 0; sleepTicks = 0; waitTicks = 0; lists = 0; listTicks = 0; listMaxTicks = 0; }
     };
     FrameWork g_Work;
     // Pacing summary: totals over a window of frames, printed every few seconds.
@@ -824,9 +828,20 @@ namespace
             if (t_VBlank.lastReturn) { work = TicksToMs(enter - t_VBlank.lastReturn); }
             QueryThreadCycleTime(GetCurrentThread(), &enterCycles);
         }
-        const int64_t waitStart = logging || !vblank ? Ticks() : 0;
+        const int64_t waitStart = Ticks();
+        const uint32_t counterBefore = vblank ? *reinterpret_cast<volatile uint32_t*>(base + kVBlankCounter) : 0;
         const DWORD r = WaitForSingleObject(*slot, timeout);
         if (vblank && r == WAIT_TIMEOUT) { g_VBlankTimeouts.fetch_add(1); }
+        if (vblank)
+        {
+            const double waited = TicksToMs(Ticks() - waitStart);
+            static std::atomic<uint32_t> logged { 0 };
+            if (waited > 25.0 && logged.fetch_add(1) < 3000)
+            {
+                spdlog::warn("PW hitch: vblank wait {:.1f} ms from +{:X} on tid {} (frame {}): vblank counter {} -> {}, wait count {}, timeout {}.", waited, CallerRva(_ReturnAddress()), GetCurrentThreadId(), g_Frame.load(),
+                    counterBefore, *reinterpret_cast<volatile uint32_t*>(base + kVBlankCounter), *reinterpret_cast<volatile int32_t*>(base + 0x1084484), timeout == INFINITE ? std::string("inf") : std::to_string(timeout));
+            }
+        }
         // A wait on any other event through this wrapper is part of the tick's work.
         if (!vblank) { AccountWait(Ticks() - waitStart, CallerRva(_ReturnAddress()), ms); }
         if (logging)
@@ -916,7 +931,7 @@ namespace
     void InstallVBlankWaitHook()
     {
         if (DrawCensus::bVBlankWaitLog) { ReadCpuMhz(); spdlog::info("PW pacing: executed cycles will be reported against a nominal {} MHz.", g_CpuMhz); InstallAlertHooks(); }
-        if (DrawCensus::iVBlankWaitTimeout <= 0 && !DrawCensus::bVBlankWaitLog) { return; }
+        // Installed always (Lab): with the timeout at 0 and the log off it only reports vblank waits over 25 ms.
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
         kWaitEventWrapper = mgspwe::sites::Resolve(kWaitEventWrapperSig);
         if (!kWaitEventWrapper) { return; }
@@ -946,9 +961,74 @@ namespace
     uintptr_t kHandoffCheck = 0;
     SafetyHookMid g_HandoffCheck {};
     std::atomic<uint64_t> g_HandoffWaits { 0 }, g_HandoffWaitTicks { 0 }, g_HandoffDrops { 0 };
+    std::atomic<int64_t> g_PresentSince { 0 };
+    std::atomic<uint32_t> g_LongPresentsLogged { 0 }, g_LongLockWaitsLogged { 0 }, g_DropsLogged { 0 };
+    std::atomic<DWORD> g_PresentTid { 0 };
+    // Present watchdog: when Present has been running for more than 6 ms, suspend the presenting thread once
+    // and log where it is (instruction pointer and the return addresses on its stack, module-relative), at
+    // most once a second. This is the direct answer to "what is the render thread waiting on".
+    void PresentWatchdogThread()
+    {
+        int64_t lastSample = 0; uint32_t logged = 0;
+        for (;;)
+        {
+            Sleep(1);
+            const int64_t since = g_PresentSince.load();
+            const DWORD tid = g_PresentTid.load();
+            if (!since || !tid) { continue; }
+            const int64_t now = Ticks();
+            if (TicksToMs(now - since) < 6.0 || (lastSample && TicksToMs(now - lastSample) < 1000.0) || logged >= 400) { continue; }
+            if (g_Modules.empty()) { SnapshotModules(); }
+            const HANDLE h = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, tid);
+            if (!h) { continue; }
+            std::string chain; uintptr_t rip = 0;
+            if (SuspendThread(h) != static_cast<DWORD>(-1))
+            {
+                CONTEXT ctx {}; ctx.ContextFlags = CONTEXT_FULL;
+                if (GetThreadContext(h, &ctx))
+                {
+                    rip = ctx.Rip;
+                    const auto* sp = reinterpret_cast<const uintptr_t*>(ctx.Rsp);
+                    int found = 0;
+                    for (int i = 0; i < 1024 && found < 16; i++)
+                    {
+                        if (!mgs4e::mem::Readable(sp + i, sizeof(uintptr_t))) { break; }
+                        const uintptr_t v = sp[i];
+                        bool in = false; for (const auto& m : g_Modules) { if (v >= m.base && v < m.end) { in = true; break; } }
+                        if (in) { chain += " " + Where(v); found++; }
+                    }
+                }
+                ResumeThread(h);
+            }
+            CloseHandle(h);
+            lastSample = now; logged++;
+            spdlog::warn("PW watchdog: Present running {:.1f} ms on tid {} (frame {}): at {} | stack:{}", TicksToMs(now - since), tid, g_Frame.load(), Where(rip), chain);
+        }
+    }
+    // Passive drop counter (the wait knob at 0): a frame the game thread cannot hand off because the render
+    // thread still holds the previous one is dropped by the game; each is logged with the render thread's state.
+    void InstallHandoffDropProbe()
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        kHandoffCheck = mgspwe::sites::Resolve(kHandoffCheckSig);
+        if (!kHandoffCheck) { return; }
+        g_HandoffCheck = safetyhook::create_mid(base + kHandoffCheck, [](SafetyHookContext& ctx)
+        {
+            const volatile uint8_t* flag = reinterpret_cast<volatile uint8_t*>(ctx.rcx + 0x32c0);
+            if (*flag == 0) { return; }
+            g_HandoffDrops.fetch_add(1);
+            if (g_DropsLogged.fetch_add(1) < 200000)
+            {
+                const int64_t since = g_PresentSince.load();
+                spdlog::warn("PW hitch: frame dropped at handoff (frame {}): the render thread still holds the previous frame; render thread {}.", g_Frame.load(),
+                    since ? fmt::format("in Present for {:.1f} ms", TicksToMs(Ticks() - since)) : "not in Present");
+            }
+        });
+        spdlog::info("PW probe: handoff drop probe at +{:X} ({}).", kHandoffCheck, g_HandoffCheck ? "ok" : "FAILED");
+    }
     void InstallHandoffWait()
     {
-        if (DrawCensus::iFrameHandoffWait <= 0) { return; }
+        if (DrawCensus::iFrameHandoffWait <= 0) { InstallHandoffDropProbe(); return; }
         const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
         kHandoffCheck = mgspwe::sites::Resolve(kHandoffCheckSig);
         if (!kHandoffCheck) { return; }
@@ -971,6 +1051,66 @@ namespace
         });
         spdlog::info("PW pacing: frame handoff waits up to {} ms for the render thread instead of dropping the frame ({}).", DrawCensus::iFrameHandoffWait, g_HandoffCheck ? "hooked" : "hook FAILED");
     }
+    // ---- the display lock probe -------------------------------------------------------------------
+    // The game thread enters the display critical section at +1F049 (guarded by display+0x32F8);
+    // +1F042 is the instruction before the call, +1F04F the one after. The time between is what the
+    // game thread waits for the render thread, which holds the same section across Present.
+    constexpr mgspwe::sites::Signature kLockBeforeSig { "probe: display lock enter", 0x1F042, "48 81 C1 00 33 00 00 FF 15 ?? ?? ?? ?? 48 8B 0D", 0 };
+    constexpr mgspwe::sites::Signature kLockAfterSig { "probe: display lock entered", 0x1F04F, "48 8B 0D ?? ?? ?? ?? 48 8B 89 30 29 00 00 48 8D 54 24 30", 0 };
+    SafetyHookMid g_LockBefore {}, g_LockAfter {};
+    thread_local int64_t t_LockEnter = 0;
+    void InstallLockProbe()
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uintptr_t before = mgspwe::sites::Resolve(kLockBeforeSig), after = mgspwe::sites::Resolve(kLockAfterSig);
+        if (!before || !after) { return; }
+        g_LockBefore = safetyhook::create_mid(base + before, [](SafetyHookContext&) { t_LockEnter = Ticks(); });
+        g_LockAfter = safetyhook::create_mid(base + after, [](SafetyHookContext&)
+        {
+            if (!t_LockEnter) { return; }
+            const int64_t now = Ticks();
+            const double waited = TicksToMs(now - t_LockEnter);
+            t_LockEnter = 0;
+            if (waited > 8.0 && g_LongLockWaitsLogged.fetch_add(1) < 200000)
+            {
+                const int64_t since = g_PresentSince.load();
+                spdlog::warn("PW hitch: display lock wait {:.1f} ms on tid {} (frame {}); render thread {}.", waited, GetCurrentThreadId(), g_Frame.load(),
+                    since ? fmt::format("in Present for {:.1f} ms", TicksToMs(now - since)) : "not in Present");
+            }
+        });
+        spdlog::info("PW probe: display lock wait probe at +{:X}/+{:X} ({}).", before, after, g_LockBefore && g_LockAfter ? "ok" : "FAILED");
+    }
+
+    // ---- the tick period probe -----------------------------------------------------------------------
+    // The ticker's once-per-tick call (kTickerTickSig): the interval between ticks is the game's frame
+    // period, whatever paces it. Reported every 300 ticks with the spread.
+    SafetyHookMid g_TickProbe {};
+    int64_t g_TickLast = 0, g_TickSum = 0, g_TickMin = 0, g_TickMax = 0; uint32_t g_TickCount = 0;   // ticker thread only
+    void InstallTickProbe()
+    {
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        const uintptr_t site = mgspwe::sites::Resolve(kTickerTickSig);
+        if (!site) { return; }
+        g_TickProbe = safetyhook::create_mid(base + site, [](SafetyHookContext&)
+        {
+            const int64_t now = Ticks();
+            if (g_TickLast)
+            {
+                const int64_t dt = now - g_TickLast;
+                g_TickSum += dt; g_TickCount++;
+                if (!g_TickMin || dt < g_TickMin) { g_TickMin = dt; }
+                if (dt > g_TickMax) { g_TickMax = dt; }
+                if (g_TickCount == 300)
+                {
+                    spdlog::info("PW probe: ticker: 300 ticks in {:.1f} ms: mean period {:.3f} ms ({:.2f} Hz), min {:.2f}, max {:.2f}; busy wait level {}.", TicksToMs(g_TickSum), TicksToMs(g_TickSum) / 300.0, 300000.0 / TicksToMs(g_TickSum), TicksToMs(g_TickMin), TicksToMs(g_TickMax), BusyWait::iLevel);
+                    g_TickSum = 0; g_TickCount = 0; g_TickMin = 0; g_TickMax = 0;
+                }
+            }
+            g_TickLast = now;
+        });
+        spdlog::info("PW probe: tick period probe at +{:X} ({}).", site, g_TickProbe ? "ok" : "FAILED");
+    }
+
     // ---- the frame-skip governor ------------------------------------------------------------------
     // The game's frame end (+78250..+78480) measures each frame in vblanks by wall clock and,
     // when a frame measures longer than the current vblank wait count (+1084484), raises the
@@ -1985,11 +2125,54 @@ namespace
         Original<decltype(&Hooked_Flush)>(self, kCtxFlush)(self);
         AccountD3D(Ticks() - t0, "Flush");
     }
+    // Hitch attribution: a gap of more than 25 ms between two FinishCommandList calls on one thread means
+    // that thread (the game thread, three lists a frame) was late with its frame; a single call over 8 ms
+    // is the runtime itself (the doubled frame has no game work in it, so the question is who was late).
+    thread_local int64_t t_LastList = 0;
+    std::atomic<uint32_t> g_ListGapsLogged { 0 }, g_LongListsLogged { 0 };
+    // Timed sampler: the game thread's gaps repeat at 1.000 s, so once a gap is seen (and "sample N" has
+    // armed a budget) every thread is sampled 1 s + 20 ms after that gap began, inside the next stall,
+    // together with the owner of the display critical section at that moment.
+    std::atomic<int64_t> g_SampleAtTicks { 0 };
+    int64_t MsToTicks(double ms) { static const double perMs = [] { LARGE_INTEGER q; QueryPerformanceFrequency(&q); return static_cast<double>(q.QuadPart) / 1000.0; }(); return static_cast<int64_t>(ms * perMs); }
+    void TimedSamplerThread()
+    {
+        for (;;)
+        {
+            const int64_t at = g_SampleAtTicks.load();
+            if (at && Ticks() >= at)
+            {
+                g_SampleAtTicks.store(0);
+                if (CRITICAL_SECTION* cs = DisplaySection())
+                {
+                    spdlog::warn("PW sampler: timed sample {:.1f} ms late; display lock owner tid {} (lock count {}, recursion {}).", TicksToMs(Ticks() - at), reinterpret_cast<uintptr_t>(cs->OwningThread), cs->LockCount, cs->RecursionCount);
+                }
+                SampleThreads(0.0);
+            }
+            Sleep(1);
+        }
+    }
     HRESULT STDMETHODCALLTYPE Hooked_FinishCommandList(ID3D11DeviceContext* self, BOOL restore, ID3D11CommandList** list)
     {
         const int64_t t0 = Ticks();
+        if (t_LastList && TicksToMs(t0 - t_LastList) > 25.0 && g_ListGapsLogged.fetch_add(1) < 200000)
+        {
+            const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+            spdlog::warn("PW hitch: FinishCommandList gap {:.1f} ms on tid {} (frame {}, from +{:X}); wait count {}, vblank counter {}.", TicksToMs(t0 - t_LastList), GetCurrentThreadId(), g_Frame.load(), CallerRva(_ReturnAddress()),
+                *reinterpret_cast<volatile int32_t*>(base + 0x1084484), *reinterpret_cast<volatile uint32_t*>(base + kVBlankCounter));
+            if (g_SampleBudget.load() > 0 && !g_SampleAtTicks.load()) { g_SampleAtTicks.store(t_LastList + MsToTicks(1020.0)); }
+        }
         const HRESULT r = Original<decltype(&Hooked_FinishCommandList)>(self, kCtxFinishCommandList)(self, restore, list);
-        AccountD3D(Ticks() - t0, "FinishCommandList");
+        const int64_t t1 = Ticks();
+        const int64_t dt = t1 - t0;
+        AccountD3D(dt, "FinishCommandList");
+        g_Work.lists.fetch_add(1); g_Work.listTicks.fetch_add(static_cast<uint64_t>(dt));
+        for (uint64_t m = g_Work.listMaxTicks.load(); static_cast<uint64_t>(dt) > m && !g_Work.listMaxTicks.compare_exchange_weak(m, static_cast<uint64_t>(dt));) {}
+        if (TicksToMs(dt) > 8.0 && g_LongListsLogged.fetch_add(1) < 3000)
+        {
+            spdlog::warn("PW hitch: FinishCommandList took {:.1f} ms on tid {} (frame {}, from +{:X}).", TicksToMs(dt), GetCurrentThreadId(), g_Frame.load(), CallerRva(_ReturnAddress()));
+        }
+        t_LastList = t1;
         return r;
     }
     void STDMETHODCALLTYPE Hooked_ExecuteCommandList(ID3D11DeviceContext* self, ID3D11CommandList* list, BOOL restore)
@@ -2312,15 +2495,16 @@ namespace
             {
                 const double ms = TicksToMs(now - g_LastPresentEnd);
                 if (g_AvgFrameMs <= 0) { g_AvgFrameMs = ms; }
-                if (ms > 25.0 && ms > 1.5 * g_AvgFrameMs && g_Hitches < 400)
+                if (ms > 25.0 && ms > 1.5 * g_AvgFrameMs && g_Hitches < 6000)
                 {
                     g_Hitches++;
                     std::string last;
                     { std::lock_guard lock(g_Mutex); last = g_Work.lastTexture; }
-                    spdlog::warn("PW hitch: frame {} took {:.1f} ms (running average {:.1f}): previous Present {:.1f} ms; textures created {} ({} large, {:.1f} ms in CreateTexture2D{}{}); buffers {} ({:.1f} ms); maps {} ({} waited >1 ms, {:.1f} ms total); census log lines {}; Sleep {} calls {:.1f} ms (last from +{:X}), waits {} calls {:.1f} ms (last from +{:X}).",
+                    spdlog::warn("PW hitch: frame {} took {:.1f} ms (running average {:.1f}): previous Present {:.1f} ms; textures created {} ({} large, {:.1f} ms in CreateTexture2D{}{}); buffers {} ({:.1f} ms); maps {} ({} waited >1 ms, {:.1f} ms total); census log lines {}; Sleep {} calls {:.1f} ms (last from +{:X}), waits {} calls {:.1f} ms (last from +{:X}); FinishCommandList {} calls {:.1f} ms (longest {:.1f}).",
                         g_Frame.load(), ms, g_AvgFrameMs, TicksToMs(g_LastPresentTicks), g_Work.textures.load(), g_Work.texturesLarge.load(), TicksToMs(g_Work.textureTicks.load()),
                         last.empty() ? "" : ", last ", last, g_Work.buffers.load(), TicksToMs(g_Work.bufferTicks.load()), g_Work.maps.load(), g_Work.mapWaits.load(), TicksToMs(g_Work.mapTicks.load()), g_Work.logLines.load(),
-                        g_Work.sleeps.load(), TicksToMs(g_Work.sleepTicks.load()), g_Work.sleepCaller.load(), g_Work.waits.load(), TicksToMs(g_Work.waitTicks.load()), g_Work.waitCaller.load());
+                        g_Work.sleeps.load(), TicksToMs(g_Work.sleepTicks.load()), g_Work.sleepCaller.load(), g_Work.waits.load(), TicksToMs(g_Work.waitTicks.load()), g_Work.waitCaller.load(),
+                        g_Work.lists.load(), TicksToMs(g_Work.listTicks.load()), TicksToMs(g_Work.listMaxTicks.load()));
                 }
                 g_AvgFrameMs = g_AvgFrameMs * 0.95 + ms * 0.05;
                 // Pacing window: every 5 s, where the frames' time went.
@@ -2379,6 +2563,7 @@ namespace
             CRITICAL_SECTION* handedBack = nullptr;
             FreeDisplaySection(handedBack);
             HRESULT pr;
+            int64_t callIn = 0, callOut = 0;   // immediately around the real Present, nothing of ours in between
             if (DrawCensus::bPresentNoWait)
             {
                 // The driver implements the vsync wait as a sleep loop inside Present, and holds
@@ -2396,10 +2581,113 @@ namespace
                     if (tries < 2) { SwitchToThread(); } else { Sleep(1); }
                 }
             }
-            else { pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags); }
+            else { g_PresentTid.store(GetCurrentThreadId()); g_PresentSince.store(now); callIn = Ticks(); pr = SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags); callOut = Ticks(); g_PresentSince.store(0); }
             if (handedBack) { EnterCriticalSection(handedBack); }
             g_LastPresentEnd = Ticks();
             g_LastPresentTicks = g_LastPresentEnd - now;
+            if (TicksToMs(g_LastPresentTicks) > 8.0 && g_LongPresentsLogged.fetch_add(1) < 200000)
+            {
+                spdlog::warn("PW hitch: Present {:.1f} ms (frame {}, sync {}, flags {:#x}).", TicksToMs(g_LastPresentTicks), g_Frame.load(), sync, flags);
+            }
+            // Phase probe: where on a fixed 60.000 Hz grid (the game tick's own rate) the real Present call
+            // is entered and where it returns, for every present, reported once a second as every sixth
+            // sample. Whichever edge creeps between hitches is the side the creep comes from; "pre" is the
+            // time spent in this hook before the call (our own code), which the duration above includes.
+            if (callIn)
+            {
+                static std::vector<std::array<double, 4>> s_Phases; static int64_t s_WindowStart = 0;
+                const auto phase = [](int64_t t) { return std::fmod(TicksToMs(t), 1000.0 / 60.0); };
+                s_Phases.push_back({ phase(callIn), phase(callOut), TicksToMs(callOut - callIn), TicksToMs(callIn - now) });
+                if (!s_WindowStart) { s_WindowStart = callOut; }
+                if (TicksToMs(callOut - s_WindowStart) >= 1000.0)
+                {
+                    std::string in, out, dur; double preMax = 0;
+                    for (size_t i = 0; i < s_Phases.size(); i++)
+                    {
+                        preMax = std::max(preMax, s_Phases[i][3]);
+                        if (i % 6) { continue; }
+                        in += fmt::format(" {:.1f}", s_Phases[i][0]); out += fmt::format(" {:.1f}", s_Phases[i][1]); dur += fmt::format(" {:.1f}", s_Phases[i][2]);
+                    }
+                    spdlog::info("PW probe: present phases on a 60 Hz grid ({} presents, every 6th): in{} | out{} | real call ms{} | longest time in our hook before the call {:.2f} ms.", s_Phases.size(), in, out, dur, preMax);
+                    s_Phases.clear(); s_WindowStart = callOut;
+                }
+            }
+            // Present-to-display probe (2026-09-19, for the Fast Sync question): which of our presents is on
+            // screen, and when it went up. GetLastPresentCount numbers our presents; GetFrameStatistics
+            // names the present most recently displayed and the QPC time of that refresh. Per second: made,
+            // shown, discarded without being shown, refreshes that repeated a frame, frames in flight at
+            // the moment of Present, and the time from the Present call to the refresh that showed it.
+            {
+                static int64_t s_CallQpc[256] {}; static UINT s_LastShown = 0, s_LastShownRefresh = 0; static bool s_Have = false;
+                static int64_t s_WindowStart = 0; static uint32_t s_Made = 0, s_Shown = 0, s_Discarded = 0, s_Repeats = 0, s_LatN = 0, s_FlightMax = 0;
+                static double s_LatSum = 0, s_LatMin = 1e9, s_LatMax = 0, s_FlightSum = 0;
+                UINT made = 0;
+                if (SUCCEEDED(self->GetLastPresentCount(&made))) { s_CallQpc[made & 255] = callIn ? callIn : now; s_Made++; }
+                DXGI_FRAME_STATISTICS shown {};
+                if (made && SUCCEEDED(self->GetFrameStatistics(&shown)))
+                {
+                    const uint32_t inFlight = made - shown.PresentCount;
+                    if (inFlight < 64) { s_FlightSum += inFlight; s_FlightMax = std::max(s_FlightMax, inFlight); }
+                    if (s_Have && shown.PresentCount != s_LastShown)
+                    {
+                        const UINT step = shown.PresentCount - s_LastShown;
+                        s_Shown++; if (step > 1 && step < 64) { s_Discarded += step - 1; }
+                        const UINT refreshes = shown.PresentRefreshCount - s_LastShownRefresh;
+                        if (refreshes > 1 && refreshes < 64) { s_Repeats += refreshes - 1; }
+                        const int64_t called = s_CallQpc[shown.PresentCount & 255];
+                        if (called && inFlight < 200)
+                        {
+                            const double lat = TicksToMs(shown.SyncQPCTime.QuadPart - called);
+                            if (lat > -5.0 && lat < 500.0) { s_LatSum += lat; s_LatN++; s_LatMin = std::min(s_LatMin, lat); s_LatMax = std::max(s_LatMax, lat); }
+                        }
+                    }
+                    s_LastShown = shown.PresentCount; s_LastShownRefresh = shown.PresentRefreshCount; s_Have = true;
+                }
+                const int64_t t = Ticks();
+                if (!s_WindowStart) { s_WindowStart = t; }
+                if (TicksToMs(t - s_WindowStart) >= 1000.0)
+                {
+                    spdlog::info("PW probe: present to display: {} presented, {} shown, {} discarded unshown, {} repeated refresh(es); in flight at Present mean {:.2f} max {}; Present call to on-screen {:.1f} ms mean ({:.1f} to {:.1f}).",
+                        s_Made, s_Shown, s_Discarded, s_Repeats, s_Made ? s_FlightSum / s_Made : 0.0, s_FlightMax, s_LatN ? s_LatSum / s_LatN : 0.0, s_LatN ? s_LatMin : 0.0, s_LatMax);
+                    s_WindowStart = t; s_Made = s_Shown = s_Discarded = s_Repeats = s_LatN = s_FlightMax = 0; s_LatSum = 0; s_LatMin = 1e9; s_LatMax = 0; s_FlightSum = 0;
+                }
+            }
+            // Frame statistics every 300 presents: the vsync the chain synchronises to, as a QPC period, and
+            // how far presents run ahead of it. This is the clock whatever paces Present is following.
+            {
+                static uint32_t presents = 0; static DXGI_FRAME_STATISTICS last {}; static bool haveLast = false;
+                if (++presents % 300 == 0)
+                {
+                    DXGI_FRAME_STATISTICS fs {};
+                    const HRESULT sr = self->GetFrameStatistics(&fs);
+                    if (SUCCEEDED(sr))
+                    {
+                        if (haveLast && fs.SyncRefreshCount > last.SyncRefreshCount)
+                        {
+                            const double period = TicksToMs(fs.SyncQPCTime.QuadPart - last.SyncQPCTime.QuadPart) / static_cast<double>(fs.SyncRefreshCount - last.SyncRefreshCount);
+                            spdlog::info("PW probe: frame statistics: {} vsyncs in {} presents: vsync period {:.4f} ms ({:.3f} Hz); present count {}, present refresh {}, sync refresh {} (lead {}).",
+                                fs.SyncRefreshCount - last.SyncRefreshCount, fs.PresentCount - last.PresentCount, period, 1000.0 / period, fs.PresentCount, fs.PresentRefreshCount, fs.SyncRefreshCount, static_cast<int64_t>(fs.PresentRefreshCount) - static_cast<int64_t>(fs.SyncRefreshCount));
+                        }
+                        last = fs; haveLast = true;
+                    }
+                    else { spdlog::info("PW probe: frame statistics unavailable ({:#x}).", static_cast<unsigned>(sr)); }
+                    if (presents == 300)
+                    {
+                        HMODULE mods[512]; DWORD needed = 0; std::string list;
+                        if (K32EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed))
+                        {
+                            for (DWORD i = 0; i < needed / sizeof(HMODULE) && i < 512; i++)
+                            {
+                                char path[MAX_PATH] {}; GetModuleFileNameA(mods[i], path, MAX_PATH);
+                                std::string n = path; if (const auto sl = n.find_last_of("\/"); sl != std::string::npos) { n = n.substr(sl + 1); }
+                                for (auto& c : n) { c = static_cast<char>(tolower(c)); }
+                                if (n.find("overlay") != std::string::npos || n.find("rtss") != std::string::npos || n.find("nvspcap") != std::string::npos || n.find("steam") != std::string::npos || n.find("encoder") != std::string::npos || n.find("discord") != std::string::npos || n.find("reshade") != std::string::npos || n.find("nvngx") != std::string::npos || n.find("dxgi") != std::string::npos) { list += (list.empty() ? "" : ", ") + n; }
+                            }
+                        }
+                        spdlog::info("PW probe: overlay-like modules in the process: {}.", list.empty() ? "none" : list);
+                    }
+                }
+            }
             return pr;
         }
         return SwapChain_Present_hook.stdcall<HRESULT>(self, sync, flags);
@@ -2556,6 +2844,7 @@ namespace
         if (hooked || !device) { return; }
         hooked = true;
         spdlog::info("PW census: D3D11 device created, feature level {:#x}.", static_cast<int>(device->GetFeatureLevel()));
+        VrrCompat::OnDevice(device);
 
         void** dv = *reinterpret_cast<void***>(device);
         Device_CreateVertexShader_hook = safetyhook::create_inline(dv[kDevCreateVertexShader], reinterpret_cast<void*>(Hooked_CreateVertexShader));
@@ -3226,6 +3515,8 @@ namespace DrawCensus
         InstallVBlankWaitHook();
         InstallHandoffWait();
         InstallGovernor();
+        InstallLockProbe();
+        InstallTickProbe();
         if (DrawCensus::bHitchSampler) { spdlog::info("PW sampler: armed by the live command \"sample N\": the next N times the render thread waits 20 ms for a frame, the other threads are sampled."); }
         if (DrawCensus::bPacingLog || DrawCensus::iFramePacing != 0) { InstallTickerHooks(); }
         else { spdlog::info("PW pacing: off (no import hooks, no ticker hooks; the game's own pacing)."); }
@@ -3261,10 +3552,46 @@ namespace DrawCensus
                 spdlog::info("PW census: logging the next {} frame(s) ({} s after init).", std::max(1, frames), at);
             }).detach();
         }
+        // Real vblank probe: waits on the primary display's hardware vertical blank (the kernel's
+        // own event, nothing to do with DXGI or the swap chain) and reports, once a second, how many
+        // arrived and where they sit on the same 60.000 Hz grid the present phases are reported on.
+        std::thread([]
+        {
+            struct OpenFromHdc { HDC hDc; UINT hAdapter; LUID luid; UINT source; };
+            struct WaitVBlank { UINT hAdapter; UINT hDevice; UINT source; };
+            const HMODULE gdi = LoadLibraryW(L"gdi32.dll");
+            using OpenFn = LONG(WINAPI*)(OpenFromHdc*); using WaitFn = LONG(WINAPI*)(const WaitVBlank*);
+            const auto open = gdi ? reinterpret_cast<OpenFn>(GetProcAddress(gdi, "D3DKMTOpenAdapterFromHdc")) : nullptr;
+            const auto wait = gdi ? reinterpret_cast<WaitFn>(GetProcAddress(gdi, "D3DKMTWaitForVerticalBlankEvent")) : nullptr;
+            if (!open || !wait) { spdlog::info("PW probe: vblank probe unavailable (no D3DKMT exports)."); return; }
+            std::this_thread::sleep_for(std::chrono::seconds(8));   // after the game has settled its display mode
+            DISPLAY_DEVICEW dd {}; dd.cb = sizeof(dd); std::wstring primary;
+            for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) { if (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) { primary = dd.DeviceName; break; } }
+            OpenFromHdc o {}; o.hDc = CreateDCW(nullptr, primary.empty() ? L"\\\\.\\DISPLAY1" : primary.c_str(), nullptr, nullptr);
+            if (!o.hDc || open(&o) != 0) { spdlog::info("PW probe: vblank probe could not open the display adapter."); return; }
+            const WaitVBlank w { o.hAdapter, 0, o.source };
+            int64_t windowStart = 0, last = 0, sum = 0; uint32_t n = 0; double firstPhase = 0, lastPhase = 0, maxGap = 0;
+            for (;;)
+            {
+                if (wait(&w) != 0) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); continue; }
+                const int64_t t = Ticks();
+                const double ph = std::fmod(TicksToMs(t), 1000.0 / 60.0);
+                if (!windowStart) { windowStart = t; firstPhase = ph; }
+                if (last) { sum += t - last; n++; maxGap = std::max(maxGap, TicksToMs(t - last)); }
+                last = t; lastPhase = ph;
+                if (TicksToMs(t - windowStart) >= 1000.0 && n)
+                {
+                    spdlog::info("PW probe: real vblank: {} in the last second, mean period {:.4f} ms, longest {:.2f} ms; phase on the 60 Hz grid {:.2f} -> {:.2f} ms.", n, TicksToMs(sum) / n, maxGap, firstPhase, lastPhase);
+                    windowStart = t; firstPhase = ph; sum = 0; n = 0; maxGap = 0;
+                }
+            }
+        }).detach();
         if (bLiveCommands)
         {
             spdlog::info("PW live: polling {}.", LiveFile());
             std::thread(PollThread).detach();
+            std::thread(TimedSamplerThread).detach();
+            std::thread(PresentWatchdogThread).detach();
         }
     }
 }
