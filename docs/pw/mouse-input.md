@@ -402,7 +402,8 @@ values the rail drives; (3) a true orbit pitch in place of the rail, which is a 
 
 ## 2k. Run 12 (16:35): the rail measured, the uniform rail verified, and the four fixes shipped as settings
 
-Measured with slow full vertical sweeps (`mouseail_test.ps1`, `analyze_rail.py`): the rail position
+Measured with slow full vertical sweeps (`mouse
+ail_test.ps1`, `analyze_rail.py`): the rail position
 is clamped to [0, 1], the whole rail is 5657 counts (5659 computed), the view goes from +54.4 to
 -67.7 degrees, and one count is worth 0.011 to 0.038 degrees along it: the computed chart was
 right. **With `Mouse Uniform Rail` on: 0.02372 to 0.02401 degrees a count everywhere (max / min
@@ -414,6 +415,66 @@ Since 2026-09-19 the four are ordinary settings in both builds (Config Tool, Per
 `Mouse Uniform Rail` defaults off (it changes the feel), `Mouse Vertical Ratio` 1.0. The Lab
 build keeps the live switches (F5 to F10, with `Input Probe`) and the telemetry; a Release build
 carries neither.
+
+## 2l. Next: the same treatment for the controller (plan, nothing built)
+
+What is already known about the stick's path, all from the look-input routine (`+73D37E`, 2d) and
+the camera routines (2e); none of it has been measured with a controller yet:
+
+- **The dead zone is in the look-input routine, and it is large.** When the largest look value does
+  not come from the mouse: the four direction actions give `x = right - left` through `+4FC50`
+  (`v / 255 * 127`), the pad's own stick value is added (`+73EA1E`, clamped to +-127), then
+  `+73EA7A .. +73EB02` subtracts **48** (`+9C0C0C`) from the magnitude, **truncates to a whole
+  number** (`cvttss2si`) and multiplies by **1.6** (`+D26B0C`). So the first 38% of the stick's
+  travel does nothing, the rest is quantised to 79 steps, and full deflection comes out at about
+  126. A second, smaller threshold sits on the stored magnitude (`pad + 0x9A0` is zero under
+  `0x30`). The movement stick goes through its own copy of this earlier in the same routine
+  (`+73E5xx .. +73E76A`, angle and magnitude into `pad + 0x98E / 0x994`); not read in detail.
+- **The stick is a rate with a ramp, a drag and a cap** (camera routines, 2e): `ramp = max(0, ramp +
+  x * k)`, `velocity = (ramp + x) * sign`, less a drag term, clamped to a maximum speed, and
+  the free camera's yaw (`+4041D0`) blends 1 - pow(0.5, dt) of the old velocity before it
+  overwrites it. That is the designed feel of a stick and mostly wanted; the dead zone and the
+  quantisation are what cost precision.
+- **The frame of latency is not specific to the mouse.** The whole input update (`+2ACB0`: the
+  device latch and every action) runs before the actor scheduler, whose wait comes before the
+  player's actor (2f): every input, the pad included, is a frame old when the game uses it.
+  `Mouse Late Sample` only re-reads the mouse.
+- **The truncation of the turn** (2e) applies to the stick too, in all three camera routines; the
+  carry is switched off for non-mouse frames on purpose for now.
+- **Not known: how the pad is read at all.** The executable imports no XInput, DirectInput or
+  GameInput, and only `SteamAPI_*` core functions; the launcher passes `-ctrltype PS5`. Raw HID
+  through the same Raw Input registration, or Steam Input through an interface fetched at run
+  time, are the candidates. The value getter (`+3A9F0`) belongs to the keyboard-and-mouse device;
+  the pad's device object and getter have to be found the way the mouse's were (the binding's
+  device pointer at `+0x28`, then its vtable).
+
+Steps, in order, each measured before the next:
+
+1. **Find the pad's device and its poll.** Probe: for the look and move actions, log each
+   binding's device pointer, vtable and code while a stick is held; hook that device's update and
+   getter. Deliverable: where the stick bytes come from, at what rate they arrive, and when in the
+   tick they are latched.
+2. **Measure it.** There is no injector for a pad, so: a steady held deflection and slow sweeps by
+   hand, logged per frame (raw stick, the action values, `pad + 0x998 / 0x99C`, the camera's
+   turn). That gives the real dead zone in stick units, the response curve, the quantisation, and
+   the latch-to-use delay, the way 2b to 2g did for the mouse.
+3. **Late sample for the pad.** If the pad is polled (a state read, not events), re-poll it in the
+   look-input hook (`+73E78A`) and overwrite the stick's contribution there: the same 16 ms as the
+   mouse, with no double-counting problem at all, since a stick is a state and not a sum. If it
+   arrives as events on the window thread, the prompt pump already helps it and the late read is
+   of the accumulated state.
+4. **Dead zone as a setting.** Replace the constant 48 at the two sites (look and move) with a
+   setting (say 0 to 48, default left at the game's value until judged), rescaling so that full
+   deflection still reaches full speed: `out = (in - dz) * 127 / (127 - dz)` instead of
+   `(in - 48) * 1.6`. Drop the `cvttss2si` there (keep the fraction). Worn sticks drift, so zero is
+   not a sane default; something like 8 to 12 of 127 is what modern games ship.
+5. **Response curve, optional.** With the dead zone small, a slight exponent on the magnitude
+   (1.0 = linear) gives fine aim back near the centre without the dead band. Only if step 4 alone
+   feels twitchy.
+6. **Carry the fraction for the stick too**, once 4 is in: with a small dead zone the slow end of
+   the stick produces sub-unit turns that the truncation would otherwise throw away.
+7. Same rules as the mouse work: Lab switches with live toggles first, numbers before feel, the
+   user judges on a Release build, nothing on by default that changes the feel.
 
 ## 3. Not known yet
 
