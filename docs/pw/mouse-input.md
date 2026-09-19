@@ -808,6 +808,44 @@ about the source fields. Next attempt, in order: fix the mid-hook shape, prove t
 logged before-and-after value on one axis, and only then look at the late sample, polling the
 analog half alone.
 
+## 2o. Gyro through Steam's "gyro to mouse" (measured 2026-09-19 19:39, Lab build)
+
+The user aims with a gamepad's gyro, and with the right stick bound to joystick-to-mouse, both
+through Steam Input; they reported the pre-fix mouse problems returning. 97 seconds of aiming,
+5725 frames, log `C:\mgspf_tools\pw\mouse\gyro_run.log`.
+
+**The game cannot tell it from a mouse, and our fixes do apply.** Verified per frame:
+
+| | gyro through Steam |
+| --- | --- |
+| arrives on the raw mouse path (`+3A390`) | yes, ~14.6 events a frame = about 876 a second |
+| "input is mouse" flag `player+0x9B2` | set on 5718 of 5725 frames (the 7 clear ones are idle frames with no counts) |
+| late sample applied | 4768 of 4773 moving frames |
+| newest event age at the latch | mean 1.64 ms (max 16.6) |
+| frames with counts but no camera turn | 187 of 4960 = 3.8%, all of them sub-unit movements (mean 2.6 counts) that the fraction carry then emits a whole unit for a few frames later - the quantised 16-bit angle working as intended, not a defect |
+
+So the earlier worry is settled: the movement fold's clearing of the mouse flag (2m.1) **did not
+fire during this run**, the flag held, and every mouse fix engaged.
+
+**What is actually worse is the source.** Frame-to-frame jitter of the counts, the same metric as
+2i, on 4128 frames of steady aiming:
+
+| input, with the same three mouse fixes on | jitter |
+| --- | --- |
+| 8000 Hz mouse | 4.65% |
+| **gyro through Steam** | **14.7%** (58 counts a frame) |
+| 8000 Hz mouse, all fixes off, for scale | 24.7% |
+
+Three times the mouse's variation, arriving through the same code. Nothing in the game can fix
+that: the per-frame amount is already uneven when Steam hands it over. Two causes, not separated:
+Steam's own emission cadence and smoothing for gyro-to-mouse, and genuine hand tremor, which a
+gyro picks up and a mouse resting on a desk does not.
+
+Where to look next, in order: Steam's per-game gyro settings (smoothing / tightening threshold,
+output rate, sensitivity) before anything in the plugin; then, only if the user wants it, an
+optional input smoothing in the plugin, which would trade back some of the latency just removed
+and so must be off by default.
+
 ## 3. Not known yet
 
 Everything that is felt is downstream of the getter and has not been read: the sensitivity scale,
