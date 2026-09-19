@@ -34,6 +34,8 @@ namespace MouseAim
     //                    view's elevation by fVerticalRatio times what it turns the yaw, everywhere
     //                    on the rail. The game's own clamp of the rail position still applies.
     inline bool bUniformRail = false;   // changes how the free camera's vertical axis feels: the user's choice, off until asked for
+    // Vertical mouse sensitivity as a multiple of the horizontal, in every camera: the aimed cameras'
+    // pitch turn, the free camera's rail step, and the uniform rail's target. Mouse input only.
     inline float fVerticalRatio = 1.0f;
 
     // The probe wants the numbers whether or not a fix is on.

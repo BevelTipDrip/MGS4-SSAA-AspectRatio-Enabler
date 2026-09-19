@@ -172,6 +172,10 @@ namespace mgs4e::tool::pw
             "throws the fraction away, always toward slower: up to 8% of a slow movement at low sensitivity.\n\n"
             "On: the fraction is kept and added to the next frame, so the same hand distance is always the same "
             "angle. You are unlikely to feel it with a high-DPI mouse; turn it off if you prefer the original.";
+        constexpr const char* kHelp_MouseVerticalSensitivity =
+            "How fast the mouse looks up and down, as a percentage of how fast it looks sideways. 100 is the "
+            "same on both axes; many players prefer a little less, 70 to 85. Applies to the normal camera and "
+            "to aiming down the sights. Mouse only: a gamepad is not affected.";
         constexpr const char* kHelp_MouseUniformRail =
             "Changes how looking up and down feels in the normal third-person camera. There, vertical movement "
             "does not tilt the view directly: it slides the camera along a rail between four preset positions, so "
@@ -292,6 +296,7 @@ namespace mgs4e::tool::pw
                         F::Bool(G, K::MousePromptPump, kHelp_MousePromptPump, true),
                         F::Bool(G, K::MouseFractionCarry, kHelp_MouseFractionCarry, true),
                         F::Bool(G, K::MouseUniformRail, kHelp_MouseUniformRail, false),
+                        F::Int(G, K::MouseVerticalSensitivity, kHelp_MouseVerticalSensitivity, 100, 25, 400),
                     }},
                 }},
                 { "Lab", {

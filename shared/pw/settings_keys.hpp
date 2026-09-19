@@ -103,7 +103,8 @@ namespace mgspwe::keys
     constexpr const char* MouseFractionCarry = "Mouse Fraction Carry";   // keep the fraction of each frame's mouse turn instead of truncating it away (docs/pw/mouse-input.md 2e)
     constexpr const char* MouseLateSample = "Mouse Late Sample";          // sample the mouse right before the look-input routine uses it instead of a frame earlier (docs/pw/mouse-input.md 2f)
     constexpr const char* MouseUniformRail = "Mouse Uniform Rail";        // free camera, one count changes the view's elevation by the same amount everywhere on its rail (docs/pw/mouse-input.md 2j)
-    constexpr const char* MouseVerticalRatio = "Mouse Vertical Ratio";    // with Mouse Uniform Rail, vertical degrees per count as a multiple of the horizontal (1.0 = the same)
+    constexpr const char* MouseVerticalSensitivity = "Mouse Vertical Sensitivity";   // percent of the horizontal, 25..400, every camera, mouse only
+    constexpr const char* MouseVerticalRatio = "Mouse Vertical Ratio";   // older spelling of the same thing as a multiple (1.0); still read    // with Mouse Uniform Rail, vertical degrees per count as a multiple of the horizontal (1.0 = the same)
     constexpr const char* MousePromptPump = "Mouse Prompt Pump";          // the mouse thread handles a message the moment it arrives instead of after one or two Sleep(1) (needs Busy Wait Fix = Everything)
     constexpr const char* InputProbeWatch = "Input Probe Watch";          // Lab: hardware breakpoints on the camera actions' values (each access costs an exception)
     constexpr const char* MouseInputProbe = "Input Probe";   // Lab: per-frame log of raw mouse counts, what the game latches and what its 0..255 value getter answers, plus who calls the getter (docs/pw/mouse-input.md)

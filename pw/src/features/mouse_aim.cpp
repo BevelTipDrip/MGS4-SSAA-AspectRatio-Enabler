@@ -87,6 +87,7 @@ namespace
             g_Camera.yawBefore = yawBefore;
             g_Camera.qpc = Qpc();
         }
+        if (mouse && pitch && MouseAim::fVerticalRatio != 1.0f) { *pitch *= MouseAim::fVerticalRatio; }   // vertical sensitivity, mouse only
         if (MouseAim::bFractionCarry && mouse)
         {
             if (pitch) { *pitch = static_cast<float>(Carry(*pitch, g_CarryPitch)); }
@@ -172,6 +173,11 @@ namespace
             stepWithoutSpeed = -stepTaken / speed;
             adjusted = true;
         }
+        else if (mouse && MouseAim::fVerticalRatio != 1.0f && stepGame != 0)
+        {
+            stepTaken = stepGame * MouseAim::fVerticalRatio;   // the game's own rail, just faster or slower
+            stepWithoutSpeed *= MouseAim::fVerticalRatio;
+        }
         if (MouseAim::bTelemetry)
         {
             g_Rail.serial++;
@@ -251,7 +257,8 @@ const MouseAim::RailSample& MouseAim::LastRail() { return g_Rail; }
 
 void MouseAim::Install()
 {
-    if (!bFractionCarry && !bLateSample && !bUniformRail && !bTelemetry) { return; }
+    const bool ratio = fVerticalRatio != 1.0f;
+    if (!bFractionCarry && !bLateSample && !bUniformRail && !ratio && !bTelemetry) { return; }
     const uintptr_t base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
 
     if (bLateSample || bTelemetry)   // with the probe on, F9 switches the fixes live, so the hook has to be there
@@ -291,7 +298,7 @@ void MouseAim::Install()
             g_Manager ? reinterpret_cast<uintptr_t>(g_Manager) - base : 0);
     }
 
-    if (bUniformRail || bTelemetry)
+    if (bUniformRail || ratio || bTelemetry)
     {
         const uintptr_t step = mgspwe::sites::Resolve(kRailStepSig);
         const uintptr_t pose = mgspwe::sites::Resolve(kRailPoseSig);
@@ -322,7 +329,7 @@ void MouseAim::Install()
         }
     }
 
-    if (bFractionCarry || bTelemetry)
+    if (bFractionCarry || ratio || bTelemetry)
     {
         const uintptr_t f = mgspwe::sites::Resolve(kTruncateFreeSig);
         const uintptr_t a = mgspwe::sites::Resolve(kTruncateASig);

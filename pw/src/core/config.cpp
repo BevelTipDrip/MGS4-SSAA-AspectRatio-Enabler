@@ -243,8 +243,13 @@ namespace mgspwe::config
             Read(ini, Graphics, MouseUniformRail, MouseAim::bUniformRail);
             Report(Graphics, MouseUniformRail, MouseAim::bUniformRail);
             Read(ini, Graphics, MouseVerticalRatio, MouseAim::fVerticalRatio);
-            MouseAim::fVerticalRatio = std::clamp(MouseAim::fVerticalRatio, 0.1f, 4.0f);
-            Report(Graphics, MouseVerticalRatio, MouseAim::fVerticalRatio);
+            {
+                int percent = -1;
+                Read(ini, Graphics, MouseVerticalSensitivity, percent);
+                if (percent > 0) { MouseAim::fVerticalRatio = static_cast<float>(percent) / 100.0f; }
+            }
+            MouseAim::fVerticalRatio = std::clamp(MouseAim::fVerticalRatio, 0.25f, 4.0f);
+            Report(Graphics, MouseVerticalSensitivity, MouseAim::fVerticalRatio);
             Read(ini, Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Report(Graphics, NvidiaPacingReport, VrrCompat::bReport);
             Read(ini, Graphics, GpuLocalTextures, InternalSize::bGpuLocalTextures);

@@ -111,8 +111,9 @@ Mouse Fraction Carry = true
 ; depending on where the camera is. true makes one count tilt the view as much as it turns it
 ; sideways, everywhere. Off by default: it changes the feel. Aiming is not affected.
 Mouse Uniform Rail = false
-; Mouse Vertical Ratio: with Mouse Uniform Rail, vertical speed as a multiple of horizontal (0.1 to 4).
-Mouse Vertical Ratio = 1.0
+; Mouse Vertical Sensitivity: how fast the mouse looks up and down, as a percentage of sideways
+; (25 to 400; 100 = the same). Every camera, aiming included. Mouse only.
+Mouse Vertical Sensitivity = 100
 
 ; Input Probe (Lab): one line per frame with mouse activity (counts, latch, look value, camera turn,
 ; rail position), and live switches with a beep (high = on): F5 uniform rail, F6 fraction carry,
