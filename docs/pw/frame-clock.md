@@ -87,6 +87,20 @@ scene graph's yaw stale.
 
 Two smoothers sit in that path, at `+887145` (4 frames) and `+886667` (12 frames).
 
+**MEASURED 2026-09-20 and REFUTED: `+887040` does not run in gameplay.** A Lab hook on its
+prologue counted **zero calls across 2115 frames** (1777 with the aim camera `camB` active, 339
+with the free camera). So whatever that chain serves - a cutscene or vehicle camera, or dead code -
+it is not the player's view during play, and the "later re-sample point" it offered does not
+exist on the hot path. The traced arithmetic inside it (angles scaled by 2*pi/65536, the boom
+swing, the shake add/undo) may still be accurate; it simply is not what runs.
+
+This cost one launch and saved building a feature on a dead path. **What consumes `cam+0xA0` /
+`cam+0xA2` for the player's view in gameplay is therefore still unknown**, and a static search for
+it is what produced the wrong answer. The way to settle it is the technique that already worked
+for the input work: a hardware READ watchpoint on the live camera's angle words for one frame,
+logging each distinct accessing instruction. The camera pointer is already in hand at the
+truncation hooks.
+
 **Still unknown:** what turns `owner+0x7D0` and `owner+0x7E0/0x7E4` into the view and projection
 matrices. A static search is exhausted — nothing reads those offsets directly, so the record is
 reached through an interior pointer or copied as part of a larger block. One hardware read
