@@ -107,5 +107,6 @@ namespace mgspwe::keys
     constexpr const char* MouseVerticalRatio = "Mouse Vertical Ratio";   // older spelling of the same thing as a multiple (1.0); still read    // with Mouse Uniform Rail, vertical degrees per count as a multiple of the horizontal (1.0 = the same)
     constexpr const char* MousePromptPump = "Mouse Prompt Pump";          // the mouse thread handles a message the moment it arrives instead of after one or two Sleep(1) (needs Busy Wait Fix = Everything)
     constexpr const char* InputProbeWatch = "Input Probe Watch";          // Lab: hardware breakpoints on the camera actions' values (each access costs an exception)
+    constexpr const char* TickRate = "Tick Rate";   // Lab EXPERIMENT: run the game loop at this rate instead of 60; the simulation is fixed-step, so it runs fast
     constexpr const char* MouseInputProbe = "Input Probe";   // Lab: per-frame log of raw mouse counts, what the game latches and what its 0..255 value getter answers, plus who calls the getter (docs/pw/mouse-input.md)
 }

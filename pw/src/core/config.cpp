@@ -17,6 +17,7 @@
 #if MGS4E_LAB_BUILD
 #include "probe.hpp"
 #include "input_probe.hpp"
+#include "tick_rate.hpp"
 #include "draw_census.hpp"
 #endif
 
@@ -270,6 +271,9 @@ namespace mgspwe::config
             Report(Graphics, LogLoadedModules, Probe::bLogLoadedModules);
             Report(Graphics, LogDecryptTiming, Probe::bLogDecryptTiming);
             Report(Graphics, LogCommandLine, Probe::bLogCommandLine);
+            Read(ini, Graphics, TickRate, TickRate::iRate);
+            TickRate::iRate = std::clamp(TickRate::iRate, 15, 360);
+            Report(Graphics, TickRate, TickRate::iRate);
             Read(ini, Graphics, MouseInputProbe, InputProbe::bEnabled);
             Report(Graphics, MouseInputProbe, InputProbe::bEnabled);
             Read(ini, Graphics, InputProbeWatch, InputProbe::bWatchActions);

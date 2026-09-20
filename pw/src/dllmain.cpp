@@ -17,6 +17,7 @@
 #include "file_prefetch.hpp"
 #include "probe.hpp"
 #include "input_probe.hpp"
+#include "tick_rate.hpp"
 #include "render_hooks.hpp"
 
 namespace
@@ -64,6 +65,7 @@ namespace
             // census owns the Direct3D hooks and applies the same policy as the Release hooks.
             Probe::Run();
             InputProbe::Install();
+            TickRate::Install();
             DrawCensus::Install();
 #else
             RenderHooks::Install();
