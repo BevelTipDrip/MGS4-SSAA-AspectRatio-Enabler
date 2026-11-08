@@ -4,6 +4,7 @@
 
 #include "game.hpp"
 #include "mem.hpp"
+#include "sites.hpp"
 #include "config.hpp"
 #include "log.hpp"
 #include "render_pipeline.hpp"
@@ -134,15 +135,158 @@ namespace AspectRatio
     }
 #endif
 
-    constexpr uintptr_t kRvaUiLayoutConverter = 0x439810;
+    // ---- the game's code sites ---------------------------------------------------------
+    //
+    // Every code site is found by signature (mgs4e::sites, asi/src/core/sites.hpp), so a
+    // build that only moves code - the 2026-10-27 Steam build (BGFX 0.0.8) moved every
+    // function - costs nothing, and a build where a site is gone or ambiguous turns that one
+    // feature off instead of hooking unrelated code. ResolveSites() fills g_Site once, at the
+    // top of ApplyFixes, before any hook of this file lands; 0 means "not in this build".
+    // Each pattern is unique in both BGFX 0.0.3 and 0.0.8; the hint is the 0.0.8 RVA and the
+    // comment gives the 0.0.3 one, which is the address the notes in this file and in
+    // docs/features use.
+    namespace sig
+    {
+        using mgs4e::sites::Signature;
+        // Layer 1, the layout converter (0.0.3 +439810).
+        constexpr Signature UiLayoutConverter { "UI layout converter", 0x30FB10,
+            "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 55 41 56 41 57 8B 5C 24 48", 0 };
+        // Layer 2, the pool append: the memcpy call and the instruction after it (0.0.3 +68A933).
+        constexpr Signature PoolAppendCall { "pool append", 0x4E16F3,
+            "E8 ?? ?? ?? ?? 8B B5 A8 01 00 00 45 84 E4 0F 95 05 ?? ?? ?? ?? 89 3D ?? ?? ?? ?? 44 89 35 ?? ?? ?? ??", 0 };
+        // The upload helper and the return address of its pool upload call (0.0.3 +7A8CD0, +7A583F).
+        constexpr Signature UploadHelper { "upload helper", 0x57CBC0,
+            "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 45 8B E9", 0 };
+        constexpr Signature InstancePoolCaller { "instance pool upload return", 0x57979F,
+            "49 8B CF E8 ?? ?? ?? ?? BB FF FF 00 00 0F B7 C3 89 45 24 66 89 9D E2 04 00 00", 0 };
+        // The physical-rect emitter and the movie's emit call return (0.0.3 +BE090, +E367BB).
+        constexpr Signature RectEmitter { "rect emitter", 0xA46E0,
+            "0F B7 44 24 28 66 89 41 0E 48 8D 41 10 C6 01 0A 66 89 51 08 66 44 89 41 0A 66 44 89 49 0C C3", 0 };
+        constexpr Signature MovieRectSite { "movie rect return", 0xA6CEBB,
+            "F3 0F 10 05 ?? ?? ?? ?? 0F 57 D2 F3 0F 10 1D ?? ?? ?? ?? 0F 57 C9 48 8B C8 F3 0F 11 44 24 20 E8 ?? ?? ?? ?? F3 0F 10 0D ?? ?? ?? ?? 48 8B C8 0F 28 D1 E8 ?? ?? ?? ?? 8B 8F BC 00 00 00", 0 };
+        // The letterbox camera sites (0.0.3 +B9BB0, +652E00, +E3410) and the builder's return
+        // addresses that classify a call (0.0.3 +BA3A3, +B9BA0, +EB0EB).
+        constexpr Signature CameraBuilder { "camera builder", 0xA0620,
+            "48 8B C4 53 56 57 48 81 EC 00 01 00 00 0F 29 70 D8", 0 };
+        constexpr Signature CinematicOwner { "cinematic camera owner", 0x4A69E0,
+            "40 55 53 57 41 56 48 8D AC 24 78 FF FF FF 48 81 EC 88 01 00 00", 0 };
+        constexpr Signature ProjectionSetter { "projection setter", 0xBFE10,
+            "48 83 EC 68 0F 10 01 0F 28 25 ?? ?? ?? ?? 0F 29 05 ?? ?? ?? ?? 0F 10 49 10", 0 };
+        constexpr Signature CameraGameplayReturn { "camera builder gameplay return", 0xA0E13,
+            "48 83 C4 38 C3 CC CC CC CC CC CC CC CC F3 0F 10 44 24 28", 0 };
+        constexpr Signature CameraCinematicSourceReturn { "camera builder cinematic return", 0xA0610,
+            "48 83 C4 38 C3 CC CC CC CC CC CC CC CC CC CC CC 48 8B C4 53", 0 };
+        constexpr Signature CameraCinematicFinalReturn { "camera builder final rebuild return", 0xC46DB,
+            "41 0F 10 87 00 01 00 00 48 8D 97 00 4E 02 00 48 8D 0D ?? ?? ?? ??", 0 };
+#if MGS4E_LAB_BUILD
+        // Lab: the other upload callers' returns (0.0.3 +7A946F, +7A94BF), the producer chain
+        // (+666470, +BAFC0), the channel emitter (+68A410) and the two engine functions every
+        // layout object points at (+437150, +437110).
+        constexpr Signature UploadCallerB { "upload return B", 0x57D26F,
+            "48 83 C4 38 C3 CC CC CC CC CC CC CC CC CC CC CC CC 48 83 EC 38 4C 8B 54 24 60", 0 };
+        constexpr Signature UploadCallerC { "upload return C", 0x57D2BF,
+            "48 83 C4 38 C3 CC CC CC CC CC CC CC CC CC CC CC CC 48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 30", 0 };
+        constexpr Signature ProducerWrapper { "producer wrapper", 0x4C17F0,
+            "40 53 48 83 EC 40 8B C2 0F B6 D9 8B C8 41 8B D0", 0 };
+        constexpr Signature ProducerOuter { "producer outer", 0xA1A20,
+            "74 27 E8 ?? ?? ?? ?? 44 8B 05 ?? ?? ?? ?? 8B 15 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? C7 05 ?? ?? ?? ?? FF FF FF FF 8B 53 08", 0 };
+        constexpr Signature ChannelEmitCall { "channel emitter", 0x4E11D0,
+            "89 54 24 10 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 A8 FE FF FF", 0 };
+        constexpr Signature IdentityA { "layout object function A", 0x30D8E0,
+            "40 53 48 83 EC 20 48 63 D9 83 FB 10 7F 1D E8 ?? ?? ?? ?? 85 C0", 0 };
+        constexpr Signature IdentityB { "layout object function B", 0x30D8A0,
+            "48 85 C9 74 30 48 8B 05 ?? ?? ?? ?? 48 85 C0 74 1F 48 3B C1", 0 };
+#endif
+    }
 
-    // The engine's output size globals, render.windowSizeX/Y. Same location the internal
-    // resolution hook resolves by signature and logs at startup ("windowSize at +1B00460");
-    // kept as constants here so this file stands alone if the hook is disabled.
-    constexpr uintptr_t kRvaWindowSizeX = 0x1B00460;
-    constexpr uintptr_t kRvaWindowSizeY = 0x1B00464;
-    constexpr uintptr_t kRvaRenderBufferSizeX = 0x1B00000;
-    constexpr uintptr_t kRvaRenderBufferSizeY = 0x1B00004;
+    struct SiteTable
+    {
+        uintptr_t UiLayoutConverter = 0;
+        uintptr_t PoolAppendCall = 0;
+        uintptr_t UploadHelper = 0;
+        uintptr_t InstancePoolCaller = 0;
+        uintptr_t RectEmitter = 0;
+        uintptr_t MovieRectSite = 0;
+        uintptr_t CameraBuilder = 0;
+        uintptr_t CinematicOwner = 0;
+        uintptr_t ProjectionSetter = 0;
+        uintptr_t CameraGameplayReturn = 0;
+        uintptr_t CameraCinematicSourceReturn = 0;
+        uintptr_t CameraCinematicFinalReturn = 0;
+        uintptr_t UploadCallerB = 0;
+        uintptr_t UploadCallerC = 0;
+        uintptr_t ProducerWrapper = 0;
+        uintptr_t ProducerOuter = 0;
+        uintptr_t ChannelEmitCall = 0;
+        uintptr_t IdentityA = 0;
+        uintptr_t IdentityB = 0;
+        // Runtime identities, not code: the gameplay HUD's static layout owner (the frame-1
+        // rbp at the pool append) and the loading spinner's static object (the frame-1 rsi).
+        // No instruction names either address, so no signature can find them; they are
+        // measured per build (kKnownIdentities below).
+        uintptr_t HudOwner = 0;
+        uintptr_t LoadIconObject = 0;
+    };
+    SiteTable g_Site {};
+
+    uint8_t* SiteAddress(uintptr_t rva)
+    {
+        return rva ? reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + rva : nullptr;
+    }
+
+    // The measured identities, keyed by where the build's layout converter sits.
+    struct KnownIdentities { uintptr_t converter; uintptr_t hudOwner; uintptr_t loadIcon; const char* build; };
+    constexpr KnownIdentities kKnownIdentities[] = {
+        { 0x439810, 0x1DE3290, 0x23CF7E88, "BGFX 0.0.3 (2026-08-25)" },
+    };
+
+    void ResolveSites()
+    {
+        using mgs4e::sites::Resolve;
+        g_Site.UiLayoutConverter = Resolve(sig::UiLayoutConverter);
+        g_Site.PoolAppendCall = Resolve(sig::PoolAppendCall);
+        g_Site.UploadHelper = Resolve(sig::UploadHelper);
+        g_Site.InstancePoolCaller = Resolve(sig::InstancePoolCaller);
+        g_Site.RectEmitter = Resolve(sig::RectEmitter);
+        g_Site.MovieRectSite = Resolve(sig::MovieRectSite);
+        g_Site.CameraBuilder = Resolve(sig::CameraBuilder);
+        g_Site.CinematicOwner = Resolve(sig::CinematicOwner);
+        g_Site.ProjectionSetter = Resolve(sig::ProjectionSetter);
+        g_Site.CameraGameplayReturn = Resolve(sig::CameraGameplayReturn);
+        g_Site.CameraCinematicSourceReturn = Resolve(sig::CameraCinematicSourceReturn);
+        g_Site.CameraCinematicFinalReturn = Resolve(sig::CameraCinematicFinalReturn);
+#if MGS4E_LAB_BUILD
+        g_Site.UploadCallerB = Resolve(sig::UploadCallerB);
+        g_Site.UploadCallerC = Resolve(sig::UploadCallerC);
+        g_Site.ProducerWrapper = Resolve(sig::ProducerWrapper);
+        g_Site.ProducerOuter = Resolve(sig::ProducerOuter);
+        g_Site.ChannelEmitCall = Resolve(sig::ChannelEmitCall);
+        g_Site.IdentityA = Resolve(sig::IdentityA);
+        g_Site.IdentityB = Resolve(sig::IdentityB);
+#endif
+        for (const KnownIdentities& known : kKnownIdentities)
+        {
+            if (g_Site.UiLayoutConverter && g_Site.UiLayoutConverter == known.converter)
+            {
+                g_Site.HudOwner = known.hudOwner;
+                g_Site.LoadIconObject = known.loadIcon;
+                if (mgs4e::log::Verbose())
+                {
+                    spdlog::info("MGS4: UI Aspect: HUD owner +{:X} and loading spinner object +{:X} ({}).", known.hudOwner, known.loadIcon, known.build);
+                }
+            }
+        }
+        if (!g_Site.HudOwner && g_Site.UiLayoutConverter)
+        {
+            spdlog::warn("MGS4: UI Aspect: the HUD owner and the loading spinner object are not measured for this game build yet: "
+                "the HUD stays centred without the corner spread, and the spinner is left as the game draws it. "
+                "The first battery bar and spinner records seen are logged so they can be added.");
+        }
+    }
+
+    // The picture the interface is composed into: the render buffer, render.bufferSizeX/Y
+    // (RenderPipeline::RenderConfigGlobal finds them from their config keys: +1B00000 in
+    // BGFX 0.0.3, +1452000 in 0.0.8).
 
     // The picture the interface is composed into: the render buffer (the layout object's
     // physical viewport, "physical 0 0 5120 2880" in the log), not the window. With a Window
@@ -154,8 +298,10 @@ namespace AspectRatio
     // resolution scale keeps it.
     inline void PictureSize(int32_t& width, int32_t& height)
     {
-        std::memcpy(&width, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaRenderBufferSizeX), sizeof(width));
-        std::memcpy(&height, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaRenderBufferSizeY), sizeof(height));
+        static int* const bufferX = RenderPipeline::RenderConfigGlobal("render.bufferSizeX");
+        static int* const bufferY = RenderPipeline::RenderConfigGlobal("render.bufferSizeY");
+        width = bufferX ? *bufferX : 0;
+        height = bufferY ? *bufferY : 0;
     }
 
     // Field offsets within a layout object. Logical range is left/top/right/bottom.
@@ -471,8 +617,6 @@ namespace AspectRatio
     // has an axis-aligned basis - v6 = (2/W, 0), v7 = (0, -2/H) - and v8.z exactly 1.
     // Anything that fails the signature is left untouched, so a layout change in a future
     // game build degrades to a no-op rather than corruption.
-    constexpr uintptr_t kRvaUploadHelper = 0x7A8CD0;
-    constexpr uintptr_t kRvaInstancePoolCaller = 0x7A583F;    // return address of the pool upload call
 
     constexpr uint32_t kAnchorBlockV6 = 48;
     constexpr uint32_t kAnchorBlockV7 = 64;
@@ -491,7 +635,7 @@ namespace AspectRatio
     // emit-attribution probe, see the feature doc): every anchor record reaches the pool
     // through one assembler, and one unwind out of it restores two registers its caller
     // held - rbp, the object doing the drawing, and rsi, the record channel. For the
-    // gameplay HUD the owner is one static object (kRvaHudOwner) and the channel is a fixed
+    // gameplay HUD the owner is one static object (g_Site.HudOwner) and the channel is a fixed
     // index per widget and per selector slot: the same widget keeps the same channel with
     // the wheels closed, either wheel open, and across boots. The pause menu draws through
     // heap-allocated owners on the dynamic channels 1-4 - the same numbers the battery bar
@@ -501,7 +645,7 @@ namespace AspectRatio
     // everything not in this table - menus, the CAUTION banner, the reticle, world labels,
     // any widget not measured yet - stays exactly where the centered canvas put it. A
     // missing widget is a cosmetic gap and a one-line addition here, never a wrong jump.
-    constexpr uintptr_t kRvaHudOwner = 0x1DE3290;   // frame-1 rbp for every gameplay HUD record
+    // g_Site.HudOwner: the frame-1 rbp for every gameplay HUD record (measured per build).
 
     // The widget itself, by the element strcode its anchor-emitting nodes carry (opcode 0x0D,
     // dword at node+8 - the same key the world labels use). The channel alone was the key
@@ -982,7 +1126,7 @@ namespace AspectRatio
 #if MGS4E_LAB_BUILD
         if (g_BufDumpMask.load(std::memory_order_relaxed) != 0 && source && ctx.r9 <= (8u << 20))
         {
-            const int bit = retRva == kRvaInstancePoolCaller ? 1 : retRva == 0x7A946F ? 2 : retRva == 0x7A94BF ? 4 : 0;
+            const int bit = retRva == g_Site.InstancePoolCaller ? 1 : retRva == g_Site.UploadCallerB ? 2 : retRva == g_Site.UploadCallerC ? 4 : 0;
             if (bit && (g_BufDumpMask.fetch_and(~bit) & bit))
             {
                 MEMORY_BASIC_INFORMATION info {};
@@ -1047,7 +1191,7 @@ namespace AspectRatio
             }
 
             // Policy for now: spread only the pool the working milestone used; log the rest.
-            spread = (retRva == kRvaInstancePoolCaller);
+            spread = (retRva == g_Site.InstancePoolCaller);
 
             spdlog::info("MGS4: UI Aspect: pool {:X} size={} ret=+{:X} hits={} first=+{} v8=({:.4f},{:.4f}){}",
                 source, ctx.r9, retRva, hits, firstOffset, sampleV8[0], sampleV8[1],
@@ -1160,7 +1304,6 @@ namespace AspectRatio
     // name their layout object outright; programmatic ones (the wheel chrome, which follows
     // no la2 range) name the code path that draws them. Both are static identities, which is
     // what the per-object treatment table keys on.
-    constexpr uintptr_t kRvaPoolAppendCall = 0x68A933;
     SafetyHookMid PoolAppend_hook {};
 
     constexpr int kSiteFrames = 12;
@@ -1214,7 +1357,7 @@ namespace AspectRatio
         c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         // Unwind from the call's return address, not the call itself: the hook's jmp now
         // sits at +68A933 and the unwinder reads a jmp at Rip as a tail-call epilogue.
-        c.Rip = base + kRvaPoolAppendCall + 5;
+        c.Rip = base + g_Site.PoolAppendCall + 5;
         c.Rsp = ctx.rsp; c.Rbp = ctx.rbp; c.Rbx = ctx.rbx; c.Rsi = ctx.rsi; c.Rdi = ctx.rdi;
         c.R12 = ctx.r12; c.R13 = ctx.r13; c.R14 = ctx.r14; c.R15 = ctx.r15;
         c.Rax = ctx.rax; c.Rcx = ctx.rcx; c.Rdx = ctx.rdx; c.R8 = ctx.r8; c.R9 = ctx.r9;
@@ -1633,7 +1776,7 @@ namespace AspectRatio
         // Nodes without a strcode are logged for the HUD owner only (with their opcode and
         // operand, the identity they do have); the main menu's ~50 heap owners without one
         // exhausted a 60-entry budget before the save list was reached (load_43).
-        const bool hud = id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaHudOwner;
+        const bool hud = id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + g_Site.HudOwner;
         if (!id.strcode && !(hud && g_ScreenLogAll)) { return; }
         for (int i = 0; i < g_ScreenLogCount; i++)
         {
@@ -1670,7 +1813,6 @@ namespace AspectRatio
     // maps the rectangle into the centred 16:9 frame along the axis with spare room: x' =
     // (1 - 1/f)/2 + x/f, w' = w/f on a wide output, the same in y on a tall one - the ring
     // is round again and lands where a 16:9 output puts it.
-    constexpr uintptr_t kRvaLoadIconObject = 0x23CF7E88;
     constexpr uint32_t kLoadIconRecordSize = 48;
     std::atomic<uint32_t> g_LoadIconLogged { 0 };
 
@@ -1678,13 +1820,34 @@ namespace AspectRatio
     {
         CONTEXT c;
         BuildAppendContext(ctx, c);
-        if (!UnwindOnce(c) || c.Rbp != 0 || c.Rsi != reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaLoadIconObject)
+        if (!UnwindOnce(c) || c.Rbp != 0)
         {
             return;
         }
         auto* src = reinterpret_cast<uint8_t*>(ctx.rdx);
         float rect[4] {};
         std::memcpy(rect, src + 16, sizeof(rect));
+        const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+        if (!g_Site.LoadIconObject)
+        {
+            // Not measured for this build: report the object behind a record with the
+            // spinner's measured rectangle (0.9068, 0.8815, 0.05 x 0.0889 of the window) once,
+            // and leave the record alone.
+            static std::atomic<bool> reported { false };
+            if (std::fabs(rect[0] - 0.9068f) < 0.01f && std::fabs(rect[1] - 0.8815f) < 0.01f
+                && std::fabs(rect[2] - 0.05f) < 0.005f && std::fabs(rect[3] - 0.0889f) < 0.005f
+                && !reported.exchange(true))
+            {
+                spdlog::info("MGS4: UI Aspect: measure: a loading spinner record came from object {} (rsi), converter at +{:X}.",
+                    c.Rsi >= base && c.Rsi < base + 0x30000000 ? std::format("+{:X}", c.Rsi - base) : std::format("{:X} (outside the module)", c.Rsi),
+                    g_Site.UiLayoutConverter);
+            }
+            return;
+        }
+        if (c.Rsi != base + g_Site.LoadIconObject)
+        {
+            return;
+        }
         // The rectangle as measured, or nothing: a record of this object with another
         // shape is not the sprite this was written for.
         if (rect[0] < 0.0f || rect[0] > 1.0f || rect[1] < 0.0f || rect[1] > 1.0f
@@ -1728,6 +1891,19 @@ namespace AspectRatio
         }
 
         const AppendIdentity id = IdentifyAppend(ctx, spread || screens);
+        if (!g_Site.HudOwner && id.strcode == 0x000D12D5)
+        {
+            // Not measured for this build: report the owner of the battery bar's record (the
+            // battery is a gameplay HUD widget wherever it is drawn) once.
+            static std::atomic<bool> reported { false };
+            if (!reported.exchange(true))
+            {
+                const auto base = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
+                spdlog::info("MGS4: UI Aspect: measure: the battery bar's record came from owner {} (rbp), channel {}, converter at +{:X}.",
+                    id.owner >= base && id.owner < base + 0x30000000 ? std::format("+{:X}", id.owner - base) : std::format("{:X} (outside the module)", id.owner),
+                    id.channel, g_Site.UiLayoutConverter);
+            }
+        }
         if (id.channel < 0)
         {
             return;
@@ -1735,7 +1911,7 @@ namespace AspectRatio
         if (screens)
         {
             const bool listed = NoteScreenElement(id.strcode);
-            const bool hud = id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaHudOwner;
+            const bool hud = id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + g_Site.HudOwner;
             ScreenFrameNote(ctx.rcx, listed);
             PlateNote(id, hud);
             if (id.strcode == 0x00042FAA)
@@ -1767,7 +1943,7 @@ namespace AspectRatio
         // the pair reduces to the one number the output needs.
         float dx = 0.0f;
         float dy = 0.0f;
-        if (spread && id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + kRvaHudOwner)
+        if (spread && id.owner == reinterpret_cast<uintptr_t>(mgs4e::game::Module()) + g_Site.HudOwner)
         {
             const bool corners = bAspectPoolSpread;
             ChannelTreatment& now = g_ChannelNow[id.channel];
@@ -2012,13 +2188,12 @@ namespace AspectRatio
 
     void InstallSiteAttribution()
     {
-        // call memcpy ; mov esi, [rbp+1A8h] - the append and the instruction after it.
-        static constexpr uint8_t kExpected[] { 0xE8, 0x58, 0xA5, 0x69, 0x00, 0x8B, 0xB5, 0xA8, 0x01, 0x00, 0x00 };
-        auto* at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaPoolAppendCall;
-        if (std::memcmp(at, kExpected, sizeof(kExpected)) != 0)
+        // call memcpy ; mov esi, [rbp+1A8h] - the append and the instruction after it
+        // (sig::PoolAppendCall).
+        auto* at = SiteAddress(g_Site.PoolAppendCall);
+        if (!at)
         {
-            spdlog::error("MGS4: pool append attribution: +{:X} is not the expected call - not hooking.",
-                kRvaPoolAppendCall);
+            spdlog::error("MGS4: pool append attribution: the append was not found in this build - not hooking.");
             return;
         }
         PoolAppend_hook = safetyhook::create_mid(at, PoolAppendProbe);
@@ -2199,8 +2374,6 @@ namespace AspectRatio
     // scans every GP register and the top of the stack for pointers that validate as
     // layout objects, logging (site, location, object, strcode). If the object is
     // recoverable here, per-object positioning replaces every positional heuristic.
-    constexpr uintptr_t kRvaProducerWrapper = 0x666470;
-    constexpr uintptr_t kRvaProducerOuter = 0xBAFC0;
     SafetyHookMid ProducerWrapper_hook {};
     SafetyHookMid ProducerOuter_hook {};
     // Per-site budgets: the wrapper fires far more often than the outer frame, and a
@@ -2234,7 +2407,7 @@ namespace AspectRatio
         std::memcpy(&engineA, reinterpret_cast<const void*>(candidate + 0x20), sizeof(engineA));
         std::memcpy(&engineB, reinterpret_cast<const void*>(candidate + 0x28), sizeof(engineB));
         const auto moduleBase = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
-        if (engineA != moduleBase + 0x437150 || engineB != moduleBase + 0x437110)
+        if (!g_Site.IdentityA || engineA != moduleBase + g_Site.IdentityA || engineB != moduleBase + g_Site.IdentityB)
         {
             return false;
         }
@@ -2339,11 +2512,15 @@ namespace AspectRatio
 
     void InstallProducerProbe()
     {
-        ProducerWrapper_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaProducerWrapper, ProducerWrapperProbe);
+        if (g_Site.ProducerWrapper)
+        {
+            ProducerWrapper_hook = safetyhook::create_mid(SiteAddress(g_Site.ProducerWrapper), ProducerWrapperProbe);
+        }
         MGS4E_LOG_HOOK(ProducerWrapper_hook, "MGS4: producer probe (wrapper)")
-        ProducerOuter_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaProducerOuter, ProducerOuterProbe);
+        if (g_Site.ProducerOuter)
+        {
+            ProducerOuter_hook = safetyhook::create_mid(SiteAddress(g_Site.ProducerOuter), ProducerOuterProbe);
+        }
         MGS4E_LOG_HOOK(ProducerOuter_hook, "MGS4: producer probe (outer)")
     }
 
@@ -2360,7 +2537,6 @@ namespace AspectRatio
     // 0x10 float4, r10 = running cursor) with the channel not in ebx there. The channel is
     // the function's own first argument, so the probe sits at entry: rcx = channel selector,
     // rdx = payload byte size, and the return address names the submitting caller.
-    constexpr uintptr_t kRvaChannelEmitCall = 0x68A410;
     SafetyHookMid ChannelEmit_hook {};
     std::atomic<int> g_ChannelLogBudget { 1500 };
 
@@ -2381,8 +2557,10 @@ namespace AspectRatio
 
     void InstallChannelCensus()
     {
-        ChannelEmit_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaChannelEmitCall, ChannelEmitProbe);
+        if (g_Site.ChannelEmitCall)
+        {
+            ChannelEmit_hook = safetyhook::create_mid(SiteAddress(g_Site.ChannelEmitCall), ChannelEmitProbe);
+        }
         MGS4E_LOG_HOOK(ChannelEmit_hook, "MGS4: UI channel census")
 
         // F6 re-arms the budget, so a specific moment (aiming, a menu) can be sampled.
@@ -2782,13 +2960,10 @@ namespace AspectRatio
     // HUD fix on, the video's rect becomes the centred 16:9 rect of the surface: pillarboxed
     // in a wide window, letterboxed in a tall one, untouched at 16:9. The site is verified at
     // install as a call to the emitter (E8 rel32 five bytes before the return address).
-    constexpr const char* kRectEmitterSignature =
-        "0F B7 44 24 28 66 89 41 0E 48 8D 41 10 C6 01 0A 66 89 51 08 66 44 89 41 0A 66 44 89 49 0C C3";
-    constexpr uintptr_t kRvaMovieRectSite = 0x0E367BB;   // return address of the movie's emit call
 
     SafetyHookInline RectEmitter_hook {};
     std::atomic<int> g_RectLogBudget { 0 };
-    std::atomic<uintptr_t> g_MovieRectSite { 0 };        // kRvaMovieRectSite once verified, else 0
+    std::atomic<uintptr_t> g_MovieRectSite { 0 };        // g_Site.MovieRectSite once verified, else 0
     std::atomic<int> g_MovieRectReported { 0 };
     // Lab: live "rectfix <rva>" applies the same rewrite to any other return site.
     std::atomic<uintptr_t> g_RectFixCaller { 0 };
@@ -2844,23 +3019,26 @@ namespace AspectRatio
     void InstallRectEmitter()
     {
         if (RectEmitter_hook) { return; }
-        uint8_t* at = mgs4e::mem::FindPattern(mgs4e::game::Module(), kRectEmitterSignature, "MGS4: rect emitter");
+        uint8_t* at = SiteAddress(g_Site.RectEmitter);
         if (!at) { return; }
         // The movie site must be a call to this very function: E8 rel32 ending at the site.
-        auto* const module = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
-        const uint8_t* call = module + kRvaMovieRectSite - 5;
-        int32_t rel = 0;
-        std::memcpy(&rel, call + 1, sizeof(rel));
-        const bool verified = call[0] == 0xE8 && (module + kRvaMovieRectSite + rel) == at;
+        bool verified = false;
+        if (uint8_t* const site = SiteAddress(g_Site.MovieRectSite))
+        {
+            const uint8_t* call = site - 5;
+            int32_t rel = 0;
+            std::memcpy(&rel, call + 1, sizeof(rel));
+            verified = call[0] == 0xE8 && (site + rel) == at;
+        }
         RectEmitter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&HookedRectEmit));
         MGS4E_LOG_HOOK(RectEmitter_hook, "MGS4: rect emitter")
         if (RectEmitter_hook && verified)
         {
-            g_MovieRectSite.store(kRvaMovieRectSite);
+            g_MovieRectSite.store(g_Site.MovieRectSite);
         }
         else if (RectEmitter_hook)
         {
-            spdlog::warn("MGS4: UI Aspect: +{:X} is not a call to the rect emitter - wrong executable build, movies are left as they are.", kRvaMovieRectSite);
+            spdlog::warn("MGS4: UI Aspect: the movie's rect call was not found or is not a call to the rect emitter in this build; movies are left as they are.");
         }
     }
 
@@ -2908,8 +3086,9 @@ namespace AspectRatio
         std::memcpy(&engineB, reinterpret_cast<const void*>(known.object + 0x28), sizeof(engineB));
         const auto moduleBase = reinterpret_cast<uintptr_t>(mgs4e::game::Module());
         return strcode == known.strcode
-            && engineA == moduleBase + 0x437150
-            && engineB == moduleBase + 0x437110;
+            && g_Site.IdentityA
+            && engineA == moduleBase + g_Site.IdentityA
+            && engineB == moduleBase + g_Site.IdentityB;
     }
 
     void ApplyLiveBias(const KnownObject& known, int dx, int dy)
@@ -2982,12 +3161,6 @@ namespace AspectRatio
     // those builder calls. The final rebuild at +0x0EB0EB runs outside the owner's scope and
     // is recognised the way Ultra120 does it: same camera object, same input scale, within a
     // quarter second of the tagged call.
-    constexpr uintptr_t kRvaCameraBuilder = 0x0B9BB0;
-    constexpr uintptr_t kRvaCinematicOwner = 0x652E00;
-    constexpr uintptr_t kRvaProjectionSetter = 0x0E3410;
-    constexpr uintptr_t kRvaCameraGameplayReturn = 0x0BA3A3;
-    constexpr uintptr_t kRvaCameraCinematicSourceReturn = 0x0B9BA0;
-    constexpr uintptr_t kRvaCameraCinematicFinalReturn = 0x0EB0EB;
 
     SafetyHookInline CameraBuilder_hook {};
     SafetyHookInline CinematicOwner_hook {};
@@ -3029,16 +3202,16 @@ namespace AspectRatio
         const uintptr_t rva = ret >= base ? ret - base : ret;
         const ULONGLONG now = GetTickCount64();
 
-        const bool cinematicSource = g_CinematicOwnerDepth != 0 && rva == kRvaCameraCinematicSourceReturn;
+        const bool cinematicSource = g_CinematicOwnerDepth != 0 && rva == g_Site.CameraCinematicSourceReturn;
         const float tolerance = std::max(0.001f, std::fabs(g_CinematicInputScale) * 0.001f);
-        const bool cinematicFinal = rva == kRvaCameraCinematicFinalReturn
+        const bool cinematicFinal = rva == g_Site.CameraCinematicFinalReturn
             && camera == g_CinematicCamera
             && now - g_CinematicCameraTick <= 250
             && std::fabs(projectionScale - g_CinematicInputScale) <= tolerance;
 
         const bool usable = std::isfinite(projectionScale) && projectionScale > 0.0f;
         float scale = projectionScale;
-        const bool gameplay = rva == kRvaCameraGameplayReturn;
+        const bool gameplay = rva == g_Site.CameraGameplayReturn;
         // The gameplay camera is rebuilt several times per frame after the tagged call
         // (+0x0B9BA0 outside the owner, +0x0EB0EB, +0x0EB191, +0x0B8A43, +0x0B8B4F; fov100,
         // 2026-09-04), each with the same input scale; the last write is what shows, so the
@@ -4837,16 +5010,15 @@ namespace AspectRatio
 
     void InstallLetterbox()
     {
-        auto* const base = reinterpret_cast<uint8_t*>(mgs4e::game::Module());
-        const auto checked = [base](uintptr_t rva, std::initializer_list<uint8_t> prologue, const char* what) -> uint8_t*
+        // The signatures (sig::CameraBuilder and the others) carry the prologues the
+        // addresses used to be checked against.
+        const auto checked = [](uintptr_t rva, const char* what) -> uint8_t*
             {
-                auto* at = base + rva;
-                if (!std::equal(prologue.begin(), prologue.end(), at))
+                if (!rva)
                 {
-                    spdlog::error("MGS4: letterbox: {} at +{:X} does not start with the expected prologue - wrong executable build, not hooking.", what, rva);
-                    return nullptr;
+                    spdlog::error("MGS4: letterbox: the {} was not found in this build - not hooking.", what);
                 }
-                return at;
+                return SiteAddress(rva);
             };
 
 #if MGS4E_LAB_BUILD
@@ -4863,17 +5035,17 @@ namespace AspectRatio
         // Camera side.
         if (CameraHooksWanted())
         {
-        if (auto* at = checked(kRvaCameraBuilder, { 0x48, 0x8B, 0xC4, 0x53, 0x56, 0x57 }, "camera builder"))
+        if (auto* at = checked(g_Site.CameraBuilder, "camera builder"))
         {
             CameraBuilder_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&BuildCamera));
             MGS4E_LOG_HOOK(CameraBuilder_hook, "MGS4: letterbox camera builder")
         }
-        if (auto* at = checked(kRvaCinematicOwner, { 0x40, 0x55, 0x53, 0x57, 0x41, 0x56, 0x48, 0x8D }, "cinematic camera owner"))
+        if (auto* at = checked(g_Site.CinematicOwner, "cinematic camera owner"))
         {
             CinematicOwner_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&UpdateCinematicCamera));
             MGS4E_LOG_HOOK(CinematicOwner_hook, "MGS4: letterbox cinematic owner")
         }
-        if (auto* at = checked(kRvaProjectionSetter, { 0x48, 0x83, 0xEC, 0x68 }, "projection setter"))
+        if (auto* at = checked(g_Site.ProjectionSetter, "projection setter"))
         {
             ProjectionSetter_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&SetProjection));
             MGS4E_LOG_HOOK(ProjectionSetter_hook, "MGS4: letterbox projection setter")
@@ -5245,8 +5417,10 @@ namespace AspectRatio
         // ladder-pool and pooldump diagnostics; it installs unconditionally so the live
         // lab can arm them mid-session, and the probe self-gates to a flag check when
         // nothing is armed.
-        UploadHelper_hook = safetyhook::create_mid(
-            reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaUploadHelper, UploadHelperProbe);
+        if (g_Site.UploadHelper)
+        {
+            UploadHelper_hook = safetyhook::create_mid(SiteAddress(g_Site.UploadHelper), UploadHelperProbe);
+        }
         MGS4E_LOG_HOOK(UploadHelper_hook, "MGS4: UI Aspect producer watch")
     }
 
@@ -5259,6 +5433,8 @@ namespace AspectRatio
         // upload-helper probe, the live command thread, the rect/producer/channel logging -
         // whose switches only exist in the lab settings file and which must not run outside
         // a lab boot.
+        ResolveSites();
+
 #if MGS4E_LAB_BUILD
         if (mgs4e::config::LabMode())
         {
@@ -5287,16 +5463,10 @@ namespace AspectRatio
 
         if (bFixUiAspect)
         {
-            auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaUiLayoutConverter;
-
-            // The RVA is specific to one executable build and .text is encrypted on disk, so
-            // the only meaningful check is here, in-process, before hooking. MSVC's canonical
-            // home-register prologue; anything else means a different binary.
-            constexpr uint8_t kExpectedPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
-            if (std::memcmp(at, kExpectedPrologue, sizeof(kExpectedPrologue)) != 0)
+            auto* const at = SiteAddress(g_Site.UiLayoutConverter);
+            if (!at)
             {
-                spdlog::error("MGS4: UI Aspect: +{:X} does not start with the expected prologue - "
-                    "wrong executable build, not hooking.", kRvaUiLayoutConverter);
+                spdlog::error("MGS4: UI Aspect: the layout converter was not found in this build - not hooking.");
                 return;
             }
 

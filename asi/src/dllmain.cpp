@@ -4,6 +4,7 @@
 #include "core/game.hpp"
 #include "core/log.hpp"
 #include "core/compat.hpp"
+#include "core/sites.hpp"
 #include "version.hpp"
 
 #include "features/render_pipeline.hpp"
@@ -39,6 +40,10 @@ namespace
                 return;
             }
 
+            // Names the game build in the log and takes the clean copy of .text every site is
+            // found in, before any hook of ours lands.
+            mgs4e::sites::LogBuild();
+
             mgs4e::config::Load();
             mgs4e::compat::Detect();
             mgs4e::compat::LogOverlaps();
@@ -49,6 +54,7 @@ namespace
 #if MGS4E_LAB_BUILD
             StageAutomation::ApplyFixes();
 #endif
+            mgs4e::sites::Forget();   // every start-up site is resolved by now; drop the copy of .text
 
             spdlog::info("Initialisation complete.");
         });

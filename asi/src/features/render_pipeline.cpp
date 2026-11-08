@@ -10,6 +10,7 @@
 #include "aspect_ratio.hpp"
 #include "game.hpp"
 #include "mem.hpp"
+#include "sites.hpp"
 #include "graphics_settings.hpp"
 #include "log.hpp"
 #include "compat.hpp"
@@ -2805,9 +2806,29 @@ namespace
     // size globals before it runs, so every frame's resolution is the window's. In fullscreen
     // the chain still follows the desktop (SizeToWindow in the ultrawide fix) and the fit
     // places the picture, as before.
-    constexpr uintptr_t kRvaRendererSubmit = 0x76DFF0;
+    // The pattern runs through "movups xmm0, [rdi+4C12308h]", so a build that moves the
+    // context's resolution record fails the signature instead of having the wrong fields
+    // written. Same code and offsets in BGFX 0.0.3 (+76DFF0) and 0.0.8 (+54EA80).
+    constexpr mgs4e::sites::Signature kRendererSubmitSig { "renderer submit", 0x54EA80,
+        "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B F9 E8 ?? ?? ?? ?? 48 8B 97 88 72 A0 04 33 F6 0F 10 87 08 23 C1 04 41 B8 00 04 00 00", 0 };
     constexpr uintptr_t kContextResolutionWidth = 0x4C1230C;
     constexpr uintptr_t kContextResolutionHeight = 0x4C12310;
+
+    // The Lab research lists in this file (fixed-point stores, UI scale reads and divisors, NDC
+    // candidates, the fixed-point scan's .rdata constants) are RVAs from the BGFX 0.0.3 build,
+    // kept as the record of those experiments. They run only on code laid out as it was then,
+    // which the renderer submit's position tells; elsewhere they would patch unrelated code.
+    // (Their switches are compile-time false outside the Lab build, so Release never calls this.)
+    [[maybe_unused]] bool ResearchLayout(const char* what)
+    {
+        static const bool same = mgs4e::sites::Resolve(kRendererSubmitSig) == 0x76DFF0;
+        if (!same)
+        {
+            spdlog::warn("MGS4: {}: its address lists are from the BGFX 0.0.3 build and this is another; not run.", what);
+        }
+        return same;
+    }
+
     SafetyHookInline RendererSubmit_hook {};
     std::atomic<int> g_RendererResolutionReported { 0 };
     const char* SurfaceSize(int& width, int& height);
@@ -2846,12 +2867,10 @@ namespace
 
     void InstallRendererResolution()
     {
-        auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kRvaRendererSubmit;
-        // mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,20h; mov rdi,rcx - the prologue seen in-process.
-        constexpr uint8_t kExpected[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9 };
-        if (!mgs4e::mem::Readable(at, sizeof(kExpected)) || std::memcmp(at, kExpected, sizeof(kExpected)) != 0)
+        auto* const at = mgs4e::sites::Address(kRendererSubmitSig);
+        if (!at)
         {
-            spdlog::warn("MGS4: Window Size: the renderer submit at +{:X} does not look as expected - wrong executable build; the renderer's resolution is left to the game.", kRvaRendererSubmit);
+            spdlog::warn("MGS4: Window Size: the renderer submit was not found in this build; the renderer's resolution is left to the game.");
             return;
         }
         RendererSubmit_hook = safetyhook::create_inline(at, reinterpret_cast<void*>(&Hooked_RendererSubmit));
@@ -3163,9 +3182,23 @@ namespace
 
         auto* const imageStart = static_cast<uint8_t*>(moduleInfo.lpBaseOfDll);
         // .text and .rdata both sit below .data, so this covers the string literal and
-        // every instruction that could reference it, without walking 500MB of globals.
-        uint8_t* const limit = imageStart + (std::min)(static_cast<size_t>(moduleInfo.SizeOfImage),
-            static_cast<size_t>(0x1B00000));
+        // every instruction that could reference it, without walking 500MB of globals. The
+        // bound is the .data section's start from the headers (+1B00000 in the BGFX 0.0.3
+        // build, +1452000 in 0.0.8), not a fixed number.
+        size_t dataStart = moduleInfo.SizeOfImage;
+        {
+            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(imageStart);
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(imageStart + dos->e_lfanew);
+            const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+            for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++)
+            {
+                if (std::memcmp(sec[i].Name, ".data", 6) == 0)
+                {
+                    dataStart = (std::min)(dataStart, static_cast<size_t>(sec[i].VirtualAddress));
+                }
+            }
+        }
+        uint8_t* const limit = imageStart + dataStart;
 
         for (uint8_t* cursor = imageStart; cursor < limit; )
         {
@@ -5159,8 +5192,12 @@ namespace
     //   +7A582B  mov [rsp+0x20], rax            ; <- hook A
     //
     // Hook A alone came back with two records of +-2.0 - not the reticle - so both are probed.
-    constexpr uintptr_t kRvaUiInstanceSourceLoad = 0x7A582B;
-    constexpr uintptr_t kRvaUiInstanceSourceLoadB = 0x7A57EA;
+    // The addresses above are the BGFX 0.0.3 build's; the signatures find them in any build
+    // (0.0.8: +57978B and +57974A).
+    constexpr mgs4e::sites::Signature kUiInstanceSourceLoadSig { "UI instance source load A", 0x57978B,
+        "48 89 44 24 20 45 33 C0 49 8B 96 98 5E 01 00 E8 ?? ?? ?? ??", 0 };
+    constexpr mgs4e::sites::Signature kUiInstanceSourceLoadBSig { "UI instance source load B", 0x57974A,
+        "48 89 54 24 20 45 33 C0 49 8B 96 98 5E 01 00 E8 ?? ?? ?? ??", 0 };
 
     struct UiInstanceArray
     {
@@ -5208,6 +5245,20 @@ namespace
         }
         g_UiArrayB.source.store(reinterpret_cast<uint8_t*>(ctx.rdx));
         g_UiArrayB.count.store(count);
+    }
+
+    // Records the CPU-side array the UI instance data is uploaded from, so the wrapped anchor
+    // can be found in a stable allocation rather than in the per-frame D3D12 ring the vertex
+    // buffers rotate through.
+    void InstallUiInstanceSourceProbes()
+    {
+        uint8_t* const a = mgs4e::sites::Address(kUiInstanceSourceLoadSig);
+        uint8_t* const b = mgs4e::sites::Address(kUiInstanceSourceLoadBSig);
+        if (a) { UiInstanceSource_hook = safetyhook::create_mid(a, UiInstanceSourceProbe); }
+        if (b) { UiInstanceSourceB_hook = safetyhook::create_mid(b, UiInstanceSourceProbeB); }
+        spdlog::info("MGS4: UI instance source probes: A {}, B {}.",
+            UiInstanceSource_hook ? "installed" : "FAILED",
+            UiInstanceSourceB_hook ? "installed" : "FAILED");
     }
 
     // Look for the wrapped anchor in a buffer about to be uploaded, and watch it where it
@@ -6098,7 +6149,10 @@ namespace
     //
     // Logging only. Nothing is modified; the original runs for every call.
 
-    constexpr uintptr_t kUiLayoutConverterRva = 0x439810;
+    // The UI layout converter (+439810 in BGFX 0.0.3, +30FB10 in 0.0.8); the same signature
+    // the ultrawide fix uses.
+    constexpr mgs4e::sites::Signature kUiLayoutConverterSig { "UI layout converter", 0x30FB10,
+        "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 55 41 56 41 57 8B 5C 24 48", 0 };
 
     SafetyHookInline UiLayoutConverter_hook {};
     std::atomic<int> g_UiLayoutLogBudget { 2000 };
@@ -6166,26 +6220,13 @@ namespace
 
     void InstallUiLayoutProbe()
     {
-        auto* const at = reinterpret_cast<uint8_t*>(mgs4e::game::Module()) + kUiLayoutConverterRva;
-
-        // Verify before trusting: the RVA comes from another project's research against one
-        // specific executable build, and .text is encrypted on disk so this is the only place
-        // it can be checked. Log the bytes either way - if they ever stop matching, the log
-        // should say what was actually there.
-        uint8_t head[16] {};
-        std::memcpy(head, at, sizeof(head));
-        spdlog::info("MGS4: UI layout probe: bytes at +{:X}: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-            kUiLayoutConverterRva, head[0], head[1], head[2], head[3], head[4], head[5], head[6], head[7]);
-
-        // MSVC's canonical home-register prologue, mov [rsp+8], rbx. Anything else means a
-        // different build of the executable, and hooking would corrupt whatever is there.
-        constexpr uint8_t kExpectedPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
-        if (std::memcmp(head, kExpectedPrologue, sizeof(kExpectedPrologue)) != 0)
+        auto* const at = mgs4e::sites::Address(kUiLayoutConverterSig);
+        if (!at)
         {
-            spdlog::error("MGS4: UI layout probe: +{:X} does not start with the expected prologue. "
-                "Wrong executable build - not hooking.", kUiLayoutConverterRva);
+            spdlog::error("MGS4: UI layout probe: the layout converter was not found in this build - not hooking.");
             return;
         }
+        const uintptr_t converterRva = static_cast<uintptr_t>(at - reinterpret_cast<uint8_t*>(mgs4e::game::Module()));
 
         UiLayoutConverter_hook = safetyhook::create_inline(at,
             reinterpret_cast<void*>(&UiLayoutConverterProbe));
@@ -6196,7 +6237,7 @@ namespace
         }
 
         spdlog::info("MGS4: UI layout probe: installed at +{:X}. Logging the first 2000 calls; "
-            "F6 arms another 2000.", kUiLayoutConverterRva);
+            "F6 arms another 2000.", converterRva);
 
         std::thread([]
             {
@@ -6854,7 +6895,7 @@ namespace
         AspectRatio::ApplyFixes();
 
 #if MGS4E_LAB_BUILD
-        if (bRedirectUiCoordinateSpace)
+        if (bRedirectUiCoordinateSpace && ResearchLayout("UI coordinate redirect"))
         {
             RedirectUiCoordinateSpace();
             RedirectUiNdcCandidates();
@@ -6944,12 +6985,12 @@ namespace
             ScanNarrowingConversions();
         }
 
-        if (bScanFixedPointSites)
+        if (bScanFixedPointSites && ResearchLayout("Fixed-point scan"))
         {
             ScanFixedPointSites();
         }
 
-        if (bFixedPointProbe)
+        if (bFixedPointProbe && ResearchLayout("Fixed-point probe"))
         {
             InstallFixedPointProbe();
         }
@@ -7003,22 +7044,7 @@ namespace
             {
                 StartAimWatchThread();
 
-                // Records the CPU-side array the UI instance data is uploaded from, so the
-                // wrapped anchor can be found in a stable allocation rather than in the
-                // per-frame D3D12 ring the vertex buffers rotate through.
-                UiInstanceSource_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
-                        + kRvaUiInstanceSourceLoad),
-                    UiInstanceSourceProbe);
-                UiInstanceSourceB_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
-                        + kRvaUiInstanceSourceLoadB),
-                    UiInstanceSourceProbeB);
-                spdlog::info("MGS4: UI instance source probes: A at +{:X} {}, B at +{:X} {}.",
-                    kRvaUiInstanceSourceLoad,
-                    UiInstanceSource_hook ? "installed" : "FAILED",
-                    kRvaUiInstanceSourceLoadB,
-                    UiInstanceSourceB_hook ? "installed" : "FAILED");
+                InstallUiInstanceSourceProbes();
             }
             return;
         }
@@ -7219,25 +7245,10 @@ namespace
             {
                 StartAimWatchThread();
 
-                // Records the CPU-side array the UI instance data is uploaded from, so the
-                // wrapped anchor can be found in a stable allocation rather than in the
-                // per-frame D3D12 ring the vertex buffers rotate through.
-                UiInstanceSource_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
-                        + kRvaUiInstanceSourceLoad),
-                    UiInstanceSourceProbe);
-                UiInstanceSourceB_hook = safetyhook::create_mid(
-                    reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mgs4e::game::Module())
-                        + kRvaUiInstanceSourceLoadB),
-                    UiInstanceSourceProbeB);
-                spdlog::info("MGS4: UI instance source probes: A at +{:X} {}, B at +{:X} {}.",
-                    kRvaUiInstanceSourceLoad,
-                    UiInstanceSource_hook ? "installed" : "FAILED",
-                    kRvaUiInstanceSourceLoadB,
-                    UiInstanceSourceB_hook ? "installed" : "FAILED");
+                InstallUiInstanceSourceProbes();
             }
 
-            if (bTrapFixedPointSites || bDumpWrappedContext)
+            if ((bTrapFixedPointSites || bDumpWrappedContext) && ResearchLayout("Fixed-point traps"))
             {
                 if (!g_VehHandle)
                 {
@@ -7310,6 +7321,27 @@ void RenderPipeline::ArmProducerWatch(uintptr_t address, const char* what)
         }).detach();
 }
 #endif
+
+int* RenderPipeline::RenderConfigGlobal(const char* key)
+{
+    // Resolved once per key (the scan walks .text and .rdata); callers are the start-up
+    // fixes and the aspect code's per-frame size reads.
+    static std::mutex lock;
+    static std::unordered_map<std::string, int*> cache;
+    std::lock_guard guard(lock);
+    const auto found = cache.find(key);
+    if (found != cache.end())
+    {
+        return found->second;
+    }
+    int* const global = ResolveRenderConfigGlobal(key);
+    if (!global)
+    {
+        spdlog::warn("MGS4: the render config global {} was not found in this build.", key);
+    }
+    cache.emplace(key, global);
+    return global;
+}
 
 void RenderPipeline::ApplyFixes()
 {

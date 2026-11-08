@@ -6,6 +6,12 @@ namespace RenderPipeline
 {
     void ApplyFixes();
 
+    // The engine's render config globals by key ("render.bufferSizeX", "render.bufferSizeY",
+    // "render.windowSizeX", "render.windowSizeY"), found from the key string and the store
+    // that follows its one reference - no fixed address. Resolved once per key; nullptr when
+    // the build has no such store.
+    int* RenderConfigGlobal(const char* key);
+
     // Multiplier applied to the engine's internal render buffer (render.bufferSizeX/Y).
     // The window and swapchain keep the game's configured resolution, so the engine
     // renders internally at a higher resolution and scales down on output, i.e.

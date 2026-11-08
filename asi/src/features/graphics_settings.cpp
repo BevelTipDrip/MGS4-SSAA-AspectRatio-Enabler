@@ -13,11 +13,11 @@
 
 namespace
 {
-    // The engine parses its render config into these globals at startup; the reticle
-    // conversions below are scaled against them, which is what identifies those
-    // conversions as screen coordinates rather than any other narrowing.
-    constexpr uintptr_t kRvaRenderBufferSizeX = 0x1B00000;
-    constexpr uintptr_t kRvaRenderBufferSizeY = 0x1B00004;
+    // The engine parses its render config into the render.bufferSizeX/Y globals at startup
+    // (RenderPipeline::RenderConfigGlobal finds them; +1B00000/+1B00004 in the BGFX 0.0.3
+    // build, +1452000/+1452004 in 0.0.8); the reticle conversions below are scaled against
+    // them, which is what identifies those conversions as screen coordinates rather than any
+    // other narrowing.
 
     // ======================= The reticle truncation fix =======================
     //
@@ -160,8 +160,12 @@ namespace
 
         const size_t textRva = static_cast<size_t>(textStart - reinterpret_cast<uint8_t*>(imageBase));
 
-        const uintptr_t widthGlobal = imageBase + kRvaRenderBufferSizeX;
-        const uintptr_t heightGlobal = imageBase + kRvaRenderBufferSizeY;
+        const auto widthGlobal = reinterpret_cast<uintptr_t>(RenderPipeline::RenderConfigGlobal("render.bufferSizeX"));
+        const auto heightGlobal = reinterpret_cast<uintptr_t>(RenderPipeline::RenderConfigGlobal("render.bufferSizeY"));
+        if (!widthGlobal || !heightGlobal)
+        {
+            return sites;
+        }
 
         ZydisDecoder decoder;
         ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);

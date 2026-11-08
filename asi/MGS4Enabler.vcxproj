@@ -69,6 +69,7 @@
     <ClCompile Include="src\core\log.cpp" />
     <ClCompile Include="src\core\mem.cpp" />
     <ClCompile Include="src\core\compat.cpp" />
+    <ClCompile Include="src\core\sites.cpp" />
     <ClCompile Include="src\features\graphics_settings.cpp" />
     <ClCompile Include="src\features\render_pipeline.cpp" />
     <ClCompile Include="src\features\shader_port.cpp" />
@@ -107,6 +108,7 @@
     <ClInclude Include="src\core\log.hpp" />
     <ClInclude Include="src\core\mem.hpp" />
     <ClInclude Include="src\core\compat.hpp" />
+    <ClInclude Include="src\core\sites.hpp" />
     <ClInclude Include="src\features\aspect_ratio.hpp" />
     <ClInclude Include="src\features\graphics_settings.hpp" />
     <ClInclude Include="src\features\render_pipeline.hpp" />
