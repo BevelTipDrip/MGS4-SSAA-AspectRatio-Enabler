@@ -203,12 +203,12 @@ namespace InternalSize
             spdlog::info("PW internal size: render scale set to {} at {} of {} sites.", iRenderScale, ok, std::size(kScale));
         }
         // Scene size: the render scale's canvas multiple when set, else the explicit internal size.
-        // With a wide canvas (private module) the scene targets are units x scale wide, but the
+        // With a wide canvas (ultrawide/pw) the scene targets are units x scale wide, but the
         // HUD scale sites keep 480 x scale: the UI is still laid out in 480 units at the same scale.
         const int sceneW = iRenderScale > 0 ? canvasW * iRenderScale : iInternalWidth;
         const int sceneH = iRenderScale > 0 ? canvasH * iRenderScale : iInternalHeight;
         // The two width sites of the UI-scale function follow the scene: with a wide canvas the
-        // private module pins the UI scale itself (the engine's own canvas fields do the rest).
+        // canvas (ultrawide/pw) pins the UI scale itself (the engine's own canvas fields do the rest).
         const int hudW = sceneW;
         int sceneReqW = iSceneWidth, sceneReqH = iSceneHeight;   // the Lab experiment's explicit size, if any
         if (canvasActive && iRenderScale > 0 && sceneReqW == 0 && sceneReqH == 0)

@@ -51,7 +51,7 @@ namespace
     template <class Fn>
     Fn Original(void* self, size_t slot) { return reinterpret_cast<Fn>(HooksFor(self).original[slot]); }
 
-    // The pointer of every writable buffer map in flight, for the private module at Unmap.
+    // The pointer of every writable buffer map in flight, for the canvas (ultrawide/pw) at Unmap.
     std::mutex g_Mutex;
     std::unordered_map<ID3D11Resource*, void*> g_Mapped;
 

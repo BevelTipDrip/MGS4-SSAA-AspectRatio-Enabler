@@ -3,9 +3,12 @@
 Copyright (c) 2026 BevelTipDrip.
 
 This is the ultrawide and 4:3 layout component of MGS4 SSAA and Aspect Ratio Enabler: the
-source in this repository, its documentation and captures, and the compiled form of it that
-ships inside the mod's release binaries. It is licensed separately from the public repository,
-which is under the MIT License.
+source and documentation in the `ultrawide/` folder of the
+[MGS4 SSAA and Aspect Ratio Enabler](https://github.com/BevelTipDrip/MGS4-SSAA-AspectRatio-Enabler)
+repository, its captures, and the compiled form of it that ships inside the mod's release
+binaries. It is licensed separately from the rest of that repository, which is under the MIT
+License. The parts that build on other people's MIT-licensed work stay under those licences;
+they are listed in `THIRD-PARTY-NOTICES.md`.
 
 ## You may
 

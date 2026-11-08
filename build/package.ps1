@@ -3,8 +3,11 @@
 #   MGS4Enabler_<version>.zip
 #     MGS4Enabler.exe                 the settings tool, one exe for both games
 #     README.md
+#     LICENSE.md                      MIT, the repository outside ultrawide\
+#     ULTRAWIDE_LICENSE.md            ultrawide\LICENSE.md (credit required)
+#     THIRD-PARTY-NOTICES.md          ultrawide\THIRD-PARTY-NOTICES.md (MIT notices it builds on)
 #     UltimateASILoader_LICENSE.md
-#     MGS4\winmm.dll                  Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
+#     MGS4\winmm.dll                 Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
 #     MGS4\scripts\MGS4Enabler.asi
 #     mgspw\winmm.dll                 the same loader, for Peace Walker
 #     mgspw\scripts\MGSPWEnabler.asi  the Peace Walker build (one version line for both games)
@@ -95,6 +98,9 @@ if (Test-Path (Join-Path $root 'manifests\pw')) {
 Copy-Item $exe (Join-Path $stage 'MGS4Enabler.exe')
 Copy-Item (Join-Path $root 'README.md') (Join-Path $stage 'README.md')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
+Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $stage 'LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\LICENSE.md') (Join-Path $stage 'ULTRAWIDE_LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\THIRD-PARTY-NOTICES.md') (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
 
 $zip = Join-Path $out "MGS4Enabler_$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }

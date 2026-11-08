@@ -5,6 +5,7 @@
 #   MGSPWEnabler_preview_<date>[_<tag>].zip
 #     README.txt                      install notes for testers (build\pw_preview\README.txt)
 #     UltimateASILoader_LICENSE.md
+#     LICENSE.md, ULTRAWIDE_LICENSE.md, THIRD-PARTY-NOTICES.md   the licences (ultrawide\ has its own)
 #     MGSPWEnabler.settings           the settings with comments (build\pw_preview\MGSPWEnabler.settings)
 #     mgspw\winmm.dll                 Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
 #     mgspw\scripts\MGSPWEnabler.asi  the Peace Walker plugin, Release build
@@ -58,6 +59,9 @@ Copy-Item $asiPw (Join-Path $stage 'mgspw\scripts\MGSPWEnabler.asi')
 Copy-Item (Join-Path $PSScriptRoot 'pw_preview\MGSPWEnabler.settings') (Join-Path $stage 'MGSPWEnabler.settings')
 Copy-Item (Join-Path $PSScriptRoot 'pw_preview\README.txt') (Join-Path $stage 'README.txt')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
+Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $stage 'LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\LICENSE.md') (Join-Path $stage 'ULTRAWIDE_LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\THIRD-PARTY-NOTICES.md') (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
 Copy-Item $tool (Join-Path $stage 'MGS4Enabler.exe')
 
 $name = 'MGSPWEnabler_preview_' + (Get-Date).ToString('yyyy-MM-dd')

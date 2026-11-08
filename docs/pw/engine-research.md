@@ -69,8 +69,7 @@ shaders, constant buffers, bound texture and the game-code callers.
   the UI is drawn straight into the output-sized target. Two full-screen passes bracket it
   (a 3440x1440 R32G32B32A32 target from `+5D202`, a copy from `+5CC84`, the last from `+56190`).
 - How the UI itself is drawn (canvas, constants, vertex layout, identity of an element) is
-  research for the aspect work and lives in the private ultrawide module
-  (`external\ultrawide\pw\docs\`).
+  research for the aspect work and lives in `ultrawide\pw\docs\`.
 
 ## Gameplay (Measured, 2026-09-12, route replay, 6880x2880 window)
 
@@ -108,10 +107,10 @@ not touch window creation, style, position or DXGI: window mode stays the launch
 business. "Supersampling" in his ini is only a larger custom size, so the swap chain and every
 target follow it (a 6880x2880 window on a 3440x1440 desktop, measured); his ini parser rejects
 values with thousands separators (`6,880` reads as 0 and falls back to the desktop size). What
-the patch does for the HUD and the aspect is in the private module.
+the patch does for the HUD and the aspect is in `ultrawide/pw/docs/engine-notes.md`.
 
 The game's own window, display-mode, settings and swap-chain plumbing was read from a live
-dump on 2026-09-13; the notes are in the private module.
+dump on 2026-09-13; the notes are in `ultrawide/pw/docs/engine-notes.md`.
 
 ## Open questions (Phase 0 answers these)
 

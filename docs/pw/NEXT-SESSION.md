@@ -209,12 +209,12 @@ fixups); the launcher drives the game with `-resolution 0|1 -upscale 0..3 -movie
 ## Where the UI work stands (2026-09-13)
 
 The Lab draw census works on Peace Walker's deferred-context renderer (`lab.md`). The UI
-method, the element tables and the live-editing biases are in the private module
-(`external/ultrawide/pw/docs/`); the mission HUD groups were moved to the 21:9 edges and the
+method, the element tables and the live-editing biases are in `ultrawide/pw`
+(`ultrawide/pw/docs/`); the mission HUD groups were moved to the 21:9 edges and the
 user confirmed the result. Route replay: `boot.ps1 -Deploy -LabConfig -KeepOpen -WaitSeconds 1`,
 then `replay.ps1 -Route routes/to_mission.csv -SkipMs 15000 -StopMs 58000` lands on the Mission
 Selector; `-StopMs 108000` lands in the mission. `census 2` goes into `live.txt`; the
-live-editing commands come from the private module. `bias_run.ps1` is one run end to end.
+live-editing commands come from `ultrawide/pw/src/lab/ui_bias.cpp`. `bias_run.ps1` is one run end to end.
 
 ## Release shape (user, 2026-09-13)
 
@@ -296,7 +296,7 @@ the two calls the profiler named.
 Render Scale 10, Wide Canvas Units 650, Output 3440x1440, Window Mode 0 on a 3440x1440
 desktop: world at 21:9, HUD and menus at the 16:9 scale and centred, HUD groups at the edges
 (the register's biases), full-screen effects across the frame, no flicker. The method and the
-sites are in the private module (external/ultrawide/pw: wide_canvas.cpp, engine-notes.md).
+sites are in `ultrawide/pw` (src/fixes/canvas.cpp, docs/engine-notes.md).
 
 **Closed 2026-09-14 (user):** the "slightly darker" impression at 21:9 was wrong; A/B
 screenshots against 16:9 show the same picture. **16:10 is tested and working** (the tall-canvas

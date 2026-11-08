@@ -1,5 +1,7 @@
 # The ultrawide HUD fix: how it works and how it was made
 
+> The screen captures this document names (`AR-...jpg`) are kept outside this repository.
+
 **Settings (lab file):** `Fix UI Aspect=1` + `Aspect Pool Spread=1` (with `Fix UI Aspect
 Corners=0`), plus `Aspect World Tracking` (follows the pool spread when absent), all in
 `[Graphics]`
@@ -370,10 +372,10 @@ wheel backdrops in `kHudStretched` are scaled on whichever axis has the factor (
 Verified at 2880x2160 (lab, 2026-09-04): the log shows all five corner widgets anchored top /
 bottom by 0.2500, the wheel backdrops stretched by 1.3333 and the slot plates anchored bottom;
 the user read the HUD and both wheel captures ("4:3 appears to be working" / "these look
-correct"). Evidence: [`AR-009-hud-4-3-2880x2160.jpg`](evidence/AR-009-hud-4-3-2880x2160.jpg),
-[`AR-009-hud-4-3-spread-off.jpg`](evidence/AR-009-hud-4-3-spread-off.jpg),
-[`AR-009-weapon-wheel-4-3.jpg`](evidence/AR-009-weapon-wheel-4-3.jpg),
-[`AR-009-item-wheel-4-3.jpg`](evidence/AR-009-item-wheel-4-3.jpg). Note the channel numbers on
+correct"). Evidence: `AR-009-hud-4-3-2880x2160.jpg`,
+`AR-009-hud-4-3-spread-off.jpg`,
+`AR-009-weapon-wheel-4-3.jpg`,
+`AR-009-item-wheel-4-3.jpg`. Note the channel numbers on
 this loadout were one higher than the 21:9 census (0x1E weapon, 0x1F item, 0x22 life, 0x24 camo,
 0x05 battery) - another reason nothing is keyed on a channel.
 

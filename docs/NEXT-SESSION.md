@@ -13,9 +13,8 @@ README's "Known issues" list (2026-09-06): the in-game options menu over the Nom
 (same shape as the codec portrait, AR-016, or the sub-canvas mapping, AR-018), the 3D item,
 weapon and camo renders, the map render, and subtitles in gameplay and cutscenes.
 
-The aspect-ratio implementation, its bug register and its working notes live in the private
-module at `external/ultrawide` (a submodule; see its README). Without access to it the project
-still builds, with a stub in place of the fixes. Begin at that module's docs. The gameplay HUD
+The aspect-ratio implementation, its bug register and its working notes live in `ultrawide/`
+(see its README; its own licence, credit required). Begin at its docs. The gameplay HUD
 is done at 21:9 and 4:3, and cutscene/menu masking plus the FOV settings shipped in the fork's
 0.2.6; what remains is listed under "Remaining work" in that module's `aspect-ratio.md` and in
 `letterbox.md` §5.
@@ -44,7 +43,7 @@ Kept here so nothing lives only in a conversation. Add to it; strike through whe
   in-game options menu over the Nomad interior; the 3D item, weapon and camo renders; the map
   render; subtitles in gameplay and cutscenes.
 - **Never verified**: 32:9 (no mode on the capture output), a real play session at 21:9, the
-  letterbox "not done" list in the private module's `letterbox.md` §5.
+  letterbox "not done" list in `ultrawide/docs/features/letterbox.md` §5.
 
 ---
 
@@ -73,7 +72,7 @@ Reading order matters: each one assumes the engine facts established by the one 
 | # | Document | Why it is needed for this task |
 | --- | --- | --- |
 | 1 | [features/README.md](features/README.md) | evidence levels, bug entry format, the conventions every claim here is held to |
-| 2 | `external/ultrawide/docs/features/aspect-ratio.md` | the task itself — known facts, open questions, design constraints (private module) |
+| 2 | `ultrawide/docs/features/aspect-ratio.md` | the task itself — known facts, open questions, design constraints |
 | 3 | [features/window-resolution.md](features/window-resolution.md) | how the window size is already overridden, and **WR-001**, the one existing claim in this area |
 | 4 | [features/supersampling.md](features/supersampling.md) | the render-buffer vs output-size distinction, and **SS-003** — what the removed wrap-around UI patch broke |
 | 5 | [features/tooling.md](features/tooling.md) | lab mode, the test harness and the per-draw UI diagnostics needed to inspect a frame |

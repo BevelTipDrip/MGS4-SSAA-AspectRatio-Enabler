@@ -1,8 +1,8 @@
 #pragma once
 
-// Live editing of Peace Walker UI elements (private module, Lab only). The public draw census
+// Live editing of Peace Walker UI elements (Lab only). The draw census
 // (pw\src\features\draw_census.cpp) calls these from its Unmap hooks and its live command
-// reader; without this module the public stub header turns them into no-ops.
+// reader.
 //
 // The method, the identity and the register are described in pw/docs/ui-elements.md.
 namespace UiBias

@@ -281,15 +281,17 @@ Visual Studio 2026 Build Tools (v145, C++20), Windows SDK 10. Clone with submodu
 [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases) zip, which
 is not in the repository.
 
-The ultrawide and 4:3 layout code is a private submodule (`external/ultrawide`). Without it
-the project still builds, with a stub in its place: every setting works except the Ultrawide
-HUD family, which then does nothing. That component has its own licence (see below).
+The ultrawide and 4:3 layout code (MGS4) and the Peace Walker wide canvas live in `ultrawide/`,
+with their own documentation in `ultrawide/docs` and `ultrawide/pw/docs`. That folder has its
+own licence (see below).
 
 Two configurations: **Release** is what ships. **Lab** (`build\build.cmd lab`, output in
 `bin\Lab`) compiles in the research instrumentation and the lab settings file that the test
 harness drives. A Release build contains none of it.
 
 ## Credits
+
+Ultrawide and 4:3 HUD, menu and cutscene fix by BevelTipDrip.
 
 ASI loading by [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 (ThirteenAG), see `UltimateASILoader_LICENSE.md`.
@@ -301,9 +303,10 @@ Libraries: [safetyhook](https://github.com/cursey/safetyhook) (hooking),
 
 ## Licence
 
-This repository is under the MIT License, see `LICENSE.md`.
+This repository is under the MIT License, see `LICENSE.md`, except the `ultrawide/` folder.
 
-The ultrawide and 4:3 fix (the private `external/ultrawide` submodule, compiled into the
-release binaries) is licensed separately, under a credit-required licence: you may use, modify
-and redistribute it, in your own mods too, but the fix must be credited wherever it is used or distributed. That means the mod page, the README with a link to this repository. Passing it off as your own ends that
-permission. The full text is in the submodule's `LICENSE.md`.
+The ultrawide and 4:3 fix (`ultrawide/`, compiled into the release binaries) is licensed
+separately, under a credit-required licence: you may use, modify and redistribute it, in your
+own mods too, but the fix must be credited directly and visibly wherever it is used or
+distributed: on the mod page and in the README, with a link to this repository. Passing it off
+as your own ends that permission. The full text is in `ultrawide/LICENSE.md`.

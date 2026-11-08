@@ -21,8 +21,8 @@ as in the public docs. The method and the register are in `ui-elements.md`.
   `+57CA9 < +5A166 < +5B033 < +22686 < +22686 < +1C96F < +544D2 < +78195 < +7BBB9 < +79AB4`:
   `+22686` recursing is a display-list interpreter replaying what the game logic queued
   earlier. Owner attribution by unwinding, the MGS4 method, has no purchase here. What does
-  identify an element, the element tables and how one is moved are in the private
-  ultrawide module (`external\ultrawide\pw\docs\ui-elements.md`).
+  identify an element, the element tables and how one is moved are in
+  `ui-elements.md` beside this file.
 
 
 ## Gameplay and menus (Measured, 2026-09-12, route replay, 6880x2880 window)
@@ -39,7 +39,7 @@ as in the public docs. The method and the register are in `ui-elements.md`.
   the uploads.
 - **The menus and the mission HUD were tabled** with the census on 2026-09-12 (Mission
   Selector, in-mission HUD) and moving them live was verified in the mission; the tables,
-  the handle and the biases are in the private module.
+  the handle and the biases are in `ui-elements.md` and `src/lab/ui_bias.cpp`.
 
 ## How Afevis's patch centres the HUD (Reported: full read of his dllmain.cpp, 2026-09-12)
 
@@ -211,7 +211,7 @@ region, selfregion, ctrltype, invited, resolution, movie, upscale` (`+DA8AB0..+D
 ## The native render pipeline (Measured, 2026-09-13, Lab census with Afevis's ASI disabled)
 
 Two launcher configurations censused at the title (`Internal Resolution (PW)` / `Internal
-Upscaling (PW)` through PatriotFix's launcher skip; both restored afterwards):
+Upscaling (PW)` through another mod's launcher skip; both restored afterwards):
 
 **Original / Original** (`-resolution 0 -upscale 0`): window client 1720x720 (the game sized
 it), swap chain 1720x720. Every draw, world and UI, lands on a **1440x816** target (the PSP
@@ -430,7 +430,7 @@ frame with no flicker. The "slightly darker" impression the user had that evenin
 A/B screenshots against 16:9 on 2026-09-14 show the same picture. Confirmed since on the tall
 canvas too (4:3 2026-09-13, 16:10 2026-09-14).
 
-**How (private `src/lab/wide_canvas.cpp`, `pw/tools/afevis_sites.py`):** the engine's own
+**How (`src/lab/wide_canvas.cpp` at the time, now `src/fixes/canvas.cpp`; sites from `afevis_sites.py`, a lab script not in this repository):** the engine's own
 canvas fields, exactly Afevis's hook set on our integer scale (every one of his 24 patterns hits
 once in the clean dump): Camera Config `+8EA17` (int16 UI offset at +580/+582 = (85, 0) when
 the magic at +576 is 67175190), Aspect Ratio `+8EE22` (float inverse aspect at +592, uint16
@@ -451,7 +451,7 @@ HUD Scaler hook; left at 4800 they size the gameplay viewport 4800 wide). The pi
 width, and the window is still at its start-up size when the fit runs (the chain is then
 created at the picture size), so the client rect is not usable there.
 
-**The two 480s the engine keeps (private `ui_bias.cpp`, `OnVertexUnmap`):** the post chain's
+**The two 480s the engine keeps (`ui_bias.cpp`, `OnVertexUnmap`):** the post chain's
 quads are six 20-byte vertices (u, v, x, y, z) with the post vertex shaders (`80fc4e25`,
 `f335c4d1`) hard-coding the 2/480 ortho and then applying cb0[132]/cb0[133] (scale/offset the
 engine sets for the 650 canvas). The downscale into the 640x640 blur target samples the scene

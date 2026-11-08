@@ -86,7 +86,7 @@ key on those.
 
 ## 4. Reading a census
 
-`census_table.py <log> <frame>` (private module, `pw\tools`) prints one frame as an element
+`census_table.py <log> <frame>` (a lab script, not in this repository) prints one frame as an element
 table; what the columns mean is described there.
 
 Two rules:
@@ -108,7 +108,7 @@ times a second, runs each line and truncates the file (the harness's `$LiveFile`
 | Command | What |
 | --- | --- |
 | `census <frames>` | log the next `<frames>` frames |
-| `bias ...`, `tbias ...` | the live-editing commands; they come from the private ultrawide module (`external\ultrawide\pw`) through `pw\src\features\ui_bias.hpp` and are reported as unknown when it is absent |
+| `bias ...`, `tbias ...` | the live-editing commands; they come from `ultrawide\pw\src\lab\ui_bias.cpp` through `pw\src\features\ui_bias.hpp` |
 
 The census frame line reports how many uploads the module's biases have touched, so a
 command that matched nothing is visible in the log, not just on screen.

@@ -16,7 +16,7 @@ namespace InternalSize
 {
     inline int iRenderScale = 0;      // integer canvas multiple k (game: 3 or 4); 0: leave alone. Sets the scale getter and, unless given, the internal size 480k x 272k
     MGS4E_LAB_SWITCH(int, iRenderScaleHundredths, 0); // experiment: the float copies of the scale forced to this / 100 at +596E5 and +5B015 (what Afevis's patch does); 0 = off
-    inline bool bWideCanvas = false;    // the non-16:9 infrastructure (private module): canvas widened to the display aspect, UI centred, effects widened
+    inline bool bWideCanvas = false;    // the non-16:9 infrastructure (ultrawide/pw): canvas widened to the display aspect, UI centred, effects widened
     inline int iWideCanvasUnits = 0;    // canvas width in PSP units when bWideCanvas (650 at 21:9, 480 at 4:3); 0 = from the primary display's aspect
     inline int iWideCanvasHeightUnits = 0; // canvas height in PSP units (272 at 21:9, 360 at 4:3, 300 at 16:10); 0 = from the primary display's aspect
     MGS4E_LAB_SWITCH(int, iSceneWidth, 0);         // experiment: the full-canvas scene targets (480x272 x scale) created at this size instead, as Afevis's target replacement does; 0 = off

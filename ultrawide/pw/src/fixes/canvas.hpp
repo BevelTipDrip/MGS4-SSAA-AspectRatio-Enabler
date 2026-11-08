@@ -12,7 +12,7 @@
 //
 // This is the hook set of Afevis's MGSPW-Resolution-Unlocked, both branches, on the integer
 // render scale, which keeps the post effects intact. The sites are RVAs verified against the
-// clean dump (pw/tools/afevis_sites.py); each hook checks its bytes first. Method and register:
+// clean dump (afevis_sites.py, a lab script not in this repository); each hook checks its bytes first. Method and register:
 // pw/docs/ui-elements.md and engine-notes.md.
 //
 // Compiled in both builds; the public tree calls it through pw/src/features/canvas.hpp.

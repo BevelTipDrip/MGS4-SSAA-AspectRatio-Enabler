@@ -30,7 +30,7 @@ namespace
         size_t offset;
     };
 
-    // Every site is Afevis's pattern hit plus his offset (pw/tools/afevis_sites.py, clean dump 2026-09-12),
+    // Every site is Afevis's pattern hit plus his offset (afevis_sites.py, a lab script not in this repository; clean dump 2026-09-12),
     // now found by signature (C:\mgspf_tools\pw\siggen.py, proven unique in the builds of 09-13 and 09-18).
     constexpr Site kCameraConfig  { "camera config",       0x8EB97, "4D 8B 13", "4D 8B 13 49 39 72 08 4D 8D 5A 08 0F 85 ?? ?? ?? ??", 0 };            // mov r10, [r11]
     constexpr Site kAspectRatio   { "aspect ratio",        0x8EFA2, "0F 28 DA F3 0F 5E 9B", "0F 28 DA F3 0F 5E 9B 50 02 00 00 48 8B CF", 0 }; // movaps xmm3, xmm2; divss xmm3, [rbx+0x250]

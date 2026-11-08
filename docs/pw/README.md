@@ -66,6 +66,5 @@ Two rules that are not obvious from the tree:
 - **The namespace of the shared core stays `mgs4e::`**; Peace Walker code is `mgspwe::`.
   Renaming the core would touch every MGS4 file for no gain.
 
-The private aspect-ratio work lives in the MGS4 ultrawide module, `external\ultrawide`, under
-`pw\`, with the same credit-required licence; the public tree does not describe how it works
-and carries none of its values. The research lab is public: [lab.md](lab.md).
+The aspect-ratio work lives with the MGS4 fix in `ultrawide\pw\`, under the same
+credit-required licence (`ultrawide\LICENSE.md`). The research lab: [lab.md](lab.md).

@@ -94,7 +94,7 @@ first version wrote the override itself; that was right in windowed mode and wro
 fullscreen-windowed, where the chain is the desktop and the renderer's buffers came out
 smaller than it - a black screen on D3D11 again (user, same day). The renderer's resolution
 must never be smaller than the chain; equal is the rule. In windowed mode the chain request
-then equals the window and the private module's `SizeToWindow` has nothing to substitute; in
+then equals the window and the ultrawide fix's `SizeToWindow` has nothing to substitute; in
 fullscreen the value equals the game's own (the desktop) and the fit places the picture as
 before. Log lines: `renderer resolution hook installed`, then `the renderer's own resolution
 2560x1440 -> 3200x1800 (the window's client area, which is the chain)` when it differs, and
@@ -106,7 +106,7 @@ main menu filling the screen from a desktop grab (the harness's window capture i
 windowed flip-model chain, a capture limitation, not the game).
 
 The window itself is recorded from the swap chain (the public D3D11 creation hook and the
-private module's chain hooks set `RenderPipeline::hGameWindow`), never found by enumeration:
+ultrawide fix's chain hooks set `RenderPipeline::hGameWindow`), never found by enumeration:
 the first 0.0.4 build looked it up with `EnumWindows` + `GetWindowThreadProcessId`, and the Nexus
 upload scanner flagged that zip as unsafe while 0.0.3 passed - walking other processes' windows
 by id is an injector's signature. With the enumeration gone the import table gained only

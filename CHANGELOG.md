@@ -6,6 +6,9 @@ changelog box as is.
 
 ## 0.0.8 (unreleased)
 
+Source
+- The ultrawide, 4:3 and 16:10 fix is now open source: it is in the `ultrawide` folder of the GitHub repository, with its development history, under its own licence (free to use and build on; the fix must be credited directly and visibly). The Peace Walker wide canvas is in the same folder. The zip now carries the licences: LICENSE.md, ULTRAWIDE_LICENSE.md and THIRD-PARTY-NOTICES.md.
+
 Peace Walker
 - The rendering settings ship: Aspect Ratio (Use Display, 16:9, 16:10, 21:9, 32:9, 4:3) with a Screen Resolution and a Render Resolution list per shape, Window Mode, MSAA, Anisotropic Filtering and GPU Local Textures, on the tool's Graphics tab. The scene renders at an integer multiple of the PSP canvas and the game's own blit downscales it into the picture, so the post effects stay intact at any scale; at 8K the frame textures kept in video memory take the game from 27 to 60 fps.
 - Wider and taller displays: the canvas is widened (21:9, 32:9) or heightened (16:10, 4:3) the engine's own way, so the world fills the display at correct proportions while the HUD and menus keep the 16:9 scale and stay centred; the full-screen effects follow the canvas, and the in-mission HUD groups sit at the display edges with the 16:9 margin.

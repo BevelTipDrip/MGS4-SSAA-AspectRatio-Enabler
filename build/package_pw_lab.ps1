@@ -6,6 +6,7 @@
 #   MGSPWEnabler_lab_<date>[_<tag>].zip
 #     LAB-README.txt                  what the build records, how to capture, what to send
 #     UltimateASILoader_LICENSE.md
+#     LICENSE.md, ULTRAWIDE_LICENSE.md, THIRD-PARTY-NOTICES.md   the licences (ultrawide\ has its own)
 #     MGSPWEnabler.settings           build\pw_lab\MGSPWEnabler.settings
 #     mgspw\winmm.dll                 Ultimate ASI Loader (ThirteenAG), renamed from dinput8.dll
 #     mgspw\scripts\MGSPWEnabler.asi  the Peace Walker plugin, LAB build
@@ -57,6 +58,9 @@ Copy-Item $asiPw (Join-Path $stage 'mgspw\scripts\MGSPWEnabler.asi')
 Copy-Item (Join-Path $PSScriptRoot 'pw_lab\MGSPWEnabler.settings') (Join-Path $stage 'MGSPWEnabler.settings')
 Copy-Item (Join-Path $PSScriptRoot 'pw_lab\LAB-README.txt') (Join-Path $stage 'LAB-README.txt')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
+Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $stage 'LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\LICENSE.md') (Join-Path $stage 'ULTRAWIDE_LICENSE.md')
+Copy-Item (Join-Path $root 'ultrawide\THIRD-PARTY-NOTICES.md') (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
 # The analysis scripts: the ones that read a census log with nothing but the standard library.
 foreach ($t in 'hud_rows.py', 'hud_frames.py', 'hud_identity.py', 'hud_right.py') {
     $f = Join-Path $ToolsDir $t

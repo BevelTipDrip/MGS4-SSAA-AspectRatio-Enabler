@@ -367,7 +367,7 @@ namespace
         std::string trace;              // call order on this context since its last draw (first draws of a census frame only)
         std::string lastStampedTarget;  // timing: the target of the last stamped draw on this context
         bool stampNext = false;         // timing: the op after a stamped op gets a closing stamp, so each pass is bounded
-        bool uiUpload = false;          // the last constant upload on this context was a UI one (the private module says)
+        bool uiUpload = false;          // the last constant upload on this context was a UI one (ultrawide/pw says)
         int draws = 0;   // this frame (reset at Present for the immediate; at ExecuteCommandList for a deferred)
     };
     // Plain, deliberately. These are only ever taken around our own bookkeeping, never across a
@@ -1482,7 +1482,7 @@ namespace
 
     struct Snapshot { float f[64]; size_t count; bool valid; float uiScale[8]; bool hasUiScale; };   // uiScale: rows 132-133 of a 2640-byte UI constant buffer (the layout scale and offset)
     std::unordered_map<void*, uint64_t> g_ShaderHash;             // shader object -> bytecode hash
-    std::unordered_map<ID3D11Resource*, bool> g_UiBuffer;          // constant buffer -> its last upload carried the UI ortho (private module)
+    std::unordered_map<ID3D11Resource*, bool> g_UiBuffer;          // constant buffer -> its last upload carried the UI ortho (ultrawide/pw)
     std::unordered_map<ID3D11Resource*, float> g_UiShift;          // constant buffer -> the wide-scene move (canvas units) of its last upload
     std::unordered_map<ID3D11Resource*, Snapshot> g_LatestUpload;  // constant buffer -> latest 16 floats
     struct Mapping { void* data; size_t size; };

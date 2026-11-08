@@ -221,7 +221,7 @@ The public tree says only that the module exists; this file is the description.
 ## 8. RenderDoc captures: the identity tuple, read from frames (Measured, 2026-09-17)
 
 Seven frames captured by the user in the first mission (stock render size 1440x816, no
-MGSPWEnabler loaded; PatriotFix present) and exported with `C:\mgspf_tools\pw\rdoc\`
+MGSPWEnabler loaded; another mod present) and exported with `C:\mgspf_tools\pw\rdoc\`
 (`rdc_export.ps1` -> one TSV row per draw: event id, UI-ortho flag, translation row, texture on
 pixel slot 0, quad rectangle, viewport, target). The pipeline replaces the census for
 identification: the user clicks a pixel in RenderDoc (pixel history), reads the event id, and

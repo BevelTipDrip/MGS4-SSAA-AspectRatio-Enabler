@@ -1,5 +1,7 @@
 # Aspect ratio
 
+> The screen captures this document names (`AR-...jpg`) are kept outside this repository.
+
 **Settings:** none yet — this feature is not implemented
 **Implements:** nothing yet. Expected to land in its own `src/fixes/` file rather than inside
 `resolution_scaling_fixes.cpp`, which is research and diagnostics
@@ -454,8 +456,8 @@ can show real widget artwork.
   stage, look at the HUD; aim to see the reticle become an oval
 - **Evidence detail:** harness run 2026-08-31, stage `s01a10l_1`, screenshots reviewed by the
   user. Widgets hold their full-width span while the frame shortens; reticle visibly oval
-- **Screenshots:** [`AR-001-hud-stretched-3840x1620.jpg`](evidence/AR-001-hud-stretched-3840x1620.jpg)
-  vs control [`AR-001-hud-control-3840x2160.jpg`](evidence/AR-001-hud-control-3840x2160.jpg).
+- **Screenshots:** `AR-001-hud-stretched-3840x1620.jpg`
+  vs control `AR-001-hud-control-3840x2160.jpg`.
   Ignore the top-left anchoring, bottom black fill and the corrupted block bottom-right — the
   first two are the user's GPU no-scaling setting, the last a glitched Steam popup
 - **Popups:** none
@@ -606,7 +608,7 @@ can show real widget artwork.
 - **Evidence detail:** user screenshot 2026-09-01 — radar enlarged mid-screen, bullseye
   floating well off the ring; in the user's words, "bullseye leaving the compass, going
   wherever it likes"
-- **Screenshots:** user-provided in session; not yet in evidence/
+- **Screenshots:** user-provided in session; not kept
 - **Popups:** none
 - **Cause:** the whitelist zones assume the compass sits small in the top-right. Expanded, its
   anchors leave the zone and fall into the world-element regime, where parts with different
@@ -626,7 +628,7 @@ can show real widget artwork.
   16:9 one and the horizontal field is *narrower* than 16:9 would give at that width — Vert-,
   no squash. The user's earlier read of the cutscene close-up (equal width, top and bottom
   lost) agrees
-- **Screenshots:** same pair as AR-001; [AR-010 cutscene sheet](evidence/AR-010-cutscene-21-9.jpg)
+- **Screenshots:** same pair as AR-001; AR-010 cutscene sheet (`AR-010-cutscene-21-9.jpg`)
 - **Popups:** none
 - **Cause:** the camera builder `+0x0B9BB0` derives the projection from a scale that does not
   know the window; the aspect comes in separately
@@ -651,10 +653,10 @@ can show real widget artwork.
   "moving out of the containment area"; the compass with "the red bullseye missing, the
   compass arrow not centered in the larger circle, the N indicator offset"; the ration icon
   "not centered over the word ration"
-- **Screenshots:** fixed state: [compass](evidence/AR-003-compass-fixed.jpg) /
-  [crosshair](evidence/AR-003-crosshair-square-fixed.jpg) /
-  [weapon](evidence/AR-003-weapon-contained-fixed.jpg) /
-  [ration](evidence/AR-003-ration-centered-fixed.jpg)
+- **Screenshots:** fixed state: compass (`AR-003-compass-fixed.jpg`) /
+  crosshair (`AR-003-crosshair-square-fixed.jpg`) /
+  weapon (`AR-003-weapon-contained-fixed.jpg`) /
+  ration (`AR-003-ration-centered-fixed.jpg`)
 - **Popups:** none
 - **Cause:** the spread delta was a function of each anchor's position (scaled per draw-order
   cluster). Widget parts carry different anchors — satellites, rotated variants,
@@ -677,10 +679,10 @@ can show real widget artwork.
   covering the full height. Log: `logical range 0..1280 x -120..840`, five widgets
   `anchored top|bottom by 0.2500`, backdrops `stretched by 1.3333`. User: "4:3 appears to be
   working" (HUD), "these look correct" (wheels)
-- **Screenshots:** [HUD, spread on](evidence/AR-009-hud-4-3-2880x2160.jpg) /
-  [HUD, spread off](evidence/AR-009-hud-4-3-spread-off.jpg) /
-  [weapon wheel](evidence/AR-009-weapon-wheel-4-3.jpg) /
-  [item wheel](evidence/AR-009-item-wheel-4-3.jpg)
+- **Screenshots:** HUD, spread on (`AR-009-hud-4-3-2880x2160.jpg`) /
+  HUD, spread off (`AR-009-hud-4-3-spread-off.jpg`) /
+  weapon wheel (`AR-009-weapon-wheel-4-3.jpg`) /
+  item wheel (`AR-009-item-wheel-4-3.jpg`)
 - **Popups:** none
 - **Cause:** same as AR-001, on the other axis — the converter maps 720 logical rows onto the
   full output height
@@ -706,11 +708,11 @@ can show real widget artwork.
   bands from launch to the key press on the loaded-save plate (the plate's show nodes and
   the dismissal's two channels are one-shot HUD-owner identities), then a post-load grace
   mutes the cutscene signal over the level's intro pan so the bands drop at the press
-- **Screenshots:** [cutscene 21:9](evidence/AR-010-cutscene-21-9.jpg) /
-  [cutscene 4:3](evidence/AR-010-cutscene-4-3.jpg) /
-  [pause & codec 21:9](evidence/AR-010-pause-codec-21-9.jpg) /
-  [title 21:9](evidence/AR-010-title-21-9.jpg) / [pause 4:3](evidence/AR-010-pause-4-3.jpg) /
-  [load path 21:9](evidence/AR-010-load-21-9.jpg) / [load path 4:3](evidence/AR-010-load-4-3.jpg)
+- **Screenshots:** cutscene 21:9 (`AR-010-cutscene-21-9.jpg`) /
+  cutscene 4:3 (`AR-010-cutscene-4-3.jpg`) /
+  pause & codec 21:9 (`AR-010-pause-codec-21-9.jpg`) /
+  title 21:9 (`AR-010-title-21-9.jpg`) / pause 4:3 (`AR-010-pause-4-3.jpg`) /
+  load path 21:9 (`AR-010-load-21-9.jpg`) / load path 4:3 (`AR-010-load-4-3.jpg`)
 - **Popups:** none
 - **Cause:** the 3D projection is Vert- (AR-002) and the menus are 16:9 canvases drawn into a
   wider window with the world showing past them
@@ -730,8 +732,8 @@ can show real widget artwork.
 - **Evidence detail:** [letterbox.md §2.2](letterbox.md). Its record carries the rect as
   window fractions (x 0.9068, y 0.8815, w 0.05, h 0.0889), so it is a 183x132 px oval in
   the 21:9 corner at 3840x1620
-- **Screenshots:** [load path 21:9](evidence/AR-010-load-21-9.jpg) /
-  [load path 4:3](evidence/AR-010-load-4-3.jpg)
+- **Screenshots:** load path 21:9 (`AR-010-load-21-9.jpg`) /
+  load path 4:3 (`AR-010-load-4-3.jpg`)
 - **Cause:** a 48-byte record appended from `+B5830` / `+B58E7` by the static object
   `module+0x23CF7E88`, not a layout node - the identity spread never saw it
 - **Fix:** `LoadIconAppend` keys on that object (frame-1 rbp 0, rsi = the object) and maps

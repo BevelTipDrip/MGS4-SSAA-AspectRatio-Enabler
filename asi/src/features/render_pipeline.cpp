@@ -2803,7 +2803,7 @@ namespace
     // renderer's buffers and clamp were the game's: draws dropped on D3D11 (black), clamped
     // on D3D12 (misaligned). The submit is hooked and the record is written from the window
     // size globals before it runs, so every frame's resolution is the window's. In fullscreen
-    // the chain still follows the desktop (SizeToWindow in the private module) and the fit
+    // the chain still follows the desktop (SizeToWindow in the ultrawide fix) and the fit
     // places the picture, as before.
     constexpr uintptr_t kRvaRendererSubmit = 0x76DFF0;
     constexpr uintptr_t kContextResolutionWidth = 0x4C1230C;
@@ -3089,7 +3089,7 @@ namespace
     // The surface the window override must fit into: the game window's client area once the
     // window is known (windowed mode sizes it from the in-game setting; fullscreen makes it
     // the desktop), else the primary screen. The window comes from the swap chain, recorded by
-    // the D3D11 creation hook below and by the private module's chain hooks; nothing here
+    // the D3D11 creation hook below and by the ultrawide fix's chain hooks; nothing here
     // enumerates windows - a build that did (0.0.4's first cut) tripped the Nexus upload scan,
     // since walking other processes' windows by id is an injector's signature.
     const char* SurfaceSize(int& width, int& height)

@@ -1,5 +1,7 @@
 # Letterbox: cutscenes and menus kept at 16:9 (AR-010)
 
+> The screen captures this document names (`AR-...jpg`) are kept outside this repository.
+
 **Status:** shipping in 0.2.6 (2026-09-04) as three switches - `Menu Masking`,
 `Cutscene Masking`, `Cutscene FOV Compensation` - plus the gameplay `FOV Adjustment (%)`
 that reuses the camera hook (section 6). Lab settings keep `Aspect Letterbox=1` as a
@@ -140,18 +142,18 @@ All lab captures, 21:9 = 3840x1620, 4:3 = 2880x2160; the 21:9 cutscene framing i
 user-confirmed ("the framing looks correct, or at least extremely close"), the rest are my
 read pending the user's:
 
-- [cutscene, 21:9](evidence/AR-010-cutscene-21-9.jpg) - s01a10l_1 opening, t=15..90 s
-- [cutscene, 4:3](evidence/AR-010-cutscene-4-3.jpg) - same, bands only, no zoom
-- [pause / codec, 21:9](evidence/AR-010-pause-codec-21-9.jpg) - gameplay (no bands), pause
+- cutscene, 21:9 (`AR-010-cutscene-21-9.jpg`) - s01a10l_1 opening, t=15..90 s
+- cutscene, 4:3 (`AR-010-cutscene-4-3.jpg`) - same, bands only, no zoom
+- pause / codec, 21:9 (`AR-010-pause-codec-21-9.jpg`) - gameplay (no bands), pause
   with NOTICE, pause, codec, back to gameplay (no bands), pause again
-- [title, 21:9](evidence/AR-010-title-21-9.jpg) - fade plate (captured before the gate saw
+- title, 21:9 (`AR-010-title-21-9.jpg`) - fade plate (captured before the gate saw
   it, world visible at the sides), PRESS ANY BUTTON, main menu list
-- [pause, 4:3](evidence/AR-010-pause-4-3.jpg)
-- [load path, 21:9](evidence/AR-010-load-21-9.jpg) - spin219d: load plate with the spinner
+- pause, 4:3 (`AR-010-pause-4-3.jpg`)
+- load path, 21:9 (`AR-010-load-21-9.jpg`) - spin219d: load plate with the spinner
   inside the frame, the skull plate, then continue01/02/03/05 (captures at 4 Hz from the
   Enter) - bands gone at continue01, world full width with the HUD in the 21:9 corners.
   User-confirmed ("spin219d looks correct, and I saw the whole process", 2026-09-04)
-- [load path, 4:3](evidence/AR-010-load-4-3.jpg) - spin43a: same sequence at 2880x2160,
+- load path, 4:3 (`AR-010-load-4-3.jpg`) - spin43a: same sequence at 2880x2160,
   spinner mapped on y/h. User-confirmed ("Looks correct", 2026-09-04)
 
 Log lines to look for: `letterbox: screen element XXXXXXXX (...) seen; bands follow it.`
@@ -271,7 +273,7 @@ across a resize (the D3D12 path keeps its command list and per-buffer RTVs). On 
 is created at the desktop size straight away, no ResizeBuffers1 step. Verified at the menu, 4:3
 2048x1536, masking on (user set DX11 in the launcher; the harness never touches that setting).
 The public side gained a D3D11 `CreateSamplerState` hook for anisotropic filtering; not verified
-here because MGSPatriotFix takes that setting on this machine.
+here because another installed mod takes that setting on this machine.
 
 ## AR-014: the picture never filled the display when the window size was not the desktop size (2026-09-05)
 
@@ -309,7 +311,7 @@ mgs4+738315 calls EnumDisplaySettingsW for every mode (869 of them here), keeps 
 (3840x2160, the panel's native, listed even with the desktop at 1440x1080), and that is the
 windowSize our config hook then sees ("Window Size: 3840x2160 -> ...") and the size the
 fullscreen ResizeBuffers asks for. Not the ecf (edited to 1400x1050: no change), not the
-launcher save (every field set to 1440x1080: no change), not MGSPatriotFix (removed: no
+launcher save (every field set to 1440x1080: no change), not the other installed mod (removed: no
 change), not the desktop (1440x1080 at the time). The window itself is sized from the current
 mode (EnumDisplaySettingsW(-1) -> 1440x1080 from mgs4+738C2C / 738138 / 738A1B, and
 GetSystemMetrics 0/1 from the DXGI runtime). So stock play only lines up when the desktop runs
