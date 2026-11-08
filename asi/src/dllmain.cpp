@@ -12,6 +12,7 @@
 #include "features/stage_automation.hpp"
 #include "features/stall_sampler.hpp"
 #include "features/read_polls.hpp"
+#include "features/mouse_input.hpp"
 #endif
 
 namespace
@@ -57,6 +58,7 @@ namespace
             StageAutomation::ApplyFixes();
             StallSampler::Start();
             ReadPolls::Install();
+            MouseInput::Install();
 #endif
             mgs4e::sites::Forget();   // every start-up site is resolved by now; drop the copy of .text
 

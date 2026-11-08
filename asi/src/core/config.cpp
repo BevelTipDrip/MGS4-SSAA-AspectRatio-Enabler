@@ -13,6 +13,7 @@
 #include "stage_automation.hpp"
 #include "stall_sampler.hpp"
 #include "read_polls.hpp"
+#include "mouse_input.hpp"
 #endif
 
 namespace mgs4e::config
@@ -217,6 +218,7 @@ namespace mgs4e::config
             Read(ini, Graphics, "Stall Sampler Threshold (ms)", StallSampler::iThresholdMs);
             Read(ini, Graphics, "Stall Sampler Budget", StallSampler::iBudget);
             Read(ini, Graphics, "Fast Read Polls", ReadPolls::bEnabled);
+            Read(ini, Graphics, "Mouse Input Thread", MouseInput::bEnabled);
 
             // The engine's own fast-load path, used to cut the manual half of the test loop.
             Read(ini, Graphics, "Stage Automation", StageAutomation::bEnabled);
