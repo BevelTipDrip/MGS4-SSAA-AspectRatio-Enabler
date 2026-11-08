@@ -291,7 +291,10 @@ harness drives. A Release build contains none of it.
 
 ## Credits
 
-Ultrawide and 4:3 HUD, menu and cutscene fix by BevelTipDrip.
+Ultrawide and 4:3 HUD, menu and cutscene fix by BevelTipDrip, building on sites first
+identified by [mgs4Ultra120](https://github.com/drbermejor/mgs4Ultra120) (David Bermejo and
+contributors); the Peace Walker canvas builds on Afevis's MGSPW-Resolution-Unlocked. Their MIT
+notices are in `ultrawide/THIRD-PARTY-NOTICES.md`.
 
 ASI loading by [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 (ThirteenAG), see `UltimateASILoader_LICENSE.md`.

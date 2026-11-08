@@ -36,5 +36,7 @@ repository; the documents name each capture where they use it.
 
 ## Credit
 
-Ultrawide and 4:3 HUD, menu and cutscene fix by BevelTipDrip. Research and measurement by
+The fix builds on sites and shapes first identified by mgs4Ultra120 (David Bermejo and
+contributors, MIT): the UI layout converter, the camera sites and the rect emitter; see
+`THIRD-PARTY-NOTICES.md`. Ultrawide and 4:3 HUD, menu and cutscene fix by BevelTipDrip. Research and measurement by
 BevelTipDrip, 2026. Community use is welcome; passing the work off as your own is not.
