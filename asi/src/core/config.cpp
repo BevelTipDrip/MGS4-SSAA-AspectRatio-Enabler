@@ -11,6 +11,7 @@
 #include "render_pipeline.hpp"
 #if MGS4E_LAB_BUILD
 #include "stage_automation.hpp"
+#include "stall_sampler.hpp"
 #endif
 
 namespace mgs4e::config
@@ -209,6 +210,11 @@ namespace mgs4e::config
             Read(ini, Graphics, "Dump Wrapped Context", RP::bDumpWrappedContext);
             Read(ini, Graphics, "Guard Upload Buffers", RP::bGuardUploadBuffers);
             Read(ini, Graphics, "Watch Staging Writes", RP::bWatchStagingWrites);
+
+            // Where the game threads spend a long gap between Presents (stall_sampler.hpp).
+            Read(ini, Graphics, "Stall Sampler", StallSampler::bEnabled);
+            Read(ini, Graphics, "Stall Sampler Threshold (ms)", StallSampler::iThresholdMs);
+            Read(ini, Graphics, "Stall Sampler Budget", StallSampler::iBudget);
 
             // The engine's own fast-load path, used to cut the manual half of the test loop.
             Read(ini, Graphics, "Stage Automation", StageAutomation::bEnabled);

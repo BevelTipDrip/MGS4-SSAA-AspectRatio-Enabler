@@ -10,6 +10,7 @@
 #include "features/render_pipeline.hpp"
 #if MGS4E_LAB_BUILD
 #include "features/stage_automation.hpp"
+#include "features/stall_sampler.hpp"
 #endif
 
 namespace
@@ -53,6 +54,7 @@ namespace
             RenderPipeline::ApplyFixes();
 #if MGS4E_LAB_BUILD
             StageAutomation::ApplyFixes();
+            StallSampler::Start();
 #endif
             mgs4e::sites::Forget();   // every start-up site is resolved by now; drop the copy of .text
 

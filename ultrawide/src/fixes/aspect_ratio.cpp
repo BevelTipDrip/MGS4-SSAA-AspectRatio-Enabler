@@ -8,6 +8,7 @@
 #include "config.hpp"
 #include "log.hpp"
 #include "render_pipeline.hpp"
+#include "stall_sampler.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -4721,6 +4722,7 @@ namespace AspectRatio
             g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
             PerfPresent();
             g_D3D11Frame.fetch_add(1, std::memory_order_relaxed);
+            StallSampler::OnPresent();
 #endif
             g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
         }
@@ -4740,6 +4742,7 @@ namespace AspectRatio
             g_Perf.bandTicks.fetch_add(PerfTicks() - t0, std::memory_order_relaxed);
             PerfPresent();
             g_D3D11Frame.fetch_add(1, std::memory_order_relaxed);
+            StallSampler::OnPresent();
 #endif
             g_DrawLogPresent.fetch_add(1, std::memory_order_relaxed);
         }

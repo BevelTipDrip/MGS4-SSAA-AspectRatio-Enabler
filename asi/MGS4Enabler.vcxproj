@@ -74,6 +74,7 @@
     <ClCompile Include="src\features\render_pipeline.cpp" />
     <ClCompile Include="src\features\shader_port.cpp" />
     <ClCompile Include="src\features\stage_automation.cpp" Condition="'$(Configuration)'=='Lab'" />
+    <ClCompile Include="src\features\stall_sampler.cpp" Condition="'$(Configuration)'=='Lab'" />
     <!-- The ultrawide and 4:3 fix (ultrawide\, its own licence: ultrawide\LICENSE.md). -->
     <ClCompile Include="$(EnablerUltrawide)src\fixes\aspect_ratio.cpp" />
     <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
@@ -114,6 +115,7 @@
     <ClInclude Include="src\features\render_pipeline.hpp" />
     <ClInclude Include="src\features\shader_port.hpp" />
     <ClInclude Include="src\features\stage_automation.hpp" />
+    <ClInclude Include="src\features\stall_sampler.hpp" />
     <ClInclude Include="..\shared\ini.hpp" />
     <ClInclude Include="..\shared\lab.hpp" />
     <ClInclude Include="..\shared\compat_table.hpp" />
