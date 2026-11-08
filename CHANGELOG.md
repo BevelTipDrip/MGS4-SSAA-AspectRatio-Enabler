@@ -6,6 +6,10 @@ changelog box as is.
 
 ## 0.0.8 (unreleased)
 
+Fixes
+- Works with the October 2026 Steam update of MGS4 again. The update rebuilt the game and moved all of its code, so 0.0.7 switched most of its fixes off: the ultrawide, 4:3 and 16:10 HUD, menu and cutscene fixes, the reticle and Solid Eye precision fix and the window-size hook. Every fix now finds its place in the game by its code rather than by a fixed address, and works on the updated game and the one before it. A future update that only moves code needs nothing; one that changes what a fix relies on turns that one fix off and says so in the log, which now also names the game build on its first lines.
+- Known: with RivaTuner Statistics Server (RTSS) running, the updated game can crash before the title screen. Close RTSS for now; this is being looked into.
+
 Source
 - The ultrawide, 4:3 and 16:10 fix is now open source: it is in the `ultrawide` folder of the GitHub repository, with its development history, under its own licence (free to use and build on; the fix must be credited directly and visibly). The Peace Walker wide canvas is in the same folder. The zip now carries the licences: LICENSE.md, ULTRAWIDE_LICENSE.md and THIRD-PARTY-NOTICES.md.
 
