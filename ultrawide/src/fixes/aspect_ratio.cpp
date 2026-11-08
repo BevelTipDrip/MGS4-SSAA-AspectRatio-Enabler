@@ -238,6 +238,9 @@ namespace AspectRatio
     struct KnownIdentities { uintptr_t converter; uintptr_t hudOwner; uintptr_t loadIcon; const char* build; };
     constexpr KnownIdentities kKnownIdentities[] = {
         { 0x439810, 0x1DE3290, 0x23CF7E88, "BGFX 0.0.3 (2026-08-25)" },
+        // Measured 2026-11-08 by the "measure:" lines below: the battery bar's record owner
+        // (channel 5) and the object behind the spinner-shaped record.
+        { 0x30FB10, 0x1732AA0, 0x236441D8, "BGFX 0.0.8 (2026-10-27)" },
     };
 
     void ResolveSites()
