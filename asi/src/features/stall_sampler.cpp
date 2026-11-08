@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace StallSampler
@@ -227,6 +228,26 @@ namespace StallSampler
         std::atomic<int> g_Queued { 0 };
         int64_t g_Start = 0;
         int g_Analysed = 0;
+        // Each other thread's usual stack: a hash of the raw return addresses of every 20 ms
+        // sample, tallied all session. A thread whose stack during a stall is not its usual one
+        // (a worker blocked in a read, say, rather than in its idle wait) is logged even when blocked.
+        std::unordered_map<DWORD, std::unordered_map<uint64_t, uint32_t>> g_Usual;   // sampler thread only
+        uint64_t StackHash(const Sample& s)
+        {
+            uint64_t h = 1469598103934665603ull;
+            for (int i = 0; i < s.frames; i++) { h ^= s.pc[i]; h *= 1099511628211ull; }
+            return h;
+        }
+        uint64_t UsualHash(DWORD tid)
+        {
+            const auto it = g_Usual.find(tid);
+            if (it == g_Usual.end()) { return 0; }
+            uint64_t best = 0;
+            uint32_t most = 0;
+            for (const auto& [h, n] : it->second) { if (n > most) { most = n; best = h; } }
+            return best;
+        }
+
         std::map<std::string, uint32_t> g_MainTotals;   // MAIN's chains summed over every stall
         uint32_t g_MainTotalSamples = 0;
 
@@ -271,6 +292,8 @@ namespace StallSampler
                 uint32_t samples = 0, blocked = 0;
                 std::map<std::string, uint32_t> chains;
                 std::map<std::string, uint64_t> leafExample;
+                std::map<uint64_t, uint32_t> hashes;
+                std::map<uint64_t, std::string> hashSig;
             };
             std::map<DWORD, PerThread> threads;
             const size_t available = (std::min)(g_Head, kRingSize);
@@ -285,6 +308,9 @@ namespace StallSampler
                 const std::string sig = (s.blocked ? "[wait] " : "") + Signature(s);
                 p.chains[sig]++;
                 if (s.frames) { p.leafExample.try_emplace(sig, s.pc[0]); }
+                const uint64_t h = StackHash(s);
+                p.hashes[h]++;
+                p.hashSig.try_emplace(h, sig);
             }
 
             g_Analysed++;
@@ -323,11 +349,14 @@ namespace StallSampler
 
             for (const auto& [tid, p] : threads)
             {
-                if (tid == g_MainTid || tid == g_PresentTid.load() || p.blocked == p.samples) { continue; }
-                for (const auto& [sig, count] : top(p, 1, true))
-                {
-                    spdlog::warn("  {}: running in {} of {} samples: {}", Label(tid), p.samples - p.blocked, p.samples, sig);
-                }
+                if (tid == g_MainTid || tid == g_PresentTid.load()) { continue; }
+                const uint64_t usual = UsualHash(tid);
+                uint64_t best = 0;
+                uint32_t most = 0;
+                for (const auto& [h, n] : p.hashes) { if (h != usual && n > most) { most = n; best = h; } }
+                if (most == 0) { continue; }   // only its usual stack in this stall
+                spdlog::warn("  {}: off its usual stack in {} of {} samples ({} running): {}", Label(tid), most, p.samples,
+                    p.samples - p.blocked, p.hashSig.at(best));
             }
 
             if (g_Analysed % 10 == 0)
@@ -402,7 +431,13 @@ namespace StallSampler
                 for (const Target& t : g_Targets)
                 {
                     const bool hot = t.tid == g_MainTid || t.tid == presentTid;
-                    if (hot || cold) { SampleThread(t.handle, t.tid, Ticks()); }
+                    if (hot || cold)
+                    {
+                        if (SampleThread(t.handle, t.tid, Ticks()) && !hot)
+                        {
+                            g_Usual[t.tid][StackHash(g_Ring[(g_Head - 1) % kRingSize])]++;
+                        }
+                    }
                 }
 
                 ProcessStalls();
