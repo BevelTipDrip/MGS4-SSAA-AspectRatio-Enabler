@@ -1,5 +1,5 @@
 # Packages a Peace Walker LAB zip for trusted testers, from bin\Lab: the Lab plugin (the full
-# research instrumentation, the private module compiled in), the loader, the settings with the
+# research instrumentation, the ultrawide fix compiled in), the loader, the settings with the
 # Lab keys commented, the log-analysis scripts and a guide. No tool. The full release packager
 # (package.ps1) and the preview packager (package_pw_preview.ps1) are untouched.
 #
@@ -12,11 +12,13 @@
 #     tools\*.py                      census analysis (Python 3, standard library only)
 #
 # Pass -LoaderZip with Ultimate-ASI-Loader_x64.zip (or drop it in build\loader\). -Tag adds a
-# word to the zip name. Output goes to release\lab\.
+# word to the zip name. Output goes to release\lab\. The analysis scripts are not in this
+# repository (the lab harness stays out of it); -ToolsDir names the folder that holds them.
 
 param(
     [string]$LoaderZip = "",
-    [string]$Tag = ""
+    [string]$Tag = "",
+    [string]$ToolsDir = 'C:\mgspf_tools\pw'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,10 +58,10 @@ Copy-Item (Join-Path $PSScriptRoot 'pw_lab\MGSPWEnabler.settings') (Join-Path $s
 Copy-Item (Join-Path $PSScriptRoot 'pw_lab\LAB-README.txt') (Join-Path $stage 'LAB-README.txt')
 Copy-Item (Join-Path $root 'UltimateASILoader_LICENSE.md') (Join-Path $stage 'UltimateASILoader_LICENSE.md')
 # The analysis scripts: the ones that read a census log with nothing but the standard library.
-$toolsSrc = Join-Path $root 'external\ultrawide\pw\tools'
 foreach ($t in 'hud_rows.py', 'hud_frames.py', 'hud_identity.py', 'hud_right.py') {
-    $f = Join-Path $toolsSrc $t
+    $f = Join-Path $ToolsDir $t
     if (Test-Path $f) { Copy-Item $f (Join-Path $stage "tools\$t") }
+    else { Write-Warning "$t not found in $ToolsDir; the zip goes out without it." }
 }
 
 $name = 'MGSPWEnabler_lab_' + (Get-Date).ToString('yyyy-MM-dd')

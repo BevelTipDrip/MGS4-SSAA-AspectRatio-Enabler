@@ -4,6 +4,7 @@
   <PropertyGroup Label="UserMacros">
     <EnablerRoot>$(MSBuildThisFileDirectory)</EnablerRoot>
     <EnablerExternal>$(EnablerRoot)external\</EnablerExternal>
+    <EnablerUltrawide>$(EnablerRoot)ultrawide\</EnablerUltrawide>
   </PropertyGroup>
   <PropertyGroup>
     <OutDir>$(EnablerRoot)bin\$(Configuration)\</OutDir>

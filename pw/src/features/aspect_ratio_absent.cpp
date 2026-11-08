@@ -2,14 +2,14 @@
 #include "aspect_ratio.hpp"
 #include "log.hpp"
 
-// Compiled only when external/ultrawide-pw is not checked out (see MGSPWEnabler.vcxproj).
+// The only body of this entry point: Peace Walker's wide layout is the canvas (canvas.hpp).
 namespace AspectRatio
 {
     void ApplyFixes()
     {
         if (mgs4e::log::Verbose())
         {
-            spdlog::info("PW: UI Aspect: the Peace Walker ultrawide module (external/ultrawide-pw) is not part of this build.");
+            spdlog::info("PW: UI Aspect: no separate UI aspect fix for Peace Walker; the canvas handles wide and tall displays.");
         }
     }
 }

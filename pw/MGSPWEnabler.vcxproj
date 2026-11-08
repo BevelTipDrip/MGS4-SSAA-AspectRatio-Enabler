@@ -96,11 +96,10 @@
     <ClCompile Include="src\features\render_policy.cpp" />
     <ClCompile Include="src\features\render_hooks.cpp" Condition="'$(Configuration)'!='Lab'" />
     <ClCompile Include="src\features\post_scale.cpp" Condition="'$(Configuration)'=='Lab'" />
-    <!-- The Peace Walker part of the private ultrawide module (external\ultrawide\pw): built when checked out, stubs otherwise. -->
-    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\pw\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp" Condition="'$(Configuration)'=='Lab' And Exists('$(EnablerExternal)ultrawide\pw\src\lab\ui_bias.cpp')" />
-    <ClCompile Include="$(EnablerExternal)ultrawide\pw\src\fixes\canvas.cpp" Condition="Exists('$(EnablerExternal)ultrawide\pw\src\fixes\canvas.cpp')" />
+    <!-- The Peace Walker wide canvas (ultrawide\pw, its own licence: ultrawide\LICENSE.md). UI Aspect has no Peace Walker implementation; aspect_ratio_absent.cpp is its only body. -->
+    <ClCompile Include="src\features\aspect_ratio_absent.cpp" />
+    <ClCompile Include="$(EnablerUltrawide)pw\src\lab\ui_bias.cpp" Condition="'$(Configuration)'=='Lab'" />
+    <ClCompile Include="$(EnablerUltrawide)pw\src\fixes\canvas.cpp" />
     <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

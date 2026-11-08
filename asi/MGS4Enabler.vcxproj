@@ -73,9 +73,8 @@
     <ClCompile Include="src\features\render_pipeline.cpp" />
     <ClCompile Include="src\features\shader_port.cpp" />
     <ClCompile Include="src\features\stage_automation.cpp" Condition="'$(Configuration)'=='Lab'" />
-    <!-- The ultrawide module is a private submodule: built when it is checked out, replaced by a logging stub when it is not. -->
-    <ClCompile Include="$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp" Condition="Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
-    <ClCompile Include="src\features\aspect_ratio_absent.cpp" Condition="!Exists('$(EnablerExternal)ultrawide\src\fixes\aspect_ratio.cpp')" />
+    <!-- The ultrawide and 4:3 fix (ultrawide\, its own licence: ultrawide\LICENSE.md). -->
+    <ClCompile Include="$(EnablerUltrawide)src\fixes\aspect_ratio.cpp" />
     <ClCompile Include="$(EnablerExternal)safetyhook\src\allocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
