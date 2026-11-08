@@ -11,6 +11,7 @@
 #if MGS4E_LAB_BUILD
 #include "features/stage_automation.hpp"
 #include "features/stall_sampler.hpp"
+#include "features/read_polls.hpp"
 #endif
 
 namespace
@@ -55,6 +56,7 @@ namespace
 #if MGS4E_LAB_BUILD
             StageAutomation::ApplyFixes();
             StallSampler::Start();
+            ReadPolls::Install();
 #endif
             mgs4e::sites::Forget();   // every start-up site is resolved by now; drop the copy of .text
 
