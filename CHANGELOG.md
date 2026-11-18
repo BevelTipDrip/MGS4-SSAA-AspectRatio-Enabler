@@ -8,7 +8,8 @@ changelog box as is.
 
 Fixes
 - Works with the October 2026 Steam update of MGS4 again. The update rebuilt the game and moved all of its code, so 0.0.7 switched most of its fixes off: the ultrawide, 4:3 and 16:10 HUD, menu and cutscene fixes, the reticle and Solid Eye precision fix and the window-size hook. Every fix now finds its place in the game by its code rather than by a fixed address, and works on the updated game and the one before it. A future update that only moves code needs nothing; one that changes what a fix relies on turns that one fix off and says so in the log, which now also names the game build on its first lines.
-- Known: with RivaTuner Statistics Server (RTSS) running, the updated game can crash before the title screen. Close RTSS for now; this is being looked into.
+- Known, not this mod: with NVIDIA Smooth Motion on, RivaTuner Statistics Server's (RTSS) on-screen display crashes the updated game before the title screen, with or without any mods installed. Turn Smooth Motion off for MGS4 in the NVIDIA app; RTSS then works, limiter included.
+- Ships Ultimate ASI Loader 10.0.2, the same loader MGSPatriotFix 0.2.3 ships, so installing either mod after the other leaves the same winmm.dll. Works with MGSPatriotFix 0.2.3 and MGSFPSUnlock 0.1.4.
 
 Source
 - The ultrawide, 4:3 and 16:10 fix is now open source: it is in the `ultrawide` folder of the GitHub repository, with its development history, under its own licence (free to use and build on; the fix must be credited directly and visibly). The Peace Walker wide canvas is in the same folder. The zip now carries the licences: LICENSE.md, ULTRAWIDE_LICENSE.md and THIRD-PARTY-NOTICES.md.
