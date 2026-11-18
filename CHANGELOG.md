@@ -4,11 +4,12 @@ Every release gets an entry here before it is packaged; `build\package.ps1` refu
 zip whose version has no heading below. The text is written to be pasted into the Nexus Mods
 changelog box as is.
 
-## 0.0.8 (unreleased)
+## 0.0.8 (2026-11-18)
 
 Fixes
 - Works with the October 2026 Steam update of MGS4 again. The update rebuilt the game and moved all of its code, so 0.0.7 switched most of its fixes off: the ultrawide, 4:3 and 16:10 HUD, menu and cutscene fixes, the reticle and Solid Eye precision fix and the window-size hook. Every fix now finds its place in the game by its code rather than by a fixed address, and works on the updated game and the one before it. A future update that only moves code needs nothing; one that changes what a fix relies on turns that one fix off and says so in the log, which now also names the game build on its first lines.
 - Known, not this mod: with NVIDIA Smooth Motion on, RivaTuner Statistics Server's (RTSS) on-screen display crashes the updated game before the title screen, with or without any mods installed. Turn Smooth Motion off for MGS4 in the NVIDIA app; RTSS then works, limiter included.
+- Known, not this mod: a mouse polling at 8000 Hz makes fast camera turns stutter, in the unmodded game too (the game handles every mouse report on its main thread). Set the mouse to 1000 Hz for now; a fix is being worked on.
 - Ships Ultimate ASI Loader 10.0.2, the same loader MGSPatriotFix 0.2.3 ships, so installing either mod after the other leaves the same winmm.dll. Works with MGSPatriotFix 0.2.3 and MGSFPSUnlock 0.1.4.
 
 Source
